@@ -43,6 +43,43 @@ data/                   # site.json, home.json, contact.json  ← source of trut
 lib/                    # types.ts, content.ts, cn.ts, words.ts
 ```
 
+## Deploying to Vercel
+
+This app lives in the **`web/` subdirectory** of the `willnamelater` repo, so the most
+important setting is the **Root Directory**.
+
+### One-time project setup (Vercel dashboard)
+
+1. **Add New… → Project** and import the `TiwariAshuism/willnamelater` repo.
+2. **Root Directory → `web`** (click *Edit* and select the `web` folder). This is required —
+   without it Vercel builds the repo root and won't find the app.
+3. **Framework Preset:** Next.js (auto-detected).
+4. Build & install commands are auto-detected from [`vercel.json`](./vercel.json) and the
+   pnpm lockfile — leave the overrides off:
+   | Setting | Value |
+   | --- | --- |
+   | Install Command | `pnpm install` (auto) |
+   | Build Command | `next build` (auto) |
+   | Output Directory | `.next` (auto) |
+   | Node.js Version | `22.x` (pinned via `engines` in `package.json`) |
+   | Package Manager | `pnpm@10.32.1` (pinned via `packageManager`) |
+5. **Environment Variables:** none required.
+6. **Deploy.** Every push to `main` ships to production; other branches get preview URLs.
+
+[`vercel.json`](./vercel.json) pins the Next.js framework and adds baseline security headers
+(`X-Content-Type-Options`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`).
+Remote images (`picsum.photos`) are already allow-listed in `next.config.ts` so the Vercel
+Image Optimization step works in production.
+
+### Or deploy from the CLI
+
+```bash
+npm i -g vercel
+cd web
+vercel          # first run: link project, set Root Directory to "web"
+vercel --prod   # promote to production
+```
+
 ## Editing content
 
 Change a headline, price, nav item or footer link by editing the matching field in
