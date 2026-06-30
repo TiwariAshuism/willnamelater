@@ -1,0 +1,93 @@
+{
+  "brand": { "name": "Pallet Ross" },
+  "nav": [
+    {
+      "label": "Get Started",
+      "href": "#",
+      "dropdown": [
+        {
+          "title": "Overview",
+          "desc": "See how Pallet Ross works",
+          "icon": "TrendingUp",
+          "accent": "#1fa68f",
+          "bg": "#eef7f4"
+        },
+        {
+          "title": "Quick start",
+          "desc": "Be live in 5 minutes",
+          "icon": "Zap",
+          "accent": "#e6522f",
+          "bg": "#fdeee9",
+          "badge": "New"
+        },
+        {
+          "title": "Templates",
+          "desc": "Storefront starting points",
+          "icon": "LayoutGrid",
+          "accent": "#2f6bff",
+          "bg": "#eef1fd"
+        }
+      ]
+    },
+    { "label": "Create strategy", "href": "#", "dot": true },
+    { "label": "Pricing", "href": "#" },
+    { "label": "Contact", "href": "/contact" },
+    {
+      "label": "Solution",
+      "href": "#",
+      "dropdown": [
+        { "title": "For Artists", "icon": "Brush", "accent": "#e6522f", "bg": "#fdeee9" },
+        { "title": "For Galleries", "icon": "Building2", "accent": "#1fa68f", "bg": "#eef7f4" },
+        { "title": "For Collectors", "icon": "Heart", "accent": "#2f6bff", "bg": "#eef1fd" },
+        { "title": "Enterprise", "icon": "Gem", "accent": "#7c5cff", "bg": "#f1f0fb" }
+      ]
+    },
+    {
+      "label": "E-Commerce",
+      "href": "#",
+      "dropdown": [
+        { "title": "Storefront", "icon": "ShoppingBag", "accent": "#1fa68f", "bg": "#eef7f4" },
+        { "title": "Payments", "icon": "CreditCard", "accent": "#2f6bff", "bg": "#eef1fd" },
+        { "title": "Shipping", "icon": "Truck", "accent": "#e6522f", "bg": "#fdeee9" },
+        { "title": "Analytics", "icon": "BarChart3", "accent": "#7c5cff", "bg": "#f1f0fb" }
+      ]
+    }
+  ],
+  "footer": {
+    "headline": "Our platform, your art.",
+    "blurb": "Join thousands of artists and collectors building the future of the art market.",
+    "columns": [
+      {
+        "title": "Get Started",
+        "links": [
+          { "label": "Create strategy", "href": "#", "badge": { "text": "New", "tone": "orange" } },
+          { "label": "Pricing", "href": "#" },
+          { "label": "Contact", "href": "/contact" },
+          { "label": "Solution", "href": "#" },
+          { "label": "E-Commerce", "href": "#" }
+        ]
+      },
+      {
+        "title": "Your Story",
+        "links": [
+          { "label": "Create Story", "href": "#" },
+          { "label": "Sell fast", "href": "#", "badge": { "text": "Soon", "tone": "yellow" } }
+        ]
+      },
+      {
+        "title": "Privacy & Policy",
+        "links": [
+          { "label": "Contact Us", "href": "/contact" },
+          { "label": "Api", "href": "#", "badge": { "text": "New", "tone": "orange" } }
+        ]
+      }
+    ],
+    "copyright": "© 2024. All rights reserved."
+  },
+  "socials": [
+    { "label": "X", "href": "#", "icon": "x" },
+    { "label": "Instagram", "href": "#", "icon": "instagram" },
+    { "label": "Behance", "href": "#", "icon": "behance" },
+    { "label": "Dribbble", "href": "#", "icon": "dribbble" }
+  ]
+}

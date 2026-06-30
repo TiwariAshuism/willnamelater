@@ -1,0 +1,23 @@
+{
+  "eyebrow": "CONTACT",
+  "headlineLead": "Let's make something worth ",
+  "headlineAccent": "collecting.",
+  "body": "Whether you're an artist ready to sell or a collector hunting your next piece — drop us a line and we'll get back within a day.",
+  "email": "hello@palletross.art",
+  "info": [
+    {
+      "icon": "Mail",
+      "label": "Email us",
+      "value": "hello@palletross.art",
+      "dark": true
+    },
+    {
+      "icon": "MapPin",
+      "accent": "#1fa68f",
+      "bg": "#eef7f4",
+      "label": "Studio",
+      "value": "14 Kiln Yard, London E2"
+    }
+  ],
+  "roles": ["Artist", "Collector", "Gallery"]
+}

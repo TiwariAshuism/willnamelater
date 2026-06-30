@@ -1,0 +1,88 @@
+# OS
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# IDEs and editors
+.idea/
+.vscode/
+*.iml
+*.swp
+*.swo
+*~
+
+# Environment and secrets
+.env
+.env.*
+!.env.example
+*.pem
+credentials.json
+*.keystore
+!debug.keystore
+
+# Node / Next.js
+node_modules/
+.pnp
+.pnp.*
+.yarn/*
+!.yarn/patches
+!.yarn/plugins
+!.yarn/releases
+!.yarn/versions
+.next/
+out/
+.vercel
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+*.tsbuildinfo
+
+# Kotlin / Gradle / KMP / Android
+.gradle/
+.kotlin/
+**/build/
+!src/**/build/
+local.properties
+.externalNativeBuild/
+.cxx/
+captures/
+*.hprof
+
+# iOS / Xcode
+xcuserdata/
+DerivedData/
+*.xcodeproj/*
+!*.xcodeproj/project.pbxproj
+!*.xcodeproj/xcshareddata/
+!*.xcodeproj/project.xcworkspace/
+!*.xcworkspace/contents.xcworkspacedata
+**/xcshareddata/WorkspaceSettings.xcsettings
+
+# Go (backend/ or services/backend/)
+bin/
+dist/
+*.exe
+*.exe~
+*.test
+*.out
+vendor/
+
+# Docker
+docker-compose.override.yml
+
+# Graphify (regenerated locally via `graphify update .`)
+graphify-out/
+
+# Test and coverage
+coverage/
+*.lcov
+test-results/
+playwright-report/
+playwright/.cache/
+
+# Logs and temp
+*.log
+tmp/
+temp/
+.cache/

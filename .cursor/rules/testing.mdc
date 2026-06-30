@@ -1,0 +1,50 @@
+---
+description: Test requirements and validation commands per stack
+alwaysApply: true
+---
+
+# Test Requirements
+
+Every feature must include tests for every layer touched.
+
+| Stack | Required tests |
+|-------|----------------|
+| KMP | Unit tests, ViewModel tests, repository tests |
+| Backend | Unit tests, integration tests (table-driven where applicable) |
+| Next.js | Component tests, API/route tests |
+
+# Validation Commands
+
+Run applicable commands after every implementation. Fix failures and repeat until green.
+
+## KMP (from `mobile/`)
+
+```bash
+./gradlew ktlintCheck
+./gradlew test
+./gradlew build
+```
+
+## Backend (from `backend/` or `services/backend/` when present)
+
+```bash
+go fmt ./...
+go test ./...
+golangci-lint run
+```
+
+## Next.js (from `web/`)
+
+```bash
+npm run lint
+npm run test
+npm run build
+```
+
+# Fix-Until-Green Loop
+
+1. Run validation for every stack you modified.
+2. If any command fails, fix the issue.
+3. Run validation again.
+4. Repeat until all commands pass.
+5. Never mark work complete with failing tests or builds.

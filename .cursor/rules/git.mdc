@@ -1,0 +1,30 @@
+---
+description: Git branching, commits, and PR conventions
+alwaysApply: true
+---
+
+# Git Workflow
+
+## Branches
+
+- Create a feature branch for each feature or fix.
+- Never commit directly to `main` unless explicitly instructed.
+
+## Commits
+
+- Use Conventional Commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`, `chore:`).
+- Write descriptive commit messages focused on why, not just what.
+- Never commit failing code — run validation (`testing.mdc`) before committing.
+- Never commit secrets (`.env`, credentials, API keys).
+
+## Push and Pull Requests
+
+- Push only when explicitly instructed.
+- Create Pull Requests only when explicitly instructed.
+- Never force-push to `main` or `master`.
+
+## Commit safety
+
+- Never update git config.
+- Never skip hooks unless explicitly instructed.
+- Never amend commits that have been pushed unless explicitly instructed.

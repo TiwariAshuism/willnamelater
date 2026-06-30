@@ -1,0 +1,34 @@
+---
+description: Production-ready quality gates and pre-completion checklist
+alwaysApply: true
+---
+
+# Quality Requirements
+
+Every change must be production-ready.
+
+- No placeholder implementations.
+- No unfinished code.
+- No unnecessary helper classes.
+- No dead code.
+- No unused imports.
+- No duplicated logic.
+- No commented-out code.
+- Every change must improve or maintain overall architecture.
+
+When multiple implementations are possible, choose the one that best aligns with existing architecture and long-term maintainability.
+
+# Pre-Completion Checklist
+
+Before marking work complete, verify:
+
+1. **Architecture** — layers respected; dependencies point inward; no cross-module repository access.
+2. **Naming** — consistent with surrounding code and package conventions.
+3. **Duplication** — no repeated business logic; existing code reused where possible.
+4. **Dead code** — no unused files, functions, or imports.
+5. **Formatting** — stack formatters applied (`go fmt`, ktlint, ESLint).
+6. **Lint** — no new lint errors.
+7. **Tests** — written for every layer touched; all passing.
+8. **Documentation** — updated when architecture or APIs change.
+
+Fix every issue found. Do not defer fixes unless explicitly instructed.

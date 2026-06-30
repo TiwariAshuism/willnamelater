@@ -1,0 +1,75 @@
+---
+description: Clean Architecture, SOLID, package-first design, minimal helpers
+alwaysApply: true
+---
+
+# Code Philosophy
+
+- Write production-quality code. Prefer readability over cleverness.
+- Every class and function has a single responsibility.
+- Follow SOLID principles. Prefer composition over inheritance.
+- Avoid unnecessary abstractions and over-engineering.
+- Never duplicate business logic.
+
+# Clean Architecture
+
+Every module must follow Clean Architecture. Dependencies always point inward.
+
+```text
+feature/
+  domain/        # business logic, interfaces — no data/presentation imports
+  data/          # repositories, APIs, persistence
+  presentation/  # UI logic only
+  di/            # dependency wiring
+  tests/
+```
+
+- Domain must never depend on Data or Presentation.
+- Business logic belongs only in Domain.
+- Presentation contains UI logic only.
+
+# Package-First Development
+
+Organize by feature/package, never by technical layer alone.
+
+**Backend** (`backend/internal/` or `services/backend/internal/`):
+
+```text
+internal/
+  auth/
+    handler/ service/ repository/ model/ dto/ mapper/
+  user/
+  notification/
+```
+
+**KMP** (`mobile/shared/`):
+
+```text
+feature/
+  auth/
+  user/
+  notification/
+```
+
+Before creating a new package: inspect the repo tree, search existing packages, extend when appropriate. Never create duplicate packages.
+
+# Helper Functions
+
+Minimize helpers and utility files. Do not create helpers for trivial logic.
+
+Extract a helper only when:
+- reused in multiple places, or
+- it significantly improves readability.
+
+Keep logic close to where it is used. Avoid generic utility packages with unrelated methods.
+
+# Reuse Existing Code
+
+Before writing new code:
+
+1. Search the project.
+2. Search existing packages.
+3. Search existing services and repositories.
+4. Reuse or extend existing implementations.
+
+Never duplicate code. If a reusable abstraction exists, extend it.

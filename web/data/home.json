@@ -1,0 +1,171 @@
+{
+  "hero": {
+    "headlineLead": "A place to display your",
+    "headlineAccent": "masterpiece.",
+    "body": "Artists can display their masterpieces, and buyers can discover and acquire one-of-a-kind work from a global community.",
+    "primaryCta": { "label": "Join for $9.99/m" },
+    "secondaryCta": { "label": "Read more", "href": "#" },
+    "fan": [
+      { "bg": "#1f7a44", "seed": "ross-green", "label": "GRAFFITI" },
+      { "bg": "#ffffff", "seed": "ross-h2" },
+      { "bg": "#e6522f", "seed": "ross-h3" },
+      { "bg": "#ffffff", "seed": "ross-h4" },
+      { "bg": "#2f6bff", "seed": "ross-h5" },
+      { "bg": "#ffffff", "seed": "ross-h6" },
+      { "bg": "#f0c531", "seed": "ross-h7" }
+    ],
+    "bubbles": [
+      { "text": "@coplin", "bg": "#2f6bff", "side": "left" },
+      { "text": "@andrea", "bg": "#37a85a", "side": "right" }
+    ]
+  },
+  "ecommerce": {
+    "eyebrow": "E-COMMERCE",
+    "headParts": [
+      { "text": "Showcase, Sell, " },
+      { "text": "& acquire arts to", "accent": true },
+      { "text": " our marketplace." }
+    ],
+    "body": "A complete commerce layer built for creators — list a piece, set your price, and reach collectors worldwide with zero friction.",
+    "primaryCta": { "label": "Join for $9.99/m" },
+    "secondaryCta": { "label": "Read more", "href": "#" }
+  },
+  "howItWorks": {
+    "eyebrow": "HOW IT WORKS",
+    "title": "From studio to sold in three steps.",
+    "body": "No agents, no gatekeepers. Upload your art, reach a global audience of collectors, and get paid — keeping almost all of it.",
+    "steps": [
+      {
+        "index": "01",
+        "icon": "Upload",
+        "accent": "#1fa68f",
+        "bg": "#eef7f4",
+        "title": "List your work",
+        "body": "Upload pieces, set your price and publish a storefront in under five minutes."
+      },
+      {
+        "index": "02",
+        "icon": "Eye",
+        "accent": "#2f6bff",
+        "bg": "#eef1fd",
+        "title": "Get discovered",
+        "body": "Land in curated drops and collector feeds matched to your style and medium."
+      },
+      {
+        "index": "03",
+        "icon": "CreditCard",
+        "accent": "#4fe0c0",
+        "bg": "rgba(255,255,255,0.1)",
+        "title": "Get paid",
+        "body": "Instant payouts the moment a piece sells — and you keep 95% of every sale.",
+        "dark": true
+      }
+    ]
+  },
+  "classSection": {
+    "authors": ["MARINA ABRAMOVIC", "JEAN BASQUIAT", "YAYOI KUSAMA"],
+    "eyebrowPrefix": "CLASS BY",
+    "title": "Gateway to artist people.",
+    "bubble": "@reatha"
+  },
+  "trusted": {
+    "title": "Trusted by ",
+    "titleStrong": "the",
+    "titleTail": " best.",
+    "body": "Our growth hackers, studios and galleries already build their craft on Pallet Ross.",
+    "logos": ["Mercury", "remote", "miro", "BB", "databricks", "Linear", "Circus"]
+  },
+  "stats": [
+    { "value": 12400, "suffix": "+", "label": "artists selling" },
+    { "value": 4.2, "decimals": 1, "prefix": "$", "suffix": "M", "label": "paid to creators", "accent": "#4fe0c0" },
+    { "value": 95, "suffix": "%", "label": "revenue kept by artists" },
+    { "value": 60, "suffix": "+", "label": "countries reached" }
+  ],
+  "storyHeadline": {
+    "lead": "Whether you're an artist looking to sell your work or buyer seeking",
+    "accentWord": "unique",
+    "tail": "pieces connects you to a world of creativity & commerce."
+  },
+  "vision": {
+    "title": "Our vision for any art technology.",
+    "body": "We're building the connective tissue between creators, collectors and the tools that move culture forward.",
+    "tabs": ["Business", "Personal"]
+  },
+  "community": {
+    "title": "You will find yourself among us",
+    "body": "Dive into a dynamic community where artists and buyers seamlessly merge."
+  },
+  "bento": {
+    "eyebrowParts": [
+      { "text": "YOUR " },
+      { "text": "STORY", "accent": true },
+      { "text": " TELLING" }
+    ],
+    "title": "Every piece of art tells a story.",
+    "reel": [
+      { "text": "Expression feels" },
+      { "text": "Personal Identity" },
+      { "text": "CreatiVortex Plots" },
+      { "text": "BreakBarrier for Arts" },
+      { "text": "Art Story" }
+    ]
+  },
+  "marketplace": {
+    "eyebrowParts": [
+      { "text": "GET " },
+      { "text": "MORE", "accent": true },
+      { "text": " CLOSER" }
+    ],
+    "title": "Marketplace for Creativity.",
+    "body": "Browse curated drops from emerging and established artists, updated daily.",
+    "items": [
+      { "title": "Artnesia Gap", "desc": "Monochrome dot studies", "bg": "#171715", "pattern": "dots" },
+      { "title": "Immortalise Works", "desc": "Spectral gradient arc", "bg": "#5b8def", "pattern": "spectral" },
+      { "title": "Creativity Class", "desc": "Paper-cut collage", "bg": "#e85d7a", "seed": "ross-mk3" },
+      { "title": "Celebrates Party", "desc": "Horse rider illustration", "bg": "#d98a3c", "seed": "ross-mk4" },
+      { "title": "Verdant Forms", "desc": "Botanical abstractions", "bg": "#1f7a44", "seed": "ross-mk5" }
+    ]
+  },
+  "integrations": {
+    "eyebrow": "PLUGS INTO YOUR STACK",
+    "title": "Everything you already use, in one dock."
+  },
+  "membership": {
+    "title": "Membership",
+    "body": "Pick a plan that grows with your practice. Cancel or switch anytime.",
+    "plans": [
+      { "cadence": "Monthly", "price": "$9.99", "note": "Regular monthly payment" },
+      {
+        "cadence": "Quarterly",
+        "price": "$12.99",
+        "note": "Regular monthly payment",
+        "badge": "Popular",
+        "featured": true
+      },
+      {
+        "cadence": "Annually",
+        "price": "$19.99",
+        "note": "Regular monthly payment",
+        "discount": "Plus %56 off for 1 year"
+      }
+    ]
+  },
+  "yellowBand": {
+    "words": ["can ride", "Inspired by people", "New Art Place"]
+  },
+  "featureCards": [
+    {
+      "title": "Meets new people",
+      "body": "Find collaborators, mentors and collectors who get your work.",
+      "cta": "Let's Meet",
+      "tone": "pink",
+      "seed": "ross-pink"
+    },
+    {
+      "title": "Archive of new arts",
+      "body": "Every drop preserved — a living catalogue of the marketplace.",
+      "cta": "Archives",
+      "tone": "light"
+    }
+  ]
+}

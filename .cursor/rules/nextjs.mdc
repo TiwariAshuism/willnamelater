@@ -1,0 +1,43 @@
+---
+description: Next.js App Router, TypeScript strict, Server Components
+globs: web/**
+alwaysApply: false
+---
+
+# Next.js 16 Warning
+
+This is NOT the Next.js you know. This version has breaking changes — APIs, conventions, and file structure may all differ from your training data.
+
+**Before writing any Next.js code**, read the relevant guide in `node_modules/next/dist/docs/`. Heed deprecation notices.
+
+# Stack
+
+Always use:
+
+- App Router (`app/` directory)
+- TypeScript with strict typing
+- Server Components when appropriate (data fetching, no client interactivity)
+- Client Components only when interactivity or browser APIs are required
+- Tailwind CSS for styling
+- Reusable UI components — no duplicated logic
+
+# Architecture
+
+- Follow Clean Architecture principles from `architecture.mdc`.
+- Organize by feature when the app grows (`app/(feature)/`, `components/{feature}/`, `lib/{feature}/`).
+- Keep data-fetching logic in Server Components or dedicated `lib/` modules.
+- Share types and API clients via `lib/` — never duplicate fetch logic across pages.
+
+# Rules
+
+- No business logic duplicated between server and client layers.
+- Extract shared logic into `lib/` modules, not inline in pages.
+- Extend existing components and utilities before creating new ones.
+- Strict TypeScript — no `any` unless unavoidable and documented.
+
+# Prohibited
+
+- Pages Router patterns (`pages/` directory) for new code.
+- Duplicated API fetch logic across components.
+- Client Components for static content that can be Server Components.
+- Placeholder or stub implementations in production paths.

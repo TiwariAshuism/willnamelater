@@ -1,0 +1,50 @@
+---
+description: KMP, Compose Multiplatform, MVVM, StateFlow, feature-first layout
+globs: mobile/**,packages/**
+alwaysApply: false
+---
+
+# KMP Stack
+
+Always use:
+
+- Clean Architecture (see `architecture.mdc`)
+- Feature-first organization under `shared/feature/{name}/`
+- Repository pattern
+- MVVM with ViewModel + immutable UI state
+- StateFlow for UI state
+- Coroutines for async work
+- Koin for dependency injection
+- Compose Multiplatform for UI
+- Kotlin Serialization for models
+- Ktor Client for networking
+
+# Feature Layout
+
+Every feature must contain:
+
+```text
+shared/feature/{name}/
+  domain/        # use cases, repository interfaces, domain models
+  data/          # repository implementations, API clients, mappers
+  presentation/  # ViewModel, UiState, Composables/Screens
+  di/            # Koin module
+  tests/
+```
+
+# Rules
+
+- Never place business logic inside Composables.
+- UI state must be immutable data classes.
+- ViewModels expose StateFlow; Composables collect and render.
+- Use `expect/actual` only when platform-specific behavior is required.
+- Prefer `commonMain` for shared logic.
+- Use platform source sets (`androidMain`, `iosMain`) only for native integrations.
+- Follow Kotlin coding conventions.
+- Extend existing feature packages before creating new ones.
+
+# Prohibited
+
+- Business logic in Composables or UI event handlers beyond delegation to ViewModel.
+- Direct API calls from presentation layer.
+- Duplicate repository or use-case implementations across features.

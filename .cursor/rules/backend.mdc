@@ -1,0 +1,60 @@
+---
+description: Modular Monolith Go backend — apigen, handlers, services, repositories
+globs: backend/**,services/backend/**
+alwaysApply: false
+---
+
+# Backend Architecture
+
+The backend is a **Modular Monolith**. Every business capability is an isolated module with clear boundaries. Design modules so they can be extracted into microservices with minimal changes.
+
+## Module layout
+
+```text
+internal/
+  {module}/
+    handler/
+    service/
+    repository/
+    model/
+    dto/
+    mapper/
+  migrations/       # per-module or shared, versioned
+```
+
+Each module owns: handlers, services, repositories, DTOs, models, migrations, and tests.
+
+## Layer rules
+
+- Handlers are thin — parse request, call service, map response. No business logic.
+- Services contain business logic.
+- Repositories handle data access only.
+- Never place business logic in HTTP handlers.
+- Use table-driven tests for handlers and services.
+
+## Cross-module communication
+
+- Modules communicate through interfaces or application services.
+- Never access another module's repository directly.
+- Use contracts, not implementation details.
+- Avoid shared mutable state across modules.
+
+# API Generation (apigen)
+
+All backend APIs must use [apigen](https://github.com/TiwariAshuism/apigen).
+
+Before implementing any API:
+
+1. Inspect the apigen package and follow its conventions.
+2. Generate API contracts using apigen.
+3. Do not manually recreate functionality already provided by apigen.
+4. Keep generated artifacts synchronized with the implementation.
+
+Do not introduce another API generation framework unless explicitly instructed.
+
+# Prohibited
+
+- Business logic in handlers.
+- Direct cross-module repository access.
+- Manual OpenAPI/Swagger setup when apigen provides it.
+- Duplicate services or repositories for the same domain.

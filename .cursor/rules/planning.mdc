@@ -1,0 +1,44 @@
+---
+description: Mandatory inspect-plan-implement-validate workflow
+alwaysApply: true
+---
+
+# Planning and Feature Workflow
+
+Never generate code without understanding the project. Follow `architecture.mdc` for layer and package rules.
+
+## AI Decision Process (mandatory before any implementation)
+
+1. Inspect the repository tree and read existing architecture.
+2. Read `graphify-out/GRAPH_REPORT.md` if it exists (see `graphify.mdc`).
+3. Search the project for existing packages, services, repositories, and UI.
+4. Identify affected packages and reusable components.
+5. Produce a short implementation plan before writing code.
+6. Implement following existing patterns.
+7. Validate (see `testing.mdc`).
+8. Refactor only if necessary to align with architecture.
+9. Run tests until green.
+10. Update documentation when architecture or APIs change.
+
+## Feature Workflow (when implementing a feature)
+
+1. Analyze requirements.
+2. Create an implementation plan.
+3. Identify affected modules and packages — extend existing ones when possible.
+4. Implement backend (if applicable).
+5. Implement shared KMP code (if applicable).
+6. Implement Android/iOS Compose UI (if applicable).
+7. Update Next.js (if applicable).
+8. Write tests for every layer touched.
+9. Run all validation commands (`testing.mdc`).
+10. Fix failures and repeat until green.
+11. Update documentation.
+12. Summarize changes.
+
+## Prohibited behavior
+
+- Never guess APIs, file locations, or patterns — inspect first.
+- Never create a new package without searching for an existing one to extend.
+- Never skip the plan step for non-trivial work.
+- Never leave TODOs unless explicitly requested.
+- If multiple solutions exist, choose the one most consistent with existing architecture.
