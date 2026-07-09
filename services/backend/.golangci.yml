@@ -1,0 +1,28 @@
+version: "2"
+
+run:
+  go: "1.25"
+
+linters:
+  # Opt in explicitly; do not layer the default set on top of this list.
+  default: none
+  enable:
+    - errcheck
+    - govet
+    - staticcheck
+    - ineffassign
+    - unused
+    - gosec
+    - revive
+    - bodyclose
+    - errorlint
+    - gocritic
+  exclusions:
+    generated: lax
+    # Tests legitimately embed fixed keys/tokens as fixtures; suppress only
+    # gosec's hardcoded-credential check (G101) and nothing else.
+    rules:
+      - path: _test\.go
+        linters:
+          - gosec
+        text: G101

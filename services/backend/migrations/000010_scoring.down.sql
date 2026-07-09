@@ -1,0 +1,4 @@
+DROP TABLE IF EXISTS fraud_result;
+DROP TABLE IF EXISTS score;
+DROP TABLE IF EXISTS benchmark;
+DROP TABLE IF EXISTS scoring_weights;

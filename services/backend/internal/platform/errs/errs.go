@@ -15,19 +15,21 @@ import (
 // Kind classifies an error by the caller-visible outcome it implies.
 type Kind int
 
+// The Kind values below are the complete set of caller-visible outcomes. Each
+// maps to exactly one HTTP status in statusByKind.
 const (
 	// KindInternal is the zero value: an unexpected failure. Never surfaced
 	// verbatim to clients.
-	KindInternal      Kind = iota
-	KindInvalid            // malformed or semantically invalid input
-	KindUnauthorized       // missing or invalid credentials
-	KindForbidden          // authenticated but not permitted
-	KindNotFound           // addressed resource does not exist
-	KindConflict           // violates a uniqueness or state invariant
-	KindQuotaExceeded      // caller is over their plan or API quota
-	KindRateLimited        // upstream or internal rate limit hit; retryable
-	KindUnavailable        // dependency down; retryable
-	KindNotImplemented
+	KindInternal       Kind = iota
+	KindInvalid             // malformed or semantically invalid input
+	KindUnauthorized        // missing or invalid credentials
+	KindForbidden           // authenticated but not permitted
+	KindNotFound            // addressed resource does not exist
+	KindConflict            // violates a uniqueness or state invariant
+	KindQuotaExceeded       // caller is over their plan or API quota
+	KindRateLimited         // upstream or internal rate limit hit; retryable
+	KindUnavailable         // dependency down; retryable
+	KindNotImplemented      // scaffolded but not yet wired
 )
 
 // Error is a domain error carrying a Kind, a stable machine-readable code, a

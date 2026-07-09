@@ -1,0 +1,3 @@
+DROP TABLE IF EXISTS usage_counter;
+DROP TABLE IF EXISTS subscription;
+DROP TABLE IF EXISTS plan;

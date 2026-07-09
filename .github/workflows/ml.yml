@@ -1,0 +1,41 @@
+name: ml
+
+on:
+  push:
+    paths:
+      - "services/ml/**"
+      - ".github/workflows/ml.yml"
+  pull_request:
+    paths:
+      - "services/ml/**"
+      - ".github/workflows/ml.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  ml:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ml
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          if [ -f requirements-dev.txt ]; then pip install -r requirements-dev.txt; fi
+          if [ -f pyproject.toml ]; then pip install -e .; fi
+          pip install ruff pytest
+
+      - name: ruff
+        run: ruff check .
+
+      - name: pytest
+        run: pytest

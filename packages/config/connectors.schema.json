@@ -1,0 +1,101 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://influaudit.getnyx.in/schemas/connectors.schema.json",
+  "title": "InfluAudit connector configuration",
+  "description": "Declarative registry of platform connectors. Secrets are never embedded; credentials are referenced only by the NAME of the environment variable that supplies them at runtime.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["version", "connectors"],
+  "properties": {
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "connectors": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/connector" }
+    }
+  },
+  "$defs": {
+    "envVarName": {
+      "type": "string",
+      "description": "Environment variable NAME (never a secret value).",
+      "pattern": "^[A-Z][A-Z0-9_]*$"
+    },
+    "connector": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["platform", "enabled", "display_name", "base_url", "auth", "capabilities", "rate_limit"],
+      "properties": {
+        "platform": {
+          "type": "string",
+          "enum": ["youtube", "instagram", "facebook", "tiktok", "x", "linkedin"]
+        },
+        "enabled": { "type": "boolean" },
+        "display_name": { "type": "string", "minLength": 1 },
+        "base_url": { "type": "string", "format": "uri", "minLength": 1 },
+        "requires_app_review": { "type": "boolean" },
+        "auth": { "$ref": "#/$defs/auth" },
+        "capabilities": {
+          "type": "array",
+          "minItems": 1,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "enum": ["profile", "metrics", "recent_posts", "audience_breakdown"]
+          }
+        },
+        "rate_limit": { "$ref": "#/$defs/rateLimit" }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type"],
+      "properties": {
+        "type": { "type": "string", "enum": ["oauth2", "api_key"] },
+        "api_key_env": { "$ref": "#/$defs/envVarName" },
+        "client_id_env": { "$ref": "#/$defs/envVarName" },
+        "client_secret_env": { "$ref": "#/$defs/envVarName" },
+        "scopes": {
+          "type": "array",
+          "items": { "type": "string", "minLength": 1 }
+        }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "type": { "const": "oauth2" } } },
+          "then": { "required": ["client_id_env", "client_secret_env"] }
+        },
+        {
+          "if": { "properties": { "type": { "const": "api_key" } } },
+          "then": { "required": ["api_key_env"] }
+        }
+      ]
+    },
+    "rateLimit": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["model"],
+      "properties": {
+        "model": { "type": "string", "enum": ["quota_units", "bucketed_calls"] },
+        "units_per_day": { "type": "integer", "minimum": 1 },
+        "default_cost": { "type": "integer", "minimum": 1 },
+        "search_cost": { "type": "integer", "minimum": 1 },
+        "calls_per_hour": { "type": "integer", "minimum": 1 },
+        "window": { "type": "string", "minLength": 1 }
+      },
+      "allOf": [
+        {
+          "if": { "properties": { "model": { "const": "quota_units" } } },
+          "then": { "required": ["units_per_day", "default_cost", "search_cost"] }
+        },
+        {
+          "if": { "properties": { "model": { "const": "bucketed_calls" } } },
+          "then": { "required": ["calls_per_hour", "window"] }
+        }
+      ]
+    }
+  }
+}

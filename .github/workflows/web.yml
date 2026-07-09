@@ -1,0 +1,62 @@
+name: web
+
+on:
+  push:
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - ".github/workflows/web.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # apps/web is not scaffolded yet. Skip the rest without failing the
+      # pipeline until its package.json exists.
+      - id: guard
+        run: |
+          if [ -f apps/web/package.json ]; then
+            echo "present=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "present=false" >> "$GITHUB_OUTPUT"
+            echo "apps/web/package.json not found; skipping web CI."
+          fi
+
+      - name: Install pnpm
+        if: steps.guard.outputs.present == 'true'
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Setup Node
+        if: steps.guard.outputs.present == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+          cache-dependency-path: "**/pnpm-lock.yaml"
+
+      - name: Install
+        if: steps.guard.outputs.present == 'true'
+        working-directory: apps/web
+        run: pnpm install --frozen-lockfile
+
+      - name: Lint
+        if: steps.guard.outputs.present == 'true'
+        working-directory: apps/web
+        run: pnpm lint
+
+      - name: Build
+        if: steps.guard.outputs.present == 'true'
+        working-directory: apps/web
+        run: pnpm build
