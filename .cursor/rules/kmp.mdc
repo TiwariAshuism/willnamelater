@@ -1,6 +1,6 @@
 ---
 description: KMP, Compose Multiplatform, MVVM, StateFlow, feature-first layout
-globs: mobile/**,packages/**
+globs: apps/mobile/**
 alwaysApply: false
 ---
 

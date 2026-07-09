@@ -1,0 +1,46 @@
+# Normalize to LF in the repository. Without this, files committed from Windows
+# carry CRLF, and `gofmt -l` / `ruff format --check` fail on Linux CI runners.
+* text=auto eol=lf
+
+# Source and config: always LF, in the working tree too.
+*.go      text eol=lf
+*.py      text eol=lf
+*.ts      text eol=lf
+*.tsx     text eol=lf
+*.js      text eol=lf
+*.jsx     text eol=lf
+*.kt      text eol=lf
+*.kts     text eol=lf
+*.sql     text eol=lf
+*.sh      text eol=lf
+*.yaml    text eol=lf
+*.yml     text eol=lf
+*.json    text eol=lf
+*.toml    text eol=lf
+*.md      text eol=lf
+*.mdc     text eol=lf
+Dockerfile text eol=lf
+Makefile  text eol=lf
+
+# Windows-only scripts genuinely need CRLF.
+*.bat     text eol=crlf
+*.ps1     text eol=crlf
+
+# Never touch binaries.
+*.png     binary
+*.jpg     binary
+*.jpeg    binary
+*.gif     binary
+*.ico     binary
+*.webp    binary
+*.pdf     binary
+*.woff    binary
+*.woff2   binary
+*.keystore binary
+*.jar     binary
+
+# Generated artifacts: keep them out of diffs and language stats.
+*_gen.go            linguist-generated=true
+go.sum              -diff
+pnpm-lock.yaml      -diff linguist-generated=true
+packages/contracts/gen/** linguist-generated=true
