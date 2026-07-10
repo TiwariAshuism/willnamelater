@@ -1,0 +1,794 @@
+components:
+  schemas:
+    auth.AuthResponse:
+      properties:
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+        user:
+          $ref: "#/components/schemas/auth.UserResponse"
+      required:
+      - access_token
+      - expires_in
+      - refresh_token
+      - token_type
+      - user
+      type: object
+    auth.LoginRequest:
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+      - email
+      - password
+      type: object
+    auth.LogoutRequest:
+      properties:
+        refresh_token:
+          type: string
+      required:
+      - refresh_token
+      type: object
+    auth.RefreshRequest:
+      properties:
+        refresh_token:
+          type: string
+      required:
+      - refresh_token
+      type: object
+    auth.RegisterRequest:
+      properties:
+        email:
+          type: string
+        full_name:
+          type: string
+        password:
+          type: string
+      required:
+      - email
+      - full_name
+      - password
+      type: object
+    auth.UserResponse:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        email:
+          type: string
+        email_verified:
+          type: boolean
+        full_name:
+          type: string
+        id:
+          format: uuid
+          type: string
+        role:
+          type: string
+      required:
+      - created_at
+      - email
+      - email_verified
+      - id
+      - role
+      type: object
+    billing.PlanResponse:
+      properties:
+        audit_quota:
+          type: integer
+        bulk_enabled:
+          type: boolean
+        bulk_quota:
+          type: integer
+        code:
+          type: string
+        currency:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        price_micros:
+          type: integer
+      required:
+      - audit_quota
+      - bulk_enabled
+      - bulk_quota
+      - code
+      - currency
+      - id
+      - name
+      - price_micros
+      type: object
+    billing.SubscribeRequest:
+      properties:
+        plan_code:
+          type: string
+      required:
+      - plan_code
+      type: object
+    billing.SubscriptionResponse:
+      properties:
+        cancel_at_period_end:
+          type: boolean
+        current_period_end:
+          format: date-time
+          type: string
+        current_period_start:
+          format: date-time
+          type: string
+        id:
+          type: string
+        plan_code:
+          type: string
+        plan_id:
+          type: string
+        status:
+          type: string
+      required:
+      - cancel_at_period_end
+      - current_period_end
+      - current_period_start
+      - id
+      - plan_code
+      - plan_id
+      - status
+      type: object
+    billing.WebhookRequest:
+      type: object
+    influencer.AddHandleRequest:
+      properties:
+        follower_count:
+          nullable: true
+          type: integer
+        handle:
+          type: string
+        platform:
+          type: string
+        platform_user_id:
+          nullable: true
+          type: string
+        verified:
+          type: boolean
+      required:
+      - follower_count
+      - handle
+      - platform
+      - platform_user_id
+      - verified
+      type: object
+    influencer.CreateInfluencerRequest:
+      properties:
+        country:
+          nullable: true
+          type: string
+        display_name:
+          nullable: true
+          type: string
+        niche:
+          nullable: true
+          type: string
+      required:
+      - country
+      - display_name
+      - niche
+      type: object
+    influencer.HandleResponse:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        follower_count:
+          nullable: true
+          type: integer
+        handle:
+          type: string
+        id:
+          type: string
+        influencer_id:
+          type: string
+        last_seen_at:
+          format: date-time
+          nullable: true
+          type: string
+        platform:
+          type: string
+        platform_user_id:
+          nullable: true
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        verified:
+          type: boolean
+      required:
+      - created_at
+      - handle
+      - id
+      - influencer_id
+      - platform
+      - updated_at
+      - verified
+      type: object
+    influencer.InfluencerResponse:
+      properties:
+        country:
+          nullable: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        display_name:
+          nullable: true
+          type: string
+        handles:
+          items:
+            $ref: "#/components/schemas/influencer.HandleResponse"
+          type: array
+        id:
+          type: string
+        niche:
+          nullable: true
+          type: string
+        tier:
+          nullable: true
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - created_at
+      - id
+      - updated_at
+      type: object
+    influencer.ListInfluencersRequest:
+      properties:
+        Cursor:
+          type: string
+        Limit:
+          type: integer
+        Niche:
+          nullable: true
+          type: string
+        Tier:
+          nullable: true
+          type: string
+      required:
+      - Cursor
+      - Limit
+      - Niche
+      - Tier
+      type: object
+    influencer.ListInfluencersResponse:
+      properties:
+        influencers:
+          items:
+            $ref: "#/components/schemas/influencer.InfluencerResponse"
+          type: array
+        next_cursor:
+          type: string
+      required:
+      - influencers
+      type: object
+    influencer.UpdateInfluencerRequest:
+      properties:
+        country:
+          nullable: true
+          type: string
+        display_name:
+          nullable: true
+          type: string
+        niche:
+          nullable: true
+          type: string
+      required:
+      - country
+      - display_name
+      - niche
+      type: object
+    metrics.ListPostsRequest:
+      properties:
+        Limit:
+          type: integer
+        Offset:
+          type: integer
+        Platform:
+          type: string
+        Since:
+          format: date-time
+          type: string
+      required:
+      - Limit
+      - Offset
+      - Platform
+      - Since
+      type: object
+    metrics.MetricSample:
+      properties:
+        at:
+          format: date-time
+          type: string
+        value:
+          type: number
+      required:
+      - at
+      - value
+      type: object
+    metrics.MetricSeries:
+      properties:
+        metric:
+          type: string
+        platform:
+          type: string
+        points:
+          items:
+            $ref: "#/components/schemas/metrics.MetricSample"
+          type: array
+      required:
+      - metric
+      - platform
+      - points
+      type: object
+    metrics.MetricSeriesRequest:
+      properties:
+        From:
+          format: date-time
+          type: string
+        Limit:
+          type: integer
+        Metric:
+          type: string
+        Platform:
+          type: string
+        To:
+          format: date-time
+          type: string
+      required:
+      - From
+      - Limit
+      - Metric
+      - Platform
+      - To
+      type: object
+    metrics.MetricSeriesResponse:
+      properties:
+        influencer_id:
+          type: string
+        series:
+          items:
+            $ref: "#/components/schemas/metrics.MetricSeries"
+          type: array
+      required:
+      - influencer_id
+      - series
+      type: object
+    metrics.PostResponse:
+      properties:
+        caption:
+          nullable: true
+          type: string
+        comment_count:
+          nullable: true
+          type: integer
+        engagement_rate:
+          nullable: true
+          type: number
+        id:
+          type: string
+        impression_count:
+          nullable: true
+          type: integer
+        is_sponsored:
+          nullable: true
+          type: boolean
+        like_count:
+          nullable: true
+          type: integer
+        media_type:
+          nullable: true
+          type: string
+        permalink:
+          nullable: true
+          type: string
+        platform:
+          type: string
+        platform_post_id:
+          type: string
+        posted_at:
+          format: date-time
+          nullable: true
+          type: string
+        reach_count:
+          nullable: true
+          type: integer
+        save_count:
+          nullable: true
+          type: integer
+        share_count:
+          nullable: true
+          type: integer
+        view_count:
+          nullable: true
+          type: integer
+      required:
+      - id
+      - platform
+      - platform_post_id
+      type: object
+    oauth.AuthorizeResponse:
+      properties:
+        authorization_url:
+          type: string
+        state:
+          type: string
+      required:
+      - authorization_url
+      - state
+      type: object
+    oauth.ConnectionResponse:
+      properties:
+        connected_at:
+          format: date-time
+          type: string
+        expires_at:
+          format: date-time
+          nullable: true
+          type: string
+        platform:
+          type: string
+        provider:
+          type: string
+        provider_account_id:
+          type: string
+        scopes:
+          items:
+            type: string
+          type: array
+      required:
+      - connected_at
+      - platform
+      - provider
+      - provider_account_id
+      - scopes
+      type: object
+info:
+  title: InfluAudit API
+  version: 0.1.0
+openapi: 3.0.3
+paths:
+  /auth/login:
+    post:
+      operationId: Login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth.LoginRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth.AuthResponse"
+          description: OK
+  /auth/logout:
+    post:
+      operationId: Logout
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth.LogoutRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /auth/me:
+    get:
+      operationId: Me
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth.UserResponse"
+          description: OK
+  /auth/refresh:
+    post:
+      operationId: Refresh
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth.RefreshRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth.AuthResponse"
+          description: OK
+  /auth/register:
+    post:
+      operationId: Register
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth.RegisterRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth.AuthResponse"
+          description: OK
+  /billing/plans:
+    get:
+      operationId: ListPlans
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/billing.PlanResponse"
+                type: array
+          description: OK
+  /billing/subscribe:
+    post:
+      operationId: Subscribe
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/billing.SubscribeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/billing.SubscriptionResponse"
+          description: OK
+  /billing/subscription:
+    get:
+      operationId: GetSubscription
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/billing.SubscriptionResponse"
+          description: OK
+  /billing/webhook:
+    post:
+      operationId: Webhook
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/billing.WebhookRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /influencers:
+    get:
+      operationId: ListInfluencers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/influencer.ListInfluencersRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.ListInfluencersResponse"
+          description: OK
+    post:
+      operationId: CreateInfluencer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/influencer.CreateInfluencerRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.InfluencerResponse"
+          description: OK
+  /influencers/{id}:
+    get:
+      operationId: GetInfluencer
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.InfluencerResponse"
+          description: OK
+    patch:
+      operationId: UpdateInfluencer
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/influencer.UpdateInfluencerRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.InfluencerResponse"
+          description: OK
+  /influencers/{id}/handles:
+    post:
+      operationId: AddHandle
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/influencer.AddHandleRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.HandleResponse"
+          description: OK
+  /influencers/{id}/handles/{handleID}:
+    delete:
+      operationId: DeleteHandle
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: handleID
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+  /influencers/{id}/metrics:
+    get:
+      operationId: GetInfluencerMetrics
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/metrics.MetricSeriesRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/metrics.MetricSeriesResponse"
+          description: OK
+  /influencers/{id}/posts:
+    get:
+      operationId: ListInfluencerPosts
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/metrics.ListPostsRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/metrics.PostResponse"
+                type: array
+          description: OK
+  /oauth/connections:
+    get:
+      operationId: Connections
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/oauth.ConnectionResponse"
+                type: array
+          description: OK
+  /oauth/{provider}:
+    delete:
+      operationId: Disconnect
+      parameters:
+      - in: path
+        name: provider
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+  /oauth/{provider}/authorize:
+    get:
+      operationId: Authorize
+      parameters:
+      - in: path
+        name: provider
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.AuthorizeResponse"
+          description: OK
+  /oauth/{provider}/callback:
+    get:
+      operationId: Callback
+      parameters:
+      - in: path
+        name: provider
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.ConnectionResponse"
+          description: OK

@@ -46,6 +46,9 @@ COPY --from=build /out/api /out/worker /out/migrate /out/healthcheck /usr/local/
 # relative to the working directory.
 COPY services/backend/migrations/ /app/migrations/
 COPY packages/config/ /app/packages/config/
+# The generated OpenAPI document, served at /openapi.yaml and behind /swagger
+# outside production. Regenerate with `go run ./cmd/openapigen`.
+COPY packages/contracts/openapi/ /app/packages/contracts/openapi/
 
 USER nonroot:nonroot
 

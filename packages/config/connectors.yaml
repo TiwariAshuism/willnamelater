@@ -41,8 +41,14 @@ connectors:
   # Instagram via the Meta Graph API meters usage as a bucket of calls per
   # rolling hour. Deep insights (reach, impressions, audience) require Meta app
   # review and a Business/Creator account connected over OAuth.
+  #
+  # Disabled until the Meta connector lands AND the app clears review. Enabling
+  # it before then would fail the boot by design (app.connector_unimplemented):
+  # an audit that silently covers fewer platforms than configured is worse than
+  # one that refuses to start. Until then, CSV import of an Instagram Insights
+  # export is the real-data path for Instagram.
   - platform: instagram
-    enabled: true
+    enabled: false
     display_name: Instagram
     base_url: https://graph.facebook.com/v21.0
     requires_app_review: true

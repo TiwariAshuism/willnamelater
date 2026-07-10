@@ -10,6 +10,7 @@ import (
 
 	"github.com/getnyx/influaudit/backend/internal/platform/config"
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
+	"github.com/getnyx/influaudit/backend/internal/platform/errs"
 	"github.com/getnyx/influaudit/backend/internal/platform/httpx"
 	"github.com/getnyx/influaudit/backend/internal/platform/redis"
 )
@@ -30,6 +31,20 @@ func (a *App) Router() *gin.Engine {
 	// middleware that writes the panic value to the response.
 	r := gin.New()
 	r.Use(httpx.RequestID(), httpx.Recovery())
+
+	// Without this, gin answers a wrong-method request with 404 and the NoMethod
+	// handler below never runs.
+	r.HandleMethodNotAllowed = true
+
+	// Gin's defaults render plain text ("404 page not found"), so an unknown
+	// route would answer in a different shape from every other error the API
+	// emits. Route both through RenderError to keep one envelope.
+	r.NoRoute(func(c *gin.Context) {
+		httpx.RenderError(c, errs.New(errs.KindNotFound, "http.not_found", "no such endpoint"))
+	})
+	r.NoMethod(func(c *gin.Context) {
+		httpx.RenderError(c, errs.New(errs.KindInvalid, "http.method_not_allowed", "method not allowed for this endpoint"))
+	})
 
 	r.GET("/healthz", a.healthz)
 	r.GET("/readyz", a.readyz)

@@ -12,12 +12,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"os"
+	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/getnyx/influaudit/backend/internal/connector"
+	"github.com/getnyx/influaudit/backend/internal/connector/youtube"
 	"github.com/getnyx/influaudit/backend/internal/platform/config"
 	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
@@ -146,9 +149,26 @@ type credentials struct {
 // implement connector.Connector, add a block to connectors.yaml, add an entry
 // here. Nothing else in the codebase changes.
 //
-// It is deliberately empty until a platform lands: an enabled connector with no
-// builder is a configuration error, caught at boot.
-var connectorBuilders = map[connector.Platform]connectorBuilder{}
+// An enabled connector with no builder is a configuration error, caught at boot.
+var connectorBuilders = map[connector.Platform]connectorBuilder{
+	connector.PlatformYouTube: buildYouTube,
+}
+
+// connectorHTTPTimeout bounds a single call to a platform API. The audit
+// orchestrator also imposes a per-platform deadline; this is the inner bound, so
+// one wedged request cannot consume the whole platform's budget.
+const connectorHTTPTimeout = 20 * time.Second
+
+// buildYouTube constructs the YouTube connector. Its API key authenticates
+// public reads, which is what makes it the only platform that needs no app
+// review and therefore the one that carries a live audit today.
+func buildYouTube(pc connector.PlatformConfig, creds credentials) (connector.Connector, error) {
+	return youtube.New(youtube.Config{
+		BaseURL: pc.BaseURL,
+		APIKey:  creds.APIKey,
+		HTTP:    &http.Client{Timeout: connectorHTTPTimeout},
+	})
+}
 
 // buildConnectorRegistry loads the declarative connector config, resolves each
 // enabled platform's credentials from the environment variable names the config
