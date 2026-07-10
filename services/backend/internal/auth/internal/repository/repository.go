@@ -18,11 +18,14 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
 )
 
-// Repository is the data-access contract the auth service depends on. It is
-// hand-written rather than the apigen-mirrored AuthRepository because auth's
-// persistence is row-level access to the users and sessions tables: the
-// request/response-shaped generated interface cannot express that without
-// pulling business logic into the data layer. RotateSession is the one
+// Repository is the data-access contract the auth service depends on.
+//
+// It is hand-written, and apigen's repository layer is deliberately not
+// generated for this module. apigen mirrors the *API* interface into the
+// repository, producing methods like Register(ctx, RegisterRequest) — a
+// request/response shape, not a data shape. Auth's persistence is row-level
+// access to the users and sessions tables, which that mirror cannot express
+// without dragging business logic into the data layer. RotateSession is the one
 // multi-statement operation, kept atomic here so the service never has to
 // juggle a transaction.
 type Repository interface {

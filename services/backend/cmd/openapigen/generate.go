@@ -20,6 +20,11 @@ const (
 	specTitle   = "InfluAudit API"
 	specVersion = "0.1.0"
 	openapiVer  = "3.0.3"
+
+	// apiBasePath is the router group every module is mounted under. It is
+	// duplicated in internal/app/router.go; the route-coverage test in that
+	// package fails if the two ever disagree.
+	apiBasePath = "/v1"
 )
 
 // loadMode is the set of facts go/packages must compute for the API packages:
@@ -282,6 +287,11 @@ func assemble(routes []route, registry *schemaRegistry) (*openapi3.T, error) {
 	doc := &openapi3.T{
 		OpenAPI: openapiVer,
 		Info:    &openapi3.Info{Title: specTitle, Version: specVersion},
+		// Every module mounts under the API version group, so the spec's paths
+		// stay version-agnostic and the base path is declared once here. Without
+		// this, a client generated from the spec would call /auth/login instead
+		// of /v1/auth/login.
+		Servers: openapi3.Servers{{URL: apiBasePath}},
 		Paths:   openapi3.NewPaths(),
 	}
 	if len(registry.schemas) > 0 {

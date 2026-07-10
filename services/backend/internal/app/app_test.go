@@ -23,11 +23,29 @@ func repoConfigPaths(t *testing.T) config.ConnectorsConfig {
 	}
 }
 
+// loadRepoConnectors loads the real connectors.yaml, so these tests exercise the
+// configuration we actually ship rather than an inlined copy that could drift.
+func loadRepoConnectors(t *testing.T) *connector.Config {
+	t.Helper()
+	paths := repoConfigPaths(t)
+	cc, err := connector.Load(paths.ConfigPath, paths.SchemaPath)
+	if err != nil {
+		t.Fatalf("load connectors: %v", err)
+	}
+	return cc
+}
+
 // An enabled platform with no registered builder must fail the boot. Skipping it
 // would silently produce audits covering fewer platforms than the operator
 // configured.
 func TestBuildConnectorRegistryRejectsEnabledPlatformWithoutBuilder(t *testing.T) {
-	cfg := &config.Config{Connectors: repoConfigPaths(t)}
+	// Empty the builder table so every platform enabled in the real config lacks
+	// an implementation. Modelling it this way keeps the test honest as builders
+	// are added: it asserts the guard, not the current roster.
+	restore := withBuilders(t, map[connector.Platform]connectorBuilder{})
+	defer restore()
+
+	cc := loadRepoConnectors(t)
 
 	// Credentials must be present, or we would fail on the wrong error and the
 	// test would pass for a reason it does not intend.
@@ -37,7 +55,7 @@ func TestBuildConnectorRegistryRejectsEnabledPlatformWithoutBuilder(t *testing.T
 	t.Setenv("META_APP_ID", "id")
 	t.Setenv("META_APP_SECRET", "secret")
 
-	_, err := buildConnectorRegistry(cfg)
+	_, err := buildConnectorRegistry(cc)
 	if err == nil {
 		t.Fatal("expected boot to fail for an enabled platform with no builder")
 	}
@@ -60,14 +78,14 @@ func TestBuildConnectorRegistryRequiresNamedCredentials(t *testing.T) {
 	})
 	defer restore()
 
-	cfg := &config.Config{Connectors: repoConfigPaths(t)}
+	cc := loadRepoConnectors(t)
 
 	// Deliberately leave YT_API_KEY unset. t.Setenv guarantees restoration.
 	t.Setenv("YT_OAUTH_CLIENT_ID", "id")
 	t.Setenv("YT_OAUTH_CLIENT_SECRET", "secret")
 	t.Setenv("YT_API_KEY", "")
 
-	_, err := buildConnectorRegistry(cfg)
+	_, err := buildConnectorRegistry(cc)
 	if err == nil {
 		t.Fatal("expected boot to fail when a named credential is unset")
 	}
@@ -184,4 +202,32 @@ func withBuilders(t *testing.T, m map[connector.Platform]connectorBuilder) func(
 
 func stubBuilder(connector.PlatformConfig, credentials) (connector.Connector, error) {
 	return nil, errors.New("builder must not be reached in this test")
+}
+
+// A nil *crypto.Cipher must be refused at boot, not at first use.
+//
+// oauth's service checks `sealer == nil`, but a typed nil pointer inside a
+// non-nil interface is not nil, so that guard silently passes and the process
+// panics later — on the first OAuth connect, or the first audit ingest, in
+// production. buildModules rejects it where an operator can still act.
+func TestBuildModulesRequiresACipher(t *testing.T) {
+	a := &App{
+		Config: &config.Config{
+			Environment: config.EnvDev,
+			HTTP:        config.HTTPConfig{PublicBaseURL: "http://localhost:8080"},
+			JWT:         config.JWTConfig{PrivateKeyPEM: config.Secret(testSigningKey(t))},
+			Connectors:  repoConfigPaths(t),
+		},
+		Cipher: nil,
+	}
+
+	err := a.buildModules(loadRepoConnectors(t))
+	if err == nil {
+		t.Fatal("buildModules accepted a nil cipher; oauth would panic on the first token seal")
+	}
+
+	var domain *errs.Error
+	if !errors.As(err, &domain) || domain.Code != "app.master_key_required" {
+		t.Fatalf("error = %v, want errs.Error with code app.master_key_required", err)
+	}
 }

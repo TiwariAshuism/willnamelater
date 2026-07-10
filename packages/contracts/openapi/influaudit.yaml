@@ -792,3 +792,5 @@ paths:
               schema:
                 $ref: "#/components/schemas/oauth.ConnectionResponse"
           description: OK
+servers:
+- url: /v1

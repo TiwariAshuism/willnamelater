@@ -22,8 +22,24 @@ x-backend-env: &backend-env
   INFLUAUDIT_REDIS__ADDR: redis:6379
   INFLUAUDIT_GOTENBERG__URL: http://gotenberg:3000
   INFLUAUDIT_ML__BASE_URL: http://ml:8000
-  INFLUAUDIT_CRYPTO__MASTER_KEY: ${INFLUAUDIT_CRYPTO__MASTER_KEY:-}
+  # A non-secret, well-known DEV key so the stack comes up out of the box. The
+  # api refuses to boot without one: oauth token sealing and commenter
+  # pseudonymization both depend on it. config.Validate rejects prod without a
+  # real key, so this default can never reach production.
+  INFLUAUDIT_CRYPTO__MASTER_KEY: ${INFLUAUDIT_CRYPTO__MASTER_KEY:-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=}
   INFLUAUDIT_ANTHROPIC__API_KEY: ${INFLUAUDIT_ANTHROPIC__API_KEY:-}
+  # The API refuses to boot without an RS256 signing key. In dev it is mounted
+  # from deploy/dev-secrets (generated, gitignored); in prod it comes from the
+  # secret store.
+  INFLUAUDIT_JWT__PRIVATE_KEY_PATH: /run/secrets/jwt-dev.pem
+  # The origin OAuth providers redirect back to. It cannot be derived from the
+  # bind address and must match the redirect URIs registered with each provider.
+  INFLUAUDIT_HTTP__PUBLIC_BASE_URL: ${INFLUAUDIT_HTTP__PUBLIC_BASE_URL:-http://localhost:8080}
+  INFLUAUDIT_RAZORPAY__KEY_ID: ${INFLUAUDIT_RAZORPAY__KEY_ID:-}
+  INFLUAUDIT_RAZORPAY__KEY_SECRET: ${INFLUAUDIT_RAZORPAY__KEY_SECRET:-}
+  # Razorpay generates the webhook secret per endpoint in its dashboard; it is a
+  # different credential from the API key secret.
+  INFLUAUDIT_RAZORPAY__WEBHOOK_SECRET: ${INFLUAUDIT_RAZORPAY__WEBHOOK_SECRET:-}
   # Connector credentials, referenced by NAME from packages/config/connectors.yaml.
   YT_API_KEY: ${YT_API_KEY:-}
   YT_OAUTH_CLIENT_ID: ${YT_OAUTH_CLIENT_ID:-}
@@ -107,6 +123,8 @@ services:
       INFLUAUDIT_HTTP__ADDR: ":8080"
     ports:
       - "${API_PORT:-8080}:8080"
+    volumes:
+      - ./dev-secrets:/run/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy
@@ -132,6 +150,8 @@ services:
       dockerfile: services/backend/Dockerfile
     entrypoint: ["/usr/local/bin/worker"]
     environment: *backend-env
+    volumes:
+      - ./dev-secrets:/run/secrets:ro
     depends_on:
       postgres:
         condition: service_healthy

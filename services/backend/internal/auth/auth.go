@@ -9,8 +9,12 @@
 package auth
 
 import (
-	"github.com/gin-gonic/gin"
+	"context"
 
+	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
+
+	"github.com/getnyx/influaudit/backend/internal/auth/internal/authctx"
 	"github.com/getnyx/influaudit/backend/internal/auth/internal/handler"
 	"github.com/getnyx/influaudit/backend/internal/auth/internal/repository"
 	"github.com/getnyx/influaudit/backend/internal/auth/internal/service"
@@ -56,4 +60,17 @@ func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 // lives in exactly one place.
 func (m *Module) Middleware() gin.HandlerFunc {
 	return m.middleware
+}
+
+// UserID returns the authenticated caller's id from ctx, and false when the
+// request was not authenticated.
+//
+// It exists because the identity is stored under internal/auth/internal/authctx,
+// which Go forbids any other package from importing. That is deliberate: no
+// package outside this module can forge an identity by writing the same context
+// value. The composition root reads the caller through this accessor and adapts
+// it to whatever port a collaborating module declares.
+func UserID(ctx context.Context) (uuid.UUID, bool) {
+	id, ok := authctx.From(ctx)
+	return id.UserID, ok
 }

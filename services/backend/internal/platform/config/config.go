@@ -101,6 +101,11 @@ type HTTPConfig struct {
 	Addr         string        `koanf:"addr"`
 	ReadTimeout  time.Duration `koanf:"read_timeout"`
 	WriteTimeout time.Duration `koanf:"write_timeout"`
+	// PublicBaseURL is the origin clients and OAuth providers reach this API on,
+	// with no trailing slash. It cannot be derived from Addr, which is a bind
+	// address behind a proxy, and it must match the redirect URIs registered
+	// with each OAuth provider or every callback is rejected.
+	PublicBaseURL string `koanf:"public_base_url"`
 }
 
 // PostgresConfig holds the primary datastore connection string. The DSN embeds
@@ -157,6 +162,11 @@ type JWTConfig struct {
 type RazorpayConfig struct {
 	KeyID     string `koanf:"key_id"`
 	KeySecret Secret `koanf:"key_secret"`
+	// WebhookSecret verifies inbound webhook signatures. Razorpay generates it
+	// separately from the API key secret, in the dashboard, per webhook
+	// endpoint. Reusing KeySecret here would reject every genuine webhook, and
+	// would silently "work" only if an operator set the two to the same value.
+	WebhookSecret Secret `koanf:"webhook_secret"`
 }
 
 // OTelConfig holds the OpenTelemetry OTLP exporter endpoint.
@@ -186,9 +196,10 @@ func defaults() Config {
 	return Config{
 		Environment: EnvDev,
 		HTTP: HTTPConfig{
-			Addr:         ":8080",
-			ReadTimeout:  15 * time.Second,
-			WriteTimeout: 15 * time.Second,
+			Addr:          ":8080",
+			ReadTimeout:   15 * time.Second,
+			WriteTimeout:  15 * time.Second,
+			PublicBaseURL: "http://localhost:8080",
 		},
 		Redis: RedisConfig{
 			Addr: "127.0.0.1:6379",

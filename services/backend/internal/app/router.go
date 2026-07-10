@@ -8,6 +8,8 @@ import (
 	"github.com/gin-gonic/gin"
 	swgui "github.com/swaggest/swgui/v5emb"
 
+	"github.com/getnyx/influaudit/backend/internal/auth"
+	"github.com/getnyx/influaudit/backend/internal/billing"
 	"github.com/getnyx/influaudit/backend/internal/platform/config"
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
@@ -49,12 +51,60 @@ func (a *App) Router() *gin.Engine {
 	r.GET("/healthz", a.healthz)
 	r.GET("/readyz", a.readyz)
 
-	// Module routers mount under /v1 as each module lands.
-	_ = r.Group("/v1")
-
+	a.mountModules(r)
 	a.mountSwagger(r)
 
 	return r
+}
+
+// apiBasePath is the group every module mounts under. cmd/openapigen emits it as
+// the spec's server URL; TestEverySpecPathIsMounted fails if the two disagree.
+const apiBasePath = "/v1"
+
+// mountModules mounts every business module. There are two groups because the
+// API has two authentication models, and a single group would silently apply the
+// wrong one to somebody:
+//
+//   - public: no auth middleware. Registration, login, token refresh, and the
+//     Razorpay webhook all necessarily precede or bypass a session.
+//   - protected: every request must carry a valid access token, and the caller's
+//     identity is placed on the request context for the modules to read.
+//
+// A module decides which of its own routes belong where. The composition root
+// only supplies the groups.
+func (a *App) mountModules(r *gin.Engine) {
+	m := a.Modules
+
+	public := r.Group(apiBasePath)
+	protected := r.Group(apiBasePath, m.Auth.Middleware(), billingCaller())
+
+	// auth mounts on the public group and protects /auth/me itself, because it
+	// owns the middleware and knows which of its routes need it.
+	m.Auth.RegisterRoutes(public)
+
+	// The webhook is unauthenticated (it proves itself with an HMAC over the raw
+	// body); plans, subscription, and subscribe are not.
+	m.Billing.RegisterRoutes(protected, public)
+
+	m.OAuth.RegisterRoutes(protected)
+	m.Influencer.RegisterRoutes(protected)
+	m.Metrics.RegisterRoutes(protected)
+}
+
+// billingCaller copies the authenticated caller from the auth module's context
+// into the billing module's context.
+//
+// Both modules keep their context keys unexported, so neither can read nor forge
+// the other's identity. Bridging them is the composition root's job, and this is
+// the seam. It runs after the auth middleware, so an unauthenticated request has
+// already been rejected and there is nothing to copy.
+func billingCaller() gin.HandlerFunc {
+	return func(c *gin.Context) {
+		if userID, ok := auth.UserID(c.Request.Context()); ok {
+			c.Request = c.Request.WithContext(billing.WithCaller(c.Request.Context(), userID))
+		}
+		c.Next()
+	}
 }
 
 // mountSwagger serves the generated OpenAPI document and a UI over it. It is

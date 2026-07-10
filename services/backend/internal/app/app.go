@@ -19,8 +19,15 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 
+	"github.com/google/uuid"
+
+	"github.com/getnyx/influaudit/backend/internal/auth"
+	"github.com/getnyx/influaudit/backend/internal/billing"
 	"github.com/getnyx/influaudit/backend/internal/connector"
 	"github.com/getnyx/influaudit/backend/internal/connector/youtube"
+	"github.com/getnyx/influaudit/backend/internal/influencer"
+	"github.com/getnyx/influaudit/backend/internal/metrics"
+	"github.com/getnyx/influaudit/backend/internal/oauth"
 	"github.com/getnyx/influaudit/backend/internal/platform/config"
 	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
@@ -47,8 +54,22 @@ type App struct {
 	Connector *connector.Registry
 	Telemetry *telemetry.Provider
 
+	// Modules are the wired business modules. They are the only things Router
+	// and RegisterTasks mount; nothing else in app knows they exist.
+	Modules Modules
+
 	// closers run in reverse construction order on Close.
 	closers []func(context.Context) error
+}
+
+// Modules holds every wired business module. Cross-module needs are satisfied
+// here, through ports, so no module imports another.
+type Modules struct {
+	Auth       *auth.Module
+	OAuth      *oauth.Module
+	Influencer *influencer.Module
+	Billing    *billing.Module
+	Metrics    *metrics.Module
 }
 
 // Build constructs every dependency. On any failure it tears down whatever was
@@ -102,13 +123,91 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 			"a master encryption key is required in production"))
 	}
 
-	registry, err := buildConnectorRegistry(cfg)
+	// The connector config is loaded once: the registry builds live connectors
+	// from it, and the oauth module reads each platform's scopes out of it, so
+	// consent URLs can never drift from what the connectors actually request.
+	connectors, err := connector.Load(cfg.Connectors.ConfigPath, cfg.Connectors.SchemaPath)
+	if err != nil {
+		return nil, a.abort(ctx, err)
+	}
+
+	registry, err := buildConnectorRegistry(connectors)
 	if err != nil {
 		return nil, a.abort(ctx, err)
 	}
 	a.Connector = registry
 
+	if err := a.buildModules(connectors); err != nil {
+		return nil, a.abort(ctx, err)
+	}
+
 	return a, nil
+}
+
+// buildModules constructs every business module and satisfies their cross-module
+// ports. This is the only place a module learns about another one's existence,
+// and it does so through a narrow interface rather than an import.
+func (a *App) buildModules(connectors *connector.Config) error {
+	// oauth seals every issued token and metrics derives the commenter
+	// pseudonymization salt, so both need the cipher.
+	//
+	// A nil *crypto.Cipher would satisfy their `sealer == nil` guards — a typed
+	// nil inside a non-nil interface is not nil — and then panic on first use,
+	// long after boot, on the first OAuth connect or the first audit ingest.
+	// Refuse here instead, where an operator can act on it.
+	if a.Cipher == nil {
+		return errs.New(errs.KindInvalid, "app.master_key_required",
+			"a master encryption key is required: oauth token sealing and commenter "+
+				"pseudonymization both depend on it")
+	}
+
+	authMod, err := auth.New(a.Pool, a.Config.JWT)
+	if err != nil {
+		return err
+	}
+
+	billingMod, err := billing.New(a.Pool, a.Config.Razorpay)
+	if err != nil {
+		return err
+	}
+
+	// oauth declares an Identity port rather than importing auth. auth.UserID
+	// reads the identity its middleware established; the adapter closes over
+	// nothing and carries no state.
+	oauthMod, err := oauth.New(
+		a.Pool,
+		a.Redis,
+		a.Cipher,
+		connectors,
+		oauth.Config{RedirectBaseURL: a.Config.HTTP.PublicBaseURL},
+		identityFromAuth{},
+		os.Getenv,
+	)
+	if err != nil {
+		return err
+	}
+
+	a.Modules = Modules{
+		Auth:       authMod,
+		OAuth:      oauthMod,
+		Influencer: influencer.New(a.Pool),
+		Billing:    billingMod,
+		Metrics:    metrics.New(a.Pool, a.Cipher),
+	}
+	return nil
+}
+
+// identityFromAuth adapts the auth module's context accessor onto the Identity
+// port the oauth service declares. It exists so oauth never imports auth.
+type identityFromAuth struct{}
+
+func (identityFromAuth) UserID(ctx context.Context) (uuid.UUID, error) {
+	id, ok := auth.UserID(ctx)
+	if !ok {
+		return uuid.Nil, errs.New(errs.KindUnauthorized, "app.unauthenticated",
+			"this endpoint requires authentication")
+	}
+	return id, nil
 }
 
 // Close releases every constructed dependency in reverse order. It joins all
@@ -178,12 +277,7 @@ func buildYouTube(pc connector.PlatformConfig, creds credentials) (connector.Con
 // would mean an audit silently reports on fewer platforms than the operator
 // configured, which is exactly the kind of quiet degradation this product exists
 // to detect in other people's numbers.
-func buildConnectorRegistry(cfg *config.Config) (*connector.Registry, error) {
-	cc, err := connector.Load(cfg.Connectors.ConfigPath, cfg.Connectors.SchemaPath)
-	if err != nil {
-		return nil, err
-	}
-
+func buildConnectorRegistry(cc *connector.Config) (*connector.Registry, error) {
 	registry := connector.NewRegistry()
 	for _, pc := range cc.Enabled() {
 		build, ok := connectorBuilders[pc.Platform]
