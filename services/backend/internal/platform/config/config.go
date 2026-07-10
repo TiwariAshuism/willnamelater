@@ -76,18 +76,19 @@ const (
 
 // Config is the fully resolved application configuration.
 type Config struct {
-	Environment Environment     `koanf:"environment"`
-	HTTP        HTTPConfig      `koanf:"http"`
-	Postgres    PostgresConfig  `koanf:"postgres"`
-	Redis       RedisConfig     `koanf:"redis"`
-	Crypto      CryptoConfig    `koanf:"crypto"`
-	Anthropic   AnthropicConfig `koanf:"anthropic"`
-	Gotenberg   GotenbergConfig `koanf:"gotenberg"`
-	ML          MLConfig        `koanf:"ml"`
-	Storage     StorageConfig   `koanf:"storage"`
-	JWT         JWTConfig       `koanf:"jwt"`
-	Razorpay    RazorpayConfig  `koanf:"razorpay"`
-	OTel        OTelConfig      `koanf:"otel"`
+	Environment Environment      `koanf:"environment"`
+	HTTP        HTTPConfig       `koanf:"http"`
+	Postgres    PostgresConfig   `koanf:"postgres"`
+	Redis       RedisConfig      `koanf:"redis"`
+	Crypto      CryptoConfig     `koanf:"crypto"`
+	Anthropic   AnthropicConfig  `koanf:"anthropic"`
+	Gotenberg   GotenbergConfig  `koanf:"gotenberg"`
+	ML          MLConfig         `koanf:"ml"`
+	Storage     StorageConfig    `koanf:"storage"`
+	JWT         JWTConfig        `koanf:"jwt"`
+	Razorpay    RazorpayConfig   `koanf:"razorpay"`
+	OTel        OTelConfig       `koanf:"otel"`
+	Connectors  ConnectorsConfig `koanf:"connectors"`
 
 	// masterKey is the decoded, length-checked master encryption key. It is
 	// derived from Crypto.MasterKey during Validate and is deliberately
@@ -163,6 +164,15 @@ type OTelConfig struct {
 	ExporterEndpoint string `koanf:"exporter_endpoint"`
 }
 
+// ConnectorsConfig locates the declarative platform-connector registry. Both
+// files are operator-supplied boot parameters, never request-derived, and the
+// YAML is validated against the schema at startup so a malformed change fails
+// fast rather than at the first audit.
+type ConnectorsConfig struct {
+	ConfigPath string `koanf:"config_path"`
+	SchemaPath string `koanf:"schema_path"`
+}
+
 // MasterKey returns the decoded 32-byte master encryption key, or nil when no
 // key was configured (permitted outside prod). The returned slice is suitable
 // for crypto.NewCipher.
@@ -183,6 +193,10 @@ func defaults() Config {
 		Redis: RedisConfig{
 			Addr: "127.0.0.1:6379",
 			DB:   0,
+		},
+		Connectors: ConnectorsConfig{
+			ConfigPath: "packages/config/connectors.yaml",
+			SchemaPath: "packages/config/connectors.schema.json",
 		},
 	}
 }

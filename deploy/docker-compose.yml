@@ -1,16 +1,35 @@
-# Local development infrastructure for InfluAudit.
+# Full local stack for InfluAudit: infrastructure, schema migration, and both
+# application services.
 #
-# Phase 1: only stateful/third-party dependencies run in containers. The Go
-# backend (services/backend) and the Python ML service (services/ml) run on the
-# host against these services, so no application images are referenced here yet
-# — their Dockerfiles do not exist. Add backend/ml services once those images
-# land.
+# Build contexts differ on purpose. The backend image needs
+# packages/config/connectors.yaml, which lives outside its Go module, so its
+# context is the repository root. The ML service is self-contained.
 #
-# Usage:
-#   docker compose -f deploy/docker-compose.yml up -d
-#   docker compose -f deploy/docker-compose.yml down
+# Usage (from the repository root):
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml down -v
+#
+# The api and worker will refuse to boot until a connector implementation is
+# registered for every platform enabled in connectors.yaml. That fail-fast is
+# deliberate: an audit that silently covers fewer platforms than configured is
+# worse than one that does not start.
 
 name: influaudit
+
+x-backend-env: &backend-env
+  INFLUAUDIT_ENVIRONMENT: ${INFLUAUDIT_ENVIRONMENT:-dev}
+  INFLUAUDIT_POSTGRES__DSN: postgres://${POSTGRES_USER:-influaudit}:${POSTGRES_PASSWORD:-influaudit}@postgres:5432/${POSTGRES_DB:-influaudit}?sslmode=disable
+  INFLUAUDIT_REDIS__ADDR: redis:6379
+  INFLUAUDIT_GOTENBERG__URL: http://gotenberg:3000
+  INFLUAUDIT_ML__BASE_URL: http://ml:8000
+  INFLUAUDIT_CRYPTO__MASTER_KEY: ${INFLUAUDIT_CRYPTO__MASTER_KEY:-}
+  INFLUAUDIT_ANTHROPIC__API_KEY: ${INFLUAUDIT_ANTHROPIC__API_KEY:-}
+  # Connector credentials, referenced by NAME from packages/config/connectors.yaml.
+  YT_API_KEY: ${YT_API_KEY:-}
+  YT_OAUTH_CLIENT_ID: ${YT_OAUTH_CLIENT_ID:-}
+  YT_OAUTH_CLIENT_SECRET: ${YT_OAUTH_CLIENT_SECRET:-}
+  META_APP_ID: ${META_APP_ID:-}
+  META_APP_SECRET: ${META_APP_SECRET:-}
 
 services:
   postgres:
@@ -56,6 +75,73 @@ services:
       timeout: 10s
       retries: 10
       start_period: 10s
+
+  # One-shot: applies migrations, then exits 0. The api and worker gate on its
+  # successful completion, so the schema is never older than the code reading it.
+  migrate:
+    build:
+      context: ..
+      dockerfile: services/backend/Dockerfile
+    entrypoint: ["/usr/local/bin/migrate"]
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  ml:
+    build:
+      context: ../services/ml
+      dockerfile: Dockerfile
+    ports:
+      - "${ML_PORT:-8000}:8000"
+    # Healthcheck is defined in the image (distroless-adjacent slim has no curl).
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: services/backend/Dockerfile
+    environment:
+      <<: *backend-env
+      INFLUAUDIT_HTTP__ADDR: ":8080"
+    ports:
+      - "${API_PORT:-8080}:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # The image is distroless: no shell, no curl. cmd/healthcheck is a static
+      # binary that probes /readyz.
+      test: ["CMD", "/usr/local/bin/healthcheck", "-url", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: services/backend/Dockerfile
+    entrypoint: ["/usr/local/bin/worker"]
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
 
 volumes:
   postgres-data:

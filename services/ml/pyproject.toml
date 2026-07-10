@@ -8,6 +8,9 @@ dependencies = [
     "pydantic>=2.9",
     "scikit-learn>=1.4",
     "numpy>=1.26",
+    # ASGI server. Required to run the service at all, so it is a runtime
+    # dependency rather than a dev extra.
+    "uvicorn>=0.32",
 ]
 
 [project.optional-dependencies]
