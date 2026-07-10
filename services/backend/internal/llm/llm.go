@@ -17,7 +17,11 @@
 // computed cost, and whether the prompt cache was hit.
 package llm
 
-import "context"
+import (
+	"context"
+
+	"github.com/google/uuid"
+)
 
 // Provider is the swappable advisory seam. The audit path calls only
 // GenerateReport; Chat is declared for a phase-2 conversational surface and is
@@ -38,6 +42,12 @@ type Provider interface {
 // and therefore rides after the cached system prefix. It carries only primitive
 // and local types so the llm module never imports another business module.
 type ReportInput struct {
+	// AuditJobID ties the generation's accounting row (llm_generation) back to
+	// the audit that requested it. It never enters the prompt.
+	AuditJobID uuid.UUID
+	// Purpose labels the generation on its accounting row, e.g. "summary". It
+	// never enters the prompt. An empty value defaults to "summary".
+	Purpose string
 	// Handle is the influencer's primary public handle, used to address the
 	// report. It is not sensitive and is safe to include in the prompt.
 	Handle string

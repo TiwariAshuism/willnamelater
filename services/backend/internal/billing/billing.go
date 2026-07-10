@@ -17,6 +17,7 @@ import (
 
 	"github.com/getnyx/influaudit/backend/internal/billing/internal/appctx"
 	"github.com/getnyx/influaudit/backend/internal/billing/internal/handler"
+	"github.com/getnyx/influaudit/backend/internal/billing/internal/model"
 	"github.com/getnyx/influaudit/backend/internal/billing/internal/provider"
 	"github.com/getnyx/influaudit/backend/internal/billing/internal/repository"
 	"github.com/getnyx/influaudit/backend/internal/billing/internal/service"
@@ -76,6 +77,27 @@ func (m *Module) RegisterRoutes(protected, public *gin.RouterGroup) {
 // implementation, so the audit module never imports billing.
 func (m *Module) Quota() service.QuotaService {
 	return m.quota
+}
+
+// ReserveAudit reserves one metered quota unit for the caller, implementing the
+// reserve half of the audit orchestrator's Quota port in plain strings so the
+// composition root can adapt it without naming the module-internal model.Unit /
+// model.ReservationID types. unit names a metered quota unit ("audit",
+// "bulk_audit"); the returned id is opaque and threads unchanged from this
+// Reserve to its matching CommitReservation or ReleaseReservation.
+func (m *Module) ReserveAudit(ctx context.Context, userID uuid.UUID, unit string) (string, error) {
+	id, err := m.quota.Reserve(ctx, userID, model.Unit(unit))
+	return string(id), err
+}
+
+// CommitReservation finalises a reservation on a successful or partial audit.
+func (m *Module) CommitReservation(ctx context.Context, id string) error {
+	return m.quota.Commit(ctx, model.ReservationID(id))
+}
+
+// ReleaseReservation returns the reserved unit when an audit produced no data.
+func (m *Module) ReleaseReservation(ctx context.Context, id string) error {
+	return m.quota.Release(ctx, model.ReservationID(id))
 }
 
 // WithCaller returns a copy of ctx carrying the authenticated caller id for the

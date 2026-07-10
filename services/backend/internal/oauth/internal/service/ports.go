@@ -33,6 +33,9 @@ type TokenStore interface {
 	Upsert(ctx context.Context, tok model.EncryptedToken) error
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]model.Connection, error)
 	DeleteByUserPlatform(ctx context.Context, userID uuid.UUID, platform string) (deleted int64, err error)
+	// ListSealed returns every connection with its ciphertext still sealed, for
+	// the service to decrypt on the audit path.
+	ListSealed(ctx context.Context, userID uuid.UUID) ([]model.EncryptedToken, error)
 }
 
 // Sealer envelope-encrypts a secret under an owner-binding AAD. *crypto.Cipher
@@ -40,6 +43,9 @@ type TokenStore interface {
 // reaching for the concrete cipher construction path.
 type Sealer interface {
 	Seal(plaintext, aad []byte) (crypto.Sealed, error)
+	// Open reverses Seal for the audit path, which must hand a connector a live
+	// decrypted credential. *crypto.Cipher satisfies both.
+	Open(sealed crypto.Sealed, aad []byte) ([]byte, error)
 }
 
 // SecretLookup returns the value of a named environment variable. Connector

@@ -30,6 +30,10 @@ const pgUniqueViolation = "23505"
 const (
 	insertColumns     = "user_id, platform, provider_account_id, access_token_enc, refresh_token_enc, dek_wrapped, scopes, access_expires_at"
 	connectionColumns = "platform, provider_account_id, scopes, created_at, access_expires_at"
+	// sealedColumns projects every field needed to reconstruct and decrypt a
+	// token, for the audit path that must present a live credential to a
+	// connector. It includes the ciphertext columns connectionColumns omits.
+	sealedColumns = "platform, provider_account_id, access_token_enc, refresh_token_enc, dek_wrapped, scopes, access_expires_at"
 )
 
 // tokenStore is the pgx-backed service.TokenStore.
@@ -120,6 +124,36 @@ func (s *tokenStore) ListByUser(ctx context.Context, userID uuid.UUID) ([]model.
 			"could not list connections")
 	}
 	return conns, nil
+}
+
+// ListSealed returns every connection the user holds, with the ciphertext still
+// sealed. The service decrypts each one; this layer never sees plaintext.
+func (s *tokenStore) ListSealed(ctx context.Context, userID uuid.UUID) ([]model.EncryptedToken, error) {
+	const q = "SELECT " + sealedColumns + " FROM oauth_token WHERE user_id = $1 " +
+		"ORDER BY created_at ASC, platform ASC"
+
+	rows, err := s.pool.Query(ctx, q, userID)
+	if err != nil {
+		return nil, errs.Wrap(err, errs.KindUnavailable, "oauth.token_list_failed",
+			"could not list connections")
+	}
+	defer rows.Close()
+
+	toks := make([]model.EncryptedToken, 0)
+	for rows.Next() {
+		t := model.EncryptedToken{UserID: userID}
+		if err := rows.Scan(&t.Platform, &t.ProviderAccountID, &t.AccessTokenEnc,
+			&t.RefreshTokenEnc, &t.DEKWrapped, &t.Scopes, &t.AccessExpiresAt); err != nil {
+			return nil, errs.Wrap(err, errs.KindUnavailable, "oauth.token_list_failed",
+				"could not list connections")
+		}
+		toks = append(toks, t)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, errs.Wrap(err, errs.KindUnavailable, "oauth.token_list_failed",
+			"could not list connections")
+	}
+	return toks, nil
 }
 
 // DeleteByUserPlatform removes every connection the caller holds on a platform

@@ -90,6 +90,10 @@ func (a *App) mountModules(r *gin.Engine) {
 	m.Influencer.RegisterRoutes(protected)
 	m.Metrics.RegisterRoutes(protected)
 	m.Scoring.RegisterRoutes(protected)
+
+	// The audit orchestrator's routes all act on behalf of a signed-in caller, so
+	// they mount on the protected group.
+	m.Audit.RegisterRoutes(protected)
 }
 
 // billingCaller copies the authenticated caller from the auth module's context

@@ -53,10 +53,20 @@ type Identity interface {
 // resolves them through this indirection. Production passes os.Getenv.
 type SecretLookup func(name string) string
 
+// LiveConnection is a decrypted platform connection for the audit path: the
+// access token is in the clear, in memory, ready to hand to a connector. It is
+// never persisted or logged.
+type LiveConnection struct {
+	Platform          string
+	ProviderAccountID string
+	Token             connector.OAuthToken
+}
+
 // Module is the wired oauth module. Construct it with New and mount it with
 // RegisterRoutes.
 type Module struct {
 	handler *handler.Handler
+	svc     *service.Service
 }
 
 // New wires the module. pool backs the token store, rdb the single-use state
@@ -87,7 +97,7 @@ func New(
 		return nil, err
 	}
 
-	return &Module{handler: handler.New(svc)}, nil
+	return &Module{handler: handler.New(svc), svc: svc}, nil
 }
 
 // RegisterRoutes mounts the oauth endpoints under rg (typically the /v1 group).
@@ -95,4 +105,20 @@ func New(
 // rg before calling this, since a connection is always owned by a caller.
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 	m.handler.RegisterRoutes(rg)
+}
+
+// LiveConnections returns the user's connected platforms with decrypted access
+// tokens, for the audit orchestrator to hand to connectors. Only this module can
+// do this: it holds the cipher and the owner-binding AAD. A row that fails to
+// open is skipped, so one bad token never fails an audit.
+func (m *Module) LiveConnections(ctx context.Context, userID uuid.UUID) ([]LiveConnection, error) {
+	conns, err := m.svc.LiveConnections(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]LiveConnection, len(conns))
+	for i, c := range conns {
+		out[i] = LiveConnection{Platform: c.Platform, ProviderAccountID: c.ProviderAccountID, Token: c.Token}
+	}
+	return out, nil
 }

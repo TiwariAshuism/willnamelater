@@ -22,6 +22,10 @@ func (r realSealer) Seal(plaintext, aad []byte) (crypto.Sealed, error) {
 	return r.c.Seal(plaintext, aad)
 }
 
+func (r realSealer) Open(sealed crypto.Sealed, aad []byte) ([]byte, error) {
+	return r.c.Open(sealed, aad)
+}
+
 func newRealCipher(t *testing.T, fill byte) *crypto.Cipher {
 	t.Helper()
 	key := bytes.Repeat([]byte{fill}, crypto.KeySize)

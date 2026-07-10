@@ -16,17 +16,21 @@ import (
 	"os"
 	"time"
 
+	"github.com/hibiken/asynq"
 	"github.com/jackc/pgx/v5/pgxpool"
 	goredis "github.com/redis/go-redis/v9"
 
 	"github.com/google/uuid"
 
+	"github.com/getnyx/influaudit/backend/internal/audit"
 	"github.com/getnyx/influaudit/backend/internal/auth"
 	"github.com/getnyx/influaudit/backend/internal/billing"
 	"github.com/getnyx/influaudit/backend/internal/connector"
 	"github.com/getnyx/influaudit/backend/internal/connector/youtube"
 	"github.com/getnyx/influaudit/backend/internal/influencer"
+	"github.com/getnyx/influaudit/backend/internal/llm"
 	"github.com/getnyx/influaudit/backend/internal/metrics"
+	"github.com/getnyx/influaudit/backend/internal/ml"
 	"github.com/getnyx/influaudit/backend/internal/oauth"
 	"github.com/getnyx/influaudit/backend/internal/platform/config"
 	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
@@ -55,6 +59,12 @@ type App struct {
 	Connector *connector.Registry
 	Telemetry *telemetry.Provider
 
+	// asynqClient enqueues background tasks (today, audit:run). Both cmd/api and
+	// cmd/worker construct it: the API enqueues, the worker consumes. It is lazy —
+	// it dials Redis on first use — so constructing it costs nothing at boot and
+	// the route tests can build the module graph over an unreachable address.
+	asynqClient *asynq.Client
+
 	// Modules are the wired business modules. They are the only things Router
 	// and RegisterTasks mount; nothing else in app knows they exist.
 	Modules Modules
@@ -72,6 +82,7 @@ type Modules struct {
 	Billing    *billing.Module
 	Metrics    *metrics.Module
 	Scoring    *scoring.Module
+	Audit      *audit.Module
 }
 
 // Build constructs every dependency. On any failure it tears down whatever was
@@ -141,6 +152,11 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 
 	if err := a.buildModules(connectors); err != nil {
 		return nil, a.abort(ctx, err)
+	}
+	// buildModules constructed the asynq client; register its shutdown so Close
+	// drains the enqueue connection pool in reverse order like every other closer.
+	if a.asynqClient != nil {
+		a.closers = append(a.closers, func(context.Context) error { return a.asynqClient.Close() })
 	}
 
 	// Seed the cold-start scoring weights and bootstrap benchmarks. It is
@@ -213,13 +229,49 @@ func (a *App) buildModules(connectors *connector.Config) error {
 	// satisfies that port directly, so no adapter is needed.
 	scoringMod := scoring.New(a.Pool, influencerMod)
 
+	metricsMod := metrics.New(a.Pool, a.Cipher)
+
+	// The ML client and the llm module are pure constructors — no dial at build —
+	// so they are safe to wire here alongside the modules the route tests build
+	// over nil datastores. The llm module records each generation's cost; the ml
+	// client scores fraud and coordination signals.
+	mlClient := ml.New(a.Config.ML.BaseURL, httpDoerForML)
+	llmMod := llm.NewModule(a.Config.Anthropic.APIKey, a.Pool)
+
+	// The asynq client is lazy: it dials Redis on first enqueue, not here, so the
+	// audit module can be constructed even when Redis is unreachable.
+	a.asynqClient = asynq.NewClient(asynq.RedisClientOpt{
+		Addr:     a.Config.Redis.Addr,
+		Password: a.Config.Redis.Password.Reveal(),
+		DB:       a.Config.Redis.DB,
+	})
+
+	// The audit orchestrator imports no other business module: every collaborator
+	// reaches it through a consumer-side port declared in internal/audit/port,
+	// satisfied by an adapter in audit_wiring.go. Two providers satisfy their port
+	// directly and need no adapter: metrics.Module is a port.Ingester, and the
+	// connector registry is a port.Connectors.
+	auditMod := audit.New(
+		a.Pool,
+		a.asynqClient,
+		auditQuota{b: billingMod},
+		metricsMod,
+		auditScorer{s: scoringMod},
+		auditFraud{c: mlClient},
+		auditReporter{llm: llmMod, scoring: scoringMod},
+		a.Connector,
+		auditConnections{influencer: influencerMod, oauth: oauthMod},
+		auditCaller{},
+	)
+
 	a.Modules = Modules{
 		Auth:       authMod,
 		OAuth:      oauthMod,
 		Influencer: influencerMod,
 		Billing:    billingMod,
-		Metrics:    metrics.New(a.Pool, a.Cipher),
+		Metrics:    metricsMod,
 		Scoring:    scoringMod,
+		Audit:      auditMod,
 	}
 	return nil
 }

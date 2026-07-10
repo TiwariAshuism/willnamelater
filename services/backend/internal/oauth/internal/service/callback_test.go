@@ -73,6 +73,10 @@ func (f *fakeTokenStore) DeleteByUserPlatform(context.Context, uuid.UUID, string
 	return 0, nil
 }
 
+func (f *fakeTokenStore) ListSealed(context.Context, uuid.UUID) ([]model.EncryptedToken, error) {
+	return nil, nil
+}
+
 type fakeProviderClient struct {
 	calls  int
 	result ExchangeResult

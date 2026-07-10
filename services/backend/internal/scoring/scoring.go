@@ -75,6 +75,56 @@ func (m *Module) Score(
 	return m.service.Score(ctx, auditJobID, influencerID, snapshots, fraud)
 }
 
+// NamedSubscore is one dimension of a persisted score, carrying the dimension
+// name alongside its value and confidence. The exported Subscore alias omits the
+// name (the persisted map is keyed on it), so ReportView reattaches it here for
+// the report layer, which needs the label.
+type NamedSubscore struct {
+	Name       string
+	Value      float64
+	Confidence float64
+}
+
+// ReportView is a persisted score in the shape the report layer needs, exported
+// so the composition root can assemble the advisory-report input without naming
+// any scoring-internal type. It reads back the score the orchestrator just
+// persisted (keyed on the audit's influencer), recovering the niche, tier,
+// benchmark provenance, and per-dimension breakdown the narrow ScoreResult the
+// orchestrator threads to the reporter deliberately drops.
+type ReportView struct {
+	Niche          string
+	Tier           string
+	Overall        float64
+	Authenticity   float64
+	BenchmarkLabel string
+	Subscores      []NamedSubscore
+}
+
+// ReportView returns the latest persisted score for an influencer as a
+// report-ready view. The composition root's Reporter adapter calls it to
+// reconstruct the rich llm input from the score the Scorer persisted during the
+// same audit. It is not an HTTP route.
+func (m *Module) ReportView(ctx context.Context, influencerID uuid.UUID) (ReportView, error) {
+	resp, err := m.service.GetLatestScore(ctx, influencerID.String())
+	if err != nil {
+		return ReportView{}, err
+	}
+	view := ReportView{
+		Niche:          resp.Niche,
+		Tier:           resp.Tier,
+		Overall:        resp.Overall,
+		BenchmarkLabel: resp.BenchmarkLabel,
+		Subscores:      make([]NamedSubscore, 0, len(resp.Subscores)),
+	}
+	for name, sub := range resp.Subscores {
+		view.Subscores = append(view.Subscores, NamedSubscore{Name: name, Value: sub.Value, Confidence: sub.Confidence})
+		if name == "authenticity" {
+			view.Authenticity = sub.Value
+		}
+	}
+	return view, nil
+}
+
 // EnsureBootstrap seeds the cold-start weights and benchmarks if absent. It is
 // idempotent; the composition root calls it on boot.
 func (m *Module) EnsureBootstrap(ctx context.Context) error {

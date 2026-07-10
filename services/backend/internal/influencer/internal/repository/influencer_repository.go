@@ -12,6 +12,7 @@ package repository
 
 import (
 	"context"
+	"github.com/google/uuid"
 	"strconv"
 
 	"github.com/jackc/pgx/v5"
@@ -280,4 +281,27 @@ func recomputeTier(ctx context.Context, q querier, influencerID string) error {
 // resource, kept here so the code and message stay identical across methods.
 func errInfluencerNotFound() error {
 	return errs.New(errs.KindNotFound, "influencer.not_found", "influencer does not exist")
+}
+
+// AuditOwnerAndHandles returns the influencer's owning user (nil when the profile
+// has no connected owner) and its platform handles. It is the audit path's single
+// read: the orchestrator needs the owner to locate OAuth tokens and the handles to
+// know which platform accounts to fetch.
+func (r *PostgresRepository) AuditOwnerAndHandles(ctx context.Context, id string) (*uuid.UUID, []model.Handle, error) {
+	const q = "SELECT user_id FROM influencer WHERE id = $1"
+
+	var owner *uuid.UUID
+	if err := r.pool.QueryRow(ctx, q, id).Scan(&owner); err != nil {
+		if notFound(err) {
+			return nil, nil, errInfluencerNotFound()
+		}
+		return nil, nil, errs.Wrap(err, errs.KindInternal, "influencer.audit_profile_failed",
+			"could not load influencer owner")
+	}
+
+	handles, err := r.handlesFor(ctx, r.pool, id)
+	if err != nil {
+		return nil, nil, err
+	}
+	return owner, handles, nil
 }

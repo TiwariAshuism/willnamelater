@@ -1,5 +1,75 @@
 components:
   schemas:
+    audit.AuditResponse:
+      properties:
+        error_code:
+          type: string
+        error_message:
+          type: string
+        finished_at:
+          format: date-time
+          nullable: true
+          type: string
+        id:
+          type: string
+        influencer_id:
+          type: string
+        platforms:
+          items:
+            $ref: "#/components/schemas/audit.PlatformResultResponse"
+          type: array
+        requested_at:
+          format: date-time
+          type: string
+        requested_platforms:
+          items:
+            type: string
+          type: array
+        started_at:
+          format: date-time
+          nullable: true
+          type: string
+        status:
+          type: string
+      required:
+      - id
+      - platforms
+      - requested_at
+      - requested_platforms
+      - status
+      type: object
+    audit.PlatformResultResponse:
+      properties:
+        error_code:
+          type: string
+        error_message:
+          type: string
+        fetched_at:
+          format: date-time
+          nullable: true
+          type: string
+        platform:
+          type: string
+        status:
+          type: string
+      required:
+      - platform
+      - status
+      type: object
+    audit.SubmitAuditRequest:
+      properties:
+        idempotency_key:
+          type: string
+        influencer_id:
+          type: string
+        requested_platforms:
+          items:
+            type: string
+          type: array
+      required:
+      - idempotency_key
+      - influencer_id
+      type: object
     auth.AuthResponse:
       properties:
         access_token:
@@ -546,6 +616,49 @@ info:
   version: 0.1.0
 openapi: 3.0.3
 paths:
+  /audits:
+    get:
+      operationId: ListAudits
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/audit.AuditResponse"
+                type: array
+          description: OK
+    post:
+      operationId: SubmitAudit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/audit.SubmitAuditRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/audit.AuditResponse"
+          description: OK
+  /audits/{id}:
+    get:
+      operationId: GetAudit
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/audit.AuditResponse"
+          description: OK
   /auth/login:
     post:
       operationId: Login

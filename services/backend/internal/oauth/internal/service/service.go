@@ -8,6 +8,7 @@ import (
 
 	"github.com/getnyx/influaudit/backend/internal/connector"
 	"github.com/getnyx/influaudit/backend/internal/oauth/internal/model"
+	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
 )
 
@@ -294,6 +295,67 @@ func (s *Service) credentials(pc connector.PlatformConfig) (clientID, clientSecr
 
 func (s *Service) redirectURI(provider string) string {
 	return s.cfg.RedirectBaseURL + "/oauth/" + provider + "/callback"
+}
+
+// LiveConnection is a decrypted, ready-to-use platform connection: the access
+// token is in the clear, in memory, for the caller to hand to a connector. It is
+// never persisted and never logged.
+type LiveConnection struct {
+	Platform          string
+	ProviderAccountID string
+	Token             connector.OAuthToken
+}
+
+// LiveConnections returns every platform the user has connected, with the access
+// token (and refresh token, when present) decrypted.
+//
+// Decryption happens here because only this module holds the cipher and knows the
+// owner-binding AAD. A token that fails to open — a foreign master key, a
+// tampered row, a row copied from another user — is skipped, not surfaced, so one
+// bad row cannot fail an entire audit and no decrypt oracle is exposed.
+func (s *Service) LiveConnections(ctx context.Context, userID uuid.UUID) ([]LiveConnection, error) {
+	sealed, err := s.tokens.ListSealed(ctx, userID)
+	if err != nil {
+		return nil, err
+	}
+
+	aad := []byte("oauth_token:" + userID.String())
+	out := make([]LiveConnection, 0, len(sealed))
+
+	for _, t := range sealed {
+		access, err := s.sealer.Open(crypto.Sealed{Ciphertext: t.AccessTokenEnc, WrappedDEK: t.DEKWrapped}, aad)
+		if err != nil {
+			// A row that will not open is unusable, not fatal. Skip it.
+			continue
+		}
+
+		var refresh string
+		if len(t.RefreshTokenEnc) > 0 {
+			if refreshSealed, derr := model.DecodeSealed(t.RefreshTokenEnc); derr == nil {
+				if plain, oerr := s.sealer.Open(refreshSealed, aad); oerr == nil {
+					refresh = string(plain)
+				}
+			}
+		}
+
+		var expiry time.Time
+		if t.AccessExpiresAt != nil {
+			expiry = *t.AccessExpiresAt
+		}
+
+		out = append(out, LiveConnection{
+			Platform:          t.Platform,
+			ProviderAccountID: t.ProviderAccountID,
+			Token: connector.OAuthToken{
+				AccessToken:  string(access),
+				RefreshToken: refresh,
+				Expiry:       expiry,
+				Scopes:       t.Scopes,
+			},
+		})
+	}
+
+	return out, nil
 }
 
 // sealToken envelope-encrypts the issued tokens with an AAD that binds them to
