@@ -34,6 +34,7 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
 	"github.com/getnyx/influaudit/backend/internal/platform/redis"
 	"github.com/getnyx/influaudit/backend/internal/platform/telemetry"
+	"github.com/getnyx/influaudit/backend/internal/scoring"
 )
 
 // serviceName identifies this process in traces. Version is stamped at build
@@ -70,6 +71,7 @@ type Modules struct {
 	Influencer *influencer.Module
 	Billing    *billing.Module
 	Metrics    *metrics.Module
+	Scoring    *scoring.Module
 }
 
 // Build constructs every dependency. On any failure it tears down whatever was
@@ -141,8 +143,24 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		return nil, a.abort(ctx, err)
 	}
 
+	// Seed the cold-start scoring weights and bootstrap benchmarks. It is
+	// idempotent, so a restart re-seeds nothing, and it is bounded so a slow
+	// database cannot wedge the boot. It runs here, after module construction,
+	// rather than inside buildModules, because building the modules is a pure
+	// wiring step with no I/O — which is what lets the route tests construct the
+	// module graph over nil datastores.
+	seedCtx, cancel := context.WithTimeout(ctx, bootstrapTimeout)
+	defer cancel()
+	if err := a.Modules.Scoring.EnsureBootstrap(seedCtx); err != nil {
+		return nil, a.abort(ctx, fmt.Errorf("seed scoring: %w", err))
+	}
+
 	return a, nil
 }
+
+// bootstrapTimeout bounds the one-time scoring seed so a slow database cannot
+// wedge process startup.
+const bootstrapTimeout = 30 * time.Second
 
 // buildModules constructs every business module and satisfies their cross-module
 // ports. This is the only place a module learns about another one's existence,
@@ -187,12 +205,21 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		return err
 	}
 
+	influencerMod := influencer.New(a.Pool)
+
+	// scoring keys its benchmarks on (niche, tier). Tier it derives from live
+	// follower counts, but niche is a content category only the influencer module
+	// knows, so scoring reaches it through a Profiles port. influencer.NicheOf
+	// satisfies that port directly, so no adapter is needed.
+	scoringMod := scoring.New(a.Pool, influencerMod)
+
 	a.Modules = Modules{
 		Auth:       authMod,
 		OAuth:      oauthMod,
-		Influencer: influencer.New(a.Pool),
+		Influencer: influencerMod,
 		Billing:    billingMod,
 		Metrics:    metrics.New(a.Pool, a.Cipher),
+		Scoring:    scoringMod,
 	}
 	return nil
 }

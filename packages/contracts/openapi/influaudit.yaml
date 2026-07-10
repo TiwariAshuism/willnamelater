@@ -458,6 +458,89 @@ components:
       - provider_account_id
       - scopes
       type: object
+    scoring.ScoreHistoryResponse:
+      properties:
+        influencer_id:
+          type: string
+        points:
+          items:
+            $ref: "#/components/schemas/scoring.ScorePoint"
+          type: array
+      required:
+      - influencer_id
+      - points
+      type: object
+    scoring.ScorePoint:
+      properties:
+        audit_job_id:
+          type: string
+        confidence:
+          type: number
+        created_at:
+          format: date-time
+          type: string
+        overall:
+          type: number
+      required:
+      - audit_job_id
+      - confidence
+      - created_at
+      - overall
+      type: object
+    scoring.ScoreResponse:
+      properties:
+        audit_job_id:
+          type: string
+        benchmark_label:
+          type: string
+        benchmark_version:
+          type: integer
+        confidence:
+          type: number
+        contributing_platforms:
+          items:
+            type: string
+          type: array
+        created_at:
+          format: date-time
+          type: string
+        influencer_id:
+          type: string
+        niche:
+          type: string
+        overall:
+          type: number
+        subscores:
+          additionalProperties:
+            $ref: "#/components/schemas/scoring.Subscore"
+          type: object
+        tier:
+          type: string
+        weights_version:
+          type: integer
+      required:
+      - audit_job_id
+      - benchmark_label
+      - benchmark_version
+      - confidence
+      - contributing_platforms
+      - created_at
+      - niche
+      - overall
+      - subscores
+      - tier
+      - weights_version
+      type: object
+    scoring.Subscore:
+      properties:
+        confidence:
+          type: number
+        value:
+          type: number
+      required:
+      - confidence
+      - value
+      type: object
 info:
   title: InfluAudit API
   version: 0.1.0
@@ -735,6 +818,38 @@ paths:
                 items:
                   $ref: "#/components/schemas/metrics.PostResponse"
                 type: array
+          description: OK
+  /influencers/{id}/score:
+    get:
+      operationId: GetLatestScore
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/scoring.ScoreResponse"
+          description: OK
+  /influencers/{id}/score/history:
+    get:
+      operationId: GetScoreHistory
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/scoring.ScoreHistoryResponse"
           description: OK
   /oauth/connections:
     get:

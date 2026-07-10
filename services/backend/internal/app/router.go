@@ -89,6 +89,7 @@ func (a *App) mountModules(r *gin.Engine) {
 	m.OAuth.RegisterRoutes(protected)
 	m.Influencer.RegisterRoutes(protected)
 	m.Metrics.RegisterRoutes(protected)
+	m.Scoring.RegisterRoutes(protected)
 }
 
 // billingCaller copies the authenticated caller from the auth module's context

@@ -9,7 +9,10 @@
 package influencer
 
 import (
+	"context"
+
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 
 	"github.com/getnyx/influaudit/backend/internal/influencer/internal/handler"
 	"github.com/getnyx/influaudit/backend/internal/influencer/internal/repository"
@@ -21,13 +24,31 @@ import (
 // RegisterRoutes.
 type Module struct {
 	handler *handler.Handler
+	svc     service.InfluencerService
 }
 
 // New builds the influencer module over the shared connection pool. It cannot
 // fail: every dependency it needs is already constructed.
 func New(pool *db.Pool) *Module {
-	repo := repository.New(pool)
-	return &Module{handler: handler.New(service.New(repo))}
+	svc := service.New(repository.New(pool))
+	return &Module{handler: handler.New(svc), svc: svc}
+}
+
+// NicheOf returns the influencer's content niche, satisfying the scoring
+// module's Profiles port. An unset niche yields an empty string with a nil
+// error, which scoring treats as the default benchmark cohort.
+//
+// It exists so scoring never imports this module: the composition root adapts
+// this method onto scoring's port.
+func (m *Module) NicheOf(ctx context.Context, influencerID uuid.UUID) (string, error) {
+	resp, err := m.svc.GetInfluencer(ctx, influencerID.String())
+	if err != nil {
+		return "", err
+	}
+	if resp.Niche == nil {
+		return "", nil
+	}
+	return *resp.Niche, nil
 }
 
 // RegisterRoutes mounts the influencer endpoints under rg. Every endpoint here
