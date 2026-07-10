@@ -24,10 +24,26 @@ func main() {
 		os.Exit(1)
 	}
 
-	if err := db.Up(cfg.Postgres.DSN.Reveal(), *dir); err != nil {
+	result, err := db.Up(cfg.Postgres.DSN.Reveal(), *dir)
+	if err != nil {
 		slog.Error("migrate up", slog.Any("error", err))
 		os.Exit(1)
 	}
 
-	slog.Info("migrations applied", slog.String("dir", *dir))
+	// A dirty schema means a previous run failed partway. Continuing would let
+	// the API start against a half-applied schema.
+	if result.Dirty {
+		slog.Error("schema is dirty; a previous migration failed partway",
+			slog.Uint64("version", uint64(result.Version)))
+		os.Exit(1)
+	}
+
+	// Log the resulting version, and whether anything actually changed. A run
+	// that reports success while applying nothing is how a stale image hides a
+	// schema that lags the code.
+	slog.Info("migrations up to date",
+		slog.String("dir", *dir),
+		slog.Uint64("version", uint64(result.Version)),
+		slog.Bool("changed", result.Changed),
+	)
 }

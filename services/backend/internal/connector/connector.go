@@ -45,6 +45,11 @@ const (
 	CapabilityMetrics           Capability = "metrics"
 	CapabilityRecentPosts       Capability = "recent_posts"
 	CapabilityAudienceBreakdown Capability = "audience_breakdown"
+	// CapabilityComments returns individual comments with their author
+	// identifier and timestamp. It is the sole fuel for the co-commenter graph
+	// that drives engagement-pod detection; a platform that cannot supply it
+	// can be audited, but not for coordinated engagement.
+	CapabilityComments Capability = "comments"
 )
 
 // OAuthToken is the live, decrypted credential handed to a Connector for a
@@ -128,6 +133,24 @@ type Post struct {
 	Views       int64
 }
 
+// Comment is a single comment left on a Post, carrying just enough to build a
+// co-commenter graph: who commented, on what, and when.
+//
+// AuthorID is the platform's stable identifier for the commenter (a YouTube
+// channel ID, an Instagram user ID). It is PERSONAL DATA about a third party
+// who is not our user and never consented, so it must be salted-hash
+// pseudonymized before it is persisted — see the metrics module. It is carried
+// in the clear only in memory, for the duration of one audit.
+type Comment struct {
+	// PostID matches the ID of the Post this comment belongs to. Without it a
+	// comment cannot be joined to its post, and every per-post coordination
+	// feature is unrecoverable.
+	PostID   string
+	AuthorID string
+	Text     string
+	At       time.Time
+}
+
 // AudienceBreakdown holds demographic distributions. Each map's values are
 // fractions in [0,1] that sum to at most 1 (a platform may report only its top
 // buckets). A nil map means the platform did not expose that dimension.
@@ -152,6 +175,10 @@ type Snapshot struct {
 	Followers  int64
 	Metrics    []MetricPoint
 	Posts      []Post
+	// Comments are the individual comments sampled across Posts, present only
+	// when CapabilityComments was requested and the connector supports it. Each
+	// Comment.PostID references a Post.ID in the same Snapshot.
+	Comments []Comment
 	// Audience is nil when audience data was not requested or the platform
 	// (or the account's access tier) does not expose it.
 	Audience *AudienceBreakdown

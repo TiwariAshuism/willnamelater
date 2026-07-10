@@ -29,6 +29,9 @@ connectors:
       - metrics
       - recent_posts
       - audience_breakdown
+      # commentThreads.list supplies comment author channel IDs and timestamps,
+      # which is the only fuel for the co-commenter graph.
+      - comments
     rate_limit:
       model: quota_units
       units_per_day: 10000
@@ -57,6 +60,7 @@ connectors:
       - metrics
       - recent_posts
       - audience_breakdown
+      - comments
     rate_limit:
       model: bucketed_calls
       calls_per_hour: 200

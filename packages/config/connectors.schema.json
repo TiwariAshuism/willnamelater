@@ -80,7 +80,8 @@
               "profile",
               "metrics",
               "recent_posts",
-              "audience_breakdown"
+              "audience_breakdown",
+              "comments"
             ]
           }
         },

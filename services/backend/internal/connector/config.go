@@ -113,6 +113,7 @@ var (
 	knownCapabilities = map[Capability]struct{}{
 		CapabilityProfile: {}, CapabilityMetrics: {},
 		CapabilityRecentPosts: {}, CapabilityAudienceBreakdown: {},
+		CapabilityComments: {},
 	}
 )
 
