@@ -36,8 +36,10 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
+	"github.com/getnyx/influaudit/backend/internal/platform/pdf"
 	"github.com/getnyx/influaudit/backend/internal/platform/redis"
 	"github.com/getnyx/influaudit/backend/internal/platform/telemetry"
+	"github.com/getnyx/influaudit/backend/internal/report"
 	"github.com/getnyx/influaudit/backend/internal/scoring"
 )
 
@@ -83,6 +85,7 @@ type Modules struct {
 	Metrics    *metrics.Module
 	Scoring    *scoring.Module
 	Audit      *audit.Module
+	Report     *report.Module
 }
 
 // Build constructs every dependency. On any failure it tears down whatever was
@@ -264,6 +267,18 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		auditCaller{},
 	)
 
+	// The report module owns no table: it assembles a finished audit's deliverable
+	// (JSON + on-demand PDF) from the audit, scoring, and llm modules, reached
+	// through report ports, and renders the PDF through the platform Gotenberg
+	// client. The pdf client is lazy — it dials Gotenberg on first render — so it
+	// is safe to construct here alongside the route-test module graph.
+	reportMod := report.New(
+		reportAuditReader{a: auditMod},
+		reportScoreReader{s: scoringMod},
+		reportNarrativeReader{l: llmMod},
+		pdf.New(a.Config.Gotenberg.URL, httpDoerForPDF),
+	)
+
 	a.Modules = Modules{
 		Auth:       authMod,
 		OAuth:      oauthMod,
@@ -272,6 +287,7 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		Metrics:    metricsMod,
 		Scoring:    scoringMod,
 		Audit:      auditMod,
+		Report:     reportMod,
 	}
 	return nil
 }

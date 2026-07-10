@@ -94,6 +94,9 @@ func (a *App) mountModules(r *gin.Engine) {
 	// The audit orchestrator's routes all act on behalf of a signed-in caller, so
 	// they mount on the protected group.
 	m.Audit.RegisterRoutes(protected)
+
+	// The report routes hang off the audit resource and are caller-scoped too.
+	m.Report.RegisterRoutes(protected)
 }
 
 // billingCaller copies the authenticated caller from the auth module's context

@@ -528,6 +528,102 @@ components:
       - provider_account_id
       - scopes
       type: object
+    report.Narrative:
+      properties:
+        brand_fit:
+          type: string
+        growth_tips:
+          items:
+            type: string
+          type: array
+        summary:
+          type: string
+        weakness_fix_pairs:
+          items:
+            $ref: "#/components/schemas/report.WeaknessFix"
+          type: array
+      required:
+      - brand_fit
+      - growth_tips
+      - summary
+      - weakness_fix_pairs
+      type: object
+    report.Report:
+      properties:
+        audit_id:
+          type: string
+        finished_at:
+          type: string
+        influencer_id:
+          type: string
+        narrative:
+          $ref: "#/components/schemas/report.Narrative"
+        narrative_available:
+          type: boolean
+        platforms:
+          items:
+            type: string
+          type: array
+        score:
+          $ref: "#/components/schemas/report.ScoreBlock"
+        status:
+          type: string
+      required:
+      - audit_id
+      - influencer_id
+      - narrative
+      - narrative_available
+      - platforms
+      - score
+      - status
+      type: object
+    report.ScoreBlock:
+      properties:
+        authenticity:
+          type: number
+        available:
+          type: boolean
+        benchmark_label:
+          type: string
+        niche:
+          type: string
+        overall:
+          type: number
+        subscores:
+          items:
+            $ref: "#/components/schemas/report.Subscore"
+          type: array
+        tier:
+          type: string
+      required:
+      - authenticity
+      - available
+      - overall
+      - subscores
+      type: object
+    report.Subscore:
+      properties:
+        confidence:
+          type: number
+        name:
+          type: string
+        value:
+          type: number
+      required:
+      - confidence
+      - name
+      - value
+      type: object
+    report.WeaknessFix:
+      properties:
+        fix:
+          type: string
+        weakness:
+          type: string
+      required:
+      - fix
+      - weakness
+      type: object
     scoring.ScoreHistoryResponse:
       properties:
         influencer_id:
@@ -658,6 +754,39 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/audit.AuditResponse"
+          description: OK
+  /audits/{id}/report:
+    get:
+      operationId: GetReport
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.Report"
+          description: OK
+  /audits/{id}/report.pdf:
+    get:
+      operationId: GetReportPDF
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                format: byte
+                type: string
           description: OK
   /auth/login:
     post:

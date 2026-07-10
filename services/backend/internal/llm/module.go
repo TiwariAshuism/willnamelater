@@ -2,8 +2,11 @@ package llm
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
 
 	"github.com/getnyx/influaudit/backend/internal/platform/config"
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
@@ -58,19 +61,56 @@ func (m *Module) GenerateReport(ctx context.Context, in ReportInput) (ReportOutp
 		auditJobID = in.AuditJobID
 	}
 
+	// The report content and its cost land on the same row: a stored narrative can
+	// never exist without its accounting, and a restated audit overwrites both.
+	content, err := json.Marshal(out)
+	if err != nil {
+		return ReportOutput{}, Usage{}, uuid.Nil, errs.Wrap(err, errs.KindInternal,
+			"llm.encode_content", "could not encode report content")
+	}
+
 	const q = `INSERT INTO llm_generation
-		(audit_job_id, purpose, model, prompt_hash, input_tokens, output_tokens, cost_micros, cached, latency_ms)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+		(audit_job_id, purpose, model, prompt_hash, input_tokens, output_tokens, cost_micros, cached, latency_ms, content_jsonb)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::jsonb)
 		RETURNING id`
 
 	var id uuid.UUID
 	if err := m.pool.QueryRow(ctx, q,
 		auditJobID, purpose, usage.Model, usage.PromptHash,
-		usage.InputTokens, usage.OutputTokens, usage.CostMicros, usage.Cached, usage.LatencyMS,
+		usage.InputTokens, usage.OutputTokens, usage.CostMicros, usage.Cached, usage.LatencyMS, content,
 	).Scan(&id); err != nil {
 		return ReportOutput{}, Usage{}, uuid.Nil, errs.Wrap(err, errs.KindUnavailable,
 			"llm.persist_generation", "could not record report generation usage")
 	}
 
 	return out, usage, id, nil
+}
+
+// NarrativeOf returns the most recent stored report narrative for an audit job,
+// decoded from llm_generation.content_jsonb. The bool is false when the job has
+// no stored narrative yet (the generation failed, or the ML/LLM step was
+// skipped) — the report read treats that as "narrative pending", not an error.
+// It selects the latest row for the job so a re-run's restated narrative wins.
+func (m *Module) NarrativeOf(ctx context.Context, auditJobID uuid.UUID) (ReportOutput, bool, error) {
+	const q = `SELECT content_jsonb
+		FROM llm_generation
+		WHERE audit_job_id = $1 AND purpose = 'summary' AND content_jsonb IS NOT NULL
+		ORDER BY created_at DESC
+		LIMIT 1`
+
+	var raw []byte
+	if err := m.pool.QueryRow(ctx, q, auditJobID).Scan(&raw); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ReportOutput{}, false, nil
+		}
+		return ReportOutput{}, false, errs.Wrap(err, errs.KindUnavailable,
+			"llm.read_narrative", "could not read report narrative")
+	}
+
+	var out ReportOutput
+	if err := json.Unmarshal(raw, &out); err != nil {
+		return ReportOutput{}, false, errs.Wrap(err, errs.KindInternal,
+			"llm.decode_narrative", "could not decode stored report narrative")
+	}
+	return out, true, nil
 }

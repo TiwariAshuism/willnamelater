@@ -12,7 +12,11 @@
 package audit
 
 import (
+	"context"
+	"time"
+
 	"github.com/gin-gonic/gin"
+	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
 
 	"github.com/getnyx/influaudit/backend/internal/audit/internal/handler"
@@ -77,4 +81,44 @@ func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 // it so the module owns which task type it consumes.
 func (m *Module) RegisterTasks(mux *asynq.ServeMux) {
 	mux.HandleFunc(service.TaskAuditRun, m.svc.ProcessRun)
+}
+
+// View is the audit job in the shape the report module needs. It is returned
+// already scoped to the authenticated caller.
+type View struct {
+	ID           uuid.UUID
+	InfluencerID uuid.UUID
+	Status       string
+	// Platforms names the platforms the audit attempted or collected, for the
+	// report header.
+	Platforms   []string
+	RequestedAt time.Time
+	FinishedAt  *time.Time
+}
+
+// AuditView returns one of the caller's audits for the report module to render.
+// It reuses the caller-scoped read, so a caller can never obtain a view of an
+// audit that is not theirs; the composition root adapts it onto the report
+// module's AuditReader port. It is not an HTTP route.
+func (m *Module) AuditView(ctx context.Context, auditID string) (View, error) {
+	resp, err := m.svc.GetAudit(ctx, auditID)
+	if err != nil {
+		return View{}, err
+	}
+
+	view := View{
+		Status:      resp.Status,
+		Platforms:   make([]string, 0, len(resp.Platforms)),
+		RequestedAt: resp.RequestedAt,
+		FinishedAt:  resp.FinishedAt,
+	}
+	// GetAudit validated and loaded the job, so these ids parse; ignore the error
+	// and leave uuid.Nil if a field was ever empty (an influencer removed after
+	// the run, in which case the report has no score to show).
+	view.ID, _ = uuid.Parse(resp.ID)
+	view.InfluencerID, _ = uuid.Parse(resp.InfluencerID)
+	for _, p := range resp.Platforms {
+		view.Platforms = append(view.Platforms, p.Platform)
+	}
+	return view, nil
 }

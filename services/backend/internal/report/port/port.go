@@ -1,0 +1,93 @@
+// Package port declares the consumer-side interfaces the report module depends
+// on, plus the narrow types they exchange. The report module assembles a
+// finished audit's deliverable (a JSON view and a PDF) out of data owned by
+// three other modules — the audit orchestrator (the job and who owns it), the
+// scoring engine (the composite score), and the llm layer (the narrative) — and
+// renders the PDF through a fourth (the platform PDF renderer).
+//
+// Every collaborator is reached only through an interface defined here, so the
+// report module imports no other business module: the composition root builds a
+// thin adapter from each real implementation onto the matching port.
+package port
+
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+)
+
+// AuditView is the audit job the report is built for. The AuditReader returns it
+// already scoped to the authenticated caller, so a caller can never read a
+// report for an audit that is not theirs.
+type AuditView struct {
+	ID           uuid.UUID
+	InfluencerID uuid.UUID
+	Status       string
+	// Platforms names the platforms that contributed data to the audit.
+	Platforms   []string
+	RequestedAt time.Time
+	FinishedAt  *time.Time
+}
+
+// AuditReader loads one of the caller's audits. The real implementation is the
+// audit module, which scopes the read to the authenticated caller and returns a
+// not-found error for an audit the caller does not own.
+type AuditReader interface {
+	AuditView(ctx context.Context, auditID string) (AuditView, error)
+}
+
+// Subscore is one dimension of the composite score.
+type Subscore struct {
+	Name       string
+	Value      float64
+	Confidence float64
+}
+
+// ScoreView is the composite score the report presents. Present is false when
+// the audit produced no score (a fully failed audit), in which case the report
+// discloses the absence rather than inventing a number.
+type ScoreView struct {
+	Present        bool
+	Overall        float64
+	Authenticity   float64
+	Niche          string
+	Tier           string
+	BenchmarkLabel string
+	Subscores      []Subscore
+}
+
+// ScoreReader loads the latest persisted score for an influencer. The real
+// implementation is the scoring module.
+type ScoreReader interface {
+	ScoreOf(ctx context.Context, influencerID uuid.UUID) (ScoreView, error)
+}
+
+// WeaknessFix pairs an observed weakness with a concrete fix.
+type WeaknessFix struct {
+	Weakness string
+	Fix      string
+}
+
+// Narrative is the llm-generated advisory content. Present is false when no
+// narrative was stored for the audit (the ml/llm step was skipped or failed);
+// the report then shows the score alone and says the narrative is pending.
+type Narrative struct {
+	Present          bool
+	Summary          string
+	WeaknessFixPairs []WeaknessFix
+	GrowthTips       []string
+	BrandFit         string
+}
+
+// NarrativeReader loads the stored narrative for an audit job. The real
+// implementation is the llm module reading llm_generation.content_jsonb.
+type NarrativeReader interface {
+	NarrativeOf(ctx context.Context, auditJobID uuid.UUID) (Narrative, error)
+}
+
+// PDFRenderer turns a rendered HTML document into PDF bytes. The real
+// implementation is the platform PDF (Gotenberg) client.
+type PDFRenderer interface {
+	RenderHTML(ctx context.Context, html []byte) ([]byte, error)
+}

@@ -1,0 +1,200 @@
+// Package render assembles the audit deliverable's HTML. It is a leaf: it
+// depends only on the standard library, so both the JSON read path and the PDF
+// path share one canonical Report shape and one template. The template is
+// self-contained (inline CSS, no external assets) because Gotenberg renders it
+// in isolation.
+package render
+
+import (
+	"bytes"
+	"html/template"
+
+	"github.com/getnyx/influaudit/backend/internal/platform/errs"
+)
+
+// Report is the assembled audit deliverable: the shape returned by the JSON read
+// route and rendered into the PDF. Its json tags define the read route's
+// response contract.
+type Report struct {
+	AuditID      string     `json:"audit_id"`
+	InfluencerID string     `json:"influencer_id"`
+	Status       string     `json:"status"`
+	Platforms    []string   `json:"platforms"`
+	Score        ScoreBlock `json:"score"`
+	// Narrative is the advisory content. NarrativeAvailable is false when the
+	// ml/llm step was skipped or failed; the report then shows the score alone.
+	Narrative          Narrative `json:"narrative"`
+	NarrativeAvailable bool      `json:"narrative_available"`
+	FinishedAt         string    `json:"finished_at,omitempty"`
+}
+
+// ScoreBlock is the composite score presented in the report. Available is false
+// for a fully failed audit that produced no score.
+type ScoreBlock struct {
+	Available      bool       `json:"available"`
+	Overall        float64    `json:"overall"`
+	Authenticity   float64    `json:"authenticity"`
+	Niche          string     `json:"niche,omitempty"`
+	Tier           string     `json:"tier,omitempty"`
+	BenchmarkLabel string     `json:"benchmark_label,omitempty"`
+	Subscores      []Subscore `json:"subscores"`
+}
+
+// Subscore is one dimension of the composite, with the confidence that
+// qualifies it.
+type Subscore struct {
+	Name       string  `json:"name"`
+	Value      float64 `json:"value"`
+	Confidence float64 `json:"confidence"`
+}
+
+// Narrative is the llm-generated advisory content.
+type Narrative struct {
+	Summary          string        `json:"summary"`
+	WeaknessFixPairs []WeaknessFix `json:"weakness_fix_pairs"`
+	GrowthTips       []string      `json:"growth_tips"`
+	BrandFit         string        `json:"brand_fit"`
+}
+
+// WeaknessFix pairs a weakness with its concrete fix.
+type WeaknessFix struct {
+	Weakness string `json:"weakness"`
+	Fix      string `json:"fix"`
+}
+
+// HTML renders the report into a self-contained HTML document for the PDF
+// pipeline. It uses html/template, so every field is contextually escaped and a
+// report can never inject markup into its own deliverable.
+func HTML(r Report) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := reportTemplate.Execute(&buf, r); err != nil {
+		return nil, errs.Wrap(err, errs.KindInternal, "report.render_failed",
+			"could not render the report document")
+	}
+	return buf.Bytes(), nil
+}
+
+// reportTemplate is parsed once at package load. A parse failure is a programmer
+// error in the literal below, so it panics rather than deferring the failure to
+// the first render.
+var reportTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
+	"pct": func(f float64) string {
+		return template.HTMLEscapeString(formatOne(f))
+	},
+}).Parse(reportHTML))
+
+// formatOne formats a float to one decimal place without importing fmt into the
+// hot path repeatedly; it is small and dependency-light on purpose.
+func formatOne(f float64) string {
+	// Round to one decimal.
+	scaled := int64(f*10 + 0.5)
+	if f < 0 {
+		scaled = int64(f*10 - 0.5)
+	}
+	whole := scaled / 10
+	frac := scaled % 10
+	if frac < 0 {
+		frac = -frac
+	}
+	return itoa(whole) + "." + itoa(frac)
+}
+
+func itoa(n int64) string {
+	if n == 0 {
+		return "0"
+	}
+	neg := n < 0
+	if neg {
+		n = -n
+	}
+	var b [20]byte
+	i := len(b)
+	for n > 0 {
+		i--
+		b[i] = byte('0' + n%10)
+		n /= 10
+	}
+	if neg {
+		i--
+		b[i] = '-'
+	}
+	return string(b[i:])
+}
+
+const reportHTML = `<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<title>InfluAudit Report</title>
+<style>
+  * { box-sizing: border-box; }
+  body { font-family: -apple-system, Segoe UI, Roboto, Helvetica, Arial, sans-serif; color: #1a1a2e; margin: 0; padding: 40px; }
+  h1 { font-size: 24px; margin: 0 0 4px; }
+  h2 { font-size: 16px; margin: 28px 0 10px; border-bottom: 2px solid #e6e6ef; padding-bottom: 6px; }
+  .sub { color: #6b6b80; font-size: 12px; margin: 0 0 20px; }
+  .score-hero { display: flex; gap: 32px; margin: 16px 0 8px; }
+  .score-hero .big { font-size: 48px; font-weight: 700; line-height: 1; }
+  .score-hero .lbl { font-size: 11px; color: #6b6b80; text-transform: uppercase; letter-spacing: .04em; }
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid #eee; }
+  th { color: #6b6b80; font-weight: 600; font-size: 11px; text-transform: uppercase; letter-spacing: .03em; }
+  .conf { color: #6b6b80; }
+  ul { margin: 6px 0; padding-left: 18px; }
+  li { margin: 4px 0; font-size: 13px; }
+  .wf { margin: 8px 0; padding: 10px 12px; background: #f7f7fb; border-radius: 6px; }
+  .wf .w { font-weight: 600; font-size: 13px; }
+  .wf .f { font-size: 13px; color: #333; margin-top: 2px; }
+  .note { font-size: 11px; color: #6b6b80; margin-top: 4px; font-style: italic; }
+  .banner { background: #fff6e6; border: 1px solid #f0d9a8; color: #7a5a10; padding: 8px 12px; border-radius: 6px; font-size: 12px; margin: 10px 0; }
+</style>
+</head>
+<body>
+  <h1>InfluAudit Report</h1>
+  <p class="sub">Audit {{.AuditID}} &middot; Status: {{.Status}}{{if .FinishedAt}} &middot; {{.FinishedAt}}{{end}}</p>
+
+  {{if .Score.Available}}
+  <div class="score-hero">
+    <div><div class="lbl">Influence Score</div><div class="big">{{pct .Score.Overall}}</div></div>
+    <div><div class="lbl">Authenticity</div><div class="big">{{pct .Score.Authenticity}}</div></div>
+  </div>
+  {{if .Score.Niche}}<p class="sub">{{.Score.Niche}}{{if .Score.Tier}} &middot; {{.Score.Tier}} tier{{end}}</p>{{end}}
+  {{if .Score.BenchmarkLabel}}<p class="note">Benchmarks: {{.Score.BenchmarkLabel}}. Fraud figures are estimates, not measured percentages.</p>{{end}}
+
+  <h2>Score breakdown</h2>
+  <table>
+    <thead><tr><th>Dimension</th><th>Value</th><th>Confidence</th></tr></thead>
+    <tbody>
+    {{range .Score.Subscores}}
+      <tr><td>{{.Name}}</td><td>{{pct .Value}}</td><td class="conf">{{pct .Confidence}}</td></tr>
+    {{end}}
+    </tbody>
+  </table>
+  {{else}}
+  <div class="banner">This audit produced no score. No platform returned usable data, so no number is shown rather than an invented one.</div>
+  {{end}}
+
+  {{if .NarrativeAvailable}}
+  <h2>Summary</h2>
+  <p>{{.Narrative.Summary}}</p>
+
+  {{if .Narrative.WeaknessFixPairs}}
+  <h2>What to fix</h2>
+  {{range .Narrative.WeaknessFixPairs}}
+    <div class="wf"><div class="w">{{.Weakness}}</div><div class="f">&rarr; {{.Fix}}</div></div>
+  {{end}}
+  {{end}}
+
+  {{if .Narrative.GrowthTips}}
+  <h2>Growth tips</h2>
+  <ul>{{range .Narrative.GrowthTips}}<li>{{.}}</li>{{end}}</ul>
+  {{end}}
+
+  {{if .Narrative.BrandFit}}
+  <h2>Brand fit</h2>
+  <p>{{.Narrative.BrandFit}}</p>
+  {{end}}
+  {{else}}
+  <div class="banner">The advisory narrative is still pending or was unavailable for this audit. The score above stands on its own.</div>
+  {{end}}
+</body>
+</html>`

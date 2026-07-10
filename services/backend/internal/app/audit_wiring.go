@@ -4,9 +4,11 @@ import (
 	"context"
 	"net/http"
 	"strings"
+	"time"
 
 	"github.com/google/uuid"
 
+	"github.com/getnyx/influaudit/backend/internal/audit"
 	"github.com/getnyx/influaudit/backend/internal/audit/port"
 	"github.com/getnyx/influaudit/backend/internal/auth"
 	"github.com/getnyx/influaudit/backend/internal/billing"
@@ -16,6 +18,7 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/ml"
 	"github.com/getnyx/influaudit/backend/internal/oauth"
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
+	reportport "github.com/getnyx/influaudit/backend/internal/report/port"
 	"github.com/getnyx/influaudit/backend/internal/scoring"
 )
 
@@ -253,6 +256,82 @@ func (auditCaller) CallerID(ctx context.Context) (uuid.UUID, error) {
 	return id, nil
 }
 
+// --- Report module ports -------------------------------------------------
+
+// reportAuditReader adapts audit.Module.AuditView onto the report module's
+// AuditReader port. The audit read is already caller-scoped, so authorization is
+// inherited: a caller can only render reports for their own audits.
+type reportAuditReader struct{ a *audit.Module }
+
+func (r reportAuditReader) AuditView(ctx context.Context, auditID string) (reportport.AuditView, error) {
+	v, err := r.a.AuditView(ctx, auditID)
+	if err != nil {
+		return reportport.AuditView{}, err
+	}
+	return reportport.AuditView{
+		ID:           v.ID,
+		InfluencerID: v.InfluencerID,
+		Status:       v.Status,
+		Platforms:    v.Platforms,
+		RequestedAt:  v.RequestedAt,
+		FinishedAt:   v.FinishedAt,
+	}, nil
+}
+
+// reportScoreReader adapts scoring.Module.ReportView onto the report module's
+// ScoreReader port. A not-found score (a fully failed audit, or an influencer
+// never scored) is not an error to the report: it is disclosed as an absent
+// score, so the read still succeeds and the deliverable says so.
+type reportScoreReader struct{ s *scoring.Module }
+
+func (r reportScoreReader) ScoreOf(ctx context.Context, influencerID uuid.UUID) (reportport.ScoreView, error) {
+	view, err := r.s.ReportView(ctx, influencerID)
+	if err != nil {
+		if errs.KindOf(err) == errs.KindNotFound {
+			return reportport.ScoreView{Present: false}, nil
+		}
+		return reportport.ScoreView{}, err
+	}
+	out := reportport.ScoreView{
+		Present:        true,
+		Overall:        view.Overall,
+		Authenticity:   view.Authenticity,
+		Niche:          view.Niche,
+		Tier:           view.Tier,
+		BenchmarkLabel: view.BenchmarkLabel,
+		Subscores:      make([]reportport.Subscore, 0, len(view.Subscores)),
+	}
+	for _, s := range view.Subscores {
+		out.Subscores = append(out.Subscores, reportport.Subscore{Name: s.Name, Value: s.Value, Confidence: s.Confidence})
+	}
+	return out, nil
+}
+
+// reportNarrativeReader adapts llm.Module.NarrativeOf onto the report module's
+// NarrativeReader port, mapping the "no stored narrative" bool into the port's
+// Present flag.
+type reportNarrativeReader struct{ l *llm.Module }
+
+func (r reportNarrativeReader) NarrativeOf(ctx context.Context, auditJobID uuid.UUID) (reportport.Narrative, error) {
+	out, ok, err := r.l.NarrativeOf(ctx, auditJobID)
+	if err != nil {
+		return reportport.Narrative{}, err
+	}
+	if !ok {
+		return reportport.Narrative{Present: false}, nil
+	}
+	nar := reportport.Narrative{
+		Present:    true,
+		Summary:    out.Summary,
+		GrowthTips: out.GrowthTips,
+		BrandFit:   out.BrandFit,
+	}
+	for _, wf := range out.WeaknessFixPairs {
+		nar.WeaknessFixPairs = append(nar.WeaknessFixPairs, reportport.WeaknessFix{Weakness: wf.Weakness, Fix: wf.Fix})
+	}
+	return nar, nil
+}
+
 // --- small numeric / snapshot helpers ------------------------------------
 
 func maxF(a, b float64) float64 {
@@ -337,3 +416,8 @@ func supportingMetrics(snaps []connector.Snapshot) []llm.Metric {
 // httpDoerForML is the HTTP client the ml client uses. It is defined here so the
 // audit wiring owns the one place the backend reaches the ML service.
 var httpDoerForML = &http.Client{Timeout: connectorHTTPTimeout}
+
+// httpDoerForPDF is the HTTP client the Gotenberg PDF renderer uses. Chromium
+// rendering is heavier than a JSON call, so it gets a longer deadline than a
+// connector or ML request.
+var httpDoerForPDF = &http.Client{Timeout: 60 * time.Second}
