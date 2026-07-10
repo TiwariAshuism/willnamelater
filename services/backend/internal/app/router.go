@@ -97,6 +97,10 @@ func (a *App) mountModules(r *gin.Engine) {
 
 	// The report routes hang off the audit resource and are caller-scoped too.
 	m.Report.RegisterRoutes(protected)
+
+	// The data-import upload endpoint is caller-scoped: a creator uploads their
+	// own data.
+	m.DataImport.RegisterRoutes(protected)
 }
 
 // billingCaller copies the authenticated caller from the auth module's context

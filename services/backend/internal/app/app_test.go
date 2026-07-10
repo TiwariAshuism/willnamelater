@@ -55,7 +55,7 @@ func TestBuildConnectorRegistryRejectsEnabledPlatformWithoutBuilder(t *testing.T
 	t.Setenv("META_APP_ID", "id")
 	t.Setenv("META_APP_SECRET", "secret")
 
-	_, err := buildConnectorRegistry(cc)
+	_, err := (&App{}).buildConnectorRegistry(cc)
 	if err == nil {
 		t.Fatal("expected boot to fail for an enabled platform with no builder")
 	}
@@ -85,7 +85,7 @@ func TestBuildConnectorRegistryRequiresNamedCredentials(t *testing.T) {
 	t.Setenv("YT_OAUTH_CLIENT_SECRET", "secret")
 	t.Setenv("YT_API_KEY", "")
 
-	_, err := buildConnectorRegistry(cc)
+	_, err := (&App{}).buildConnectorRegistry(cc)
 	if err == nil {
 		t.Fatal("expected boot to fail when a named credential is unset")
 	}

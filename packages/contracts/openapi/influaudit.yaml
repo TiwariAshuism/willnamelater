@@ -213,6 +213,38 @@ components:
       type: object
     billing.WebhookRequest:
       type: object
+    dataimport.ImportRequest:
+      properties:
+        followers:
+          type: integer
+        handle:
+          type: string
+        influencer_id:
+          type: string
+        posts_csv:
+          type: string
+      required:
+      - followers
+      - handle
+      - influencer_id
+      - posts_csv
+      type: object
+    dataimport.ImportResponse:
+      properties:
+        dataset_id:
+          type: string
+        handle:
+          type: string
+        platform:
+          type: string
+        posts:
+          type: integer
+      required:
+      - dataset_id
+      - handle
+      - platform
+      - posts
+      type: object
     influencer.AddHandleRequest:
       properties:
         follower_count:
@@ -907,6 +939,22 @@ paths:
         required: true
       responses:
         "200":
+          description: OK
+  /imports/instagram:
+    post:
+      operationId: ImportInstagram
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/dataimport.ImportRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/dataimport.ImportResponse"
           description: OK
   /influencers:
     get:

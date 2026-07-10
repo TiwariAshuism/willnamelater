@@ -26,7 +26,9 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/auth"
 	"github.com/getnyx/influaudit/backend/internal/billing"
 	"github.com/getnyx/influaudit/backend/internal/connector"
+	"github.com/getnyx/influaudit/backend/internal/connector/csvimport"
 	"github.com/getnyx/influaudit/backend/internal/connector/youtube"
+	"github.com/getnyx/influaudit/backend/internal/dataimport"
 	"github.com/getnyx/influaudit/backend/internal/influencer"
 	"github.com/getnyx/influaudit/backend/internal/llm"
 	"github.com/getnyx/influaudit/backend/internal/metrics"
@@ -86,6 +88,7 @@ type Modules struct {
 	Scoring    *scoring.Module
 	Audit      *audit.Module
 	Report     *report.Module
+	DataImport *dataimport.Module
 }
 
 // Build constructs every dependency. On any failure it tears down whatever was
@@ -147,7 +150,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 		return nil, a.abort(ctx, err)
 	}
 
-	registry, err := buildConnectorRegistry(connectors)
+	registry, err := a.buildConnectorRegistry(connectors)
 	if err != nil {
 		return nil, a.abort(ctx, err)
 	}
@@ -279,6 +282,12 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		pdf.New(a.Config.Gotenberg.URL, httpDoerForPDF),
 	)
 
+	// The dataimport module is the real-data ingress for Instagram while its live
+	// API grant is pending: a creator uploads their own Insights export, which the
+	// csvimport connector (registered above) serves at audit time. It reaches the
+	// authenticated caller through the same caller adapter the audit module uses.
+	dataImportMod := dataimport.New(a.Pool, auditCaller{})
+
 	a.Modules = Modules{
 		Auth:       authMod,
 		OAuth:      oauthMod,
@@ -288,6 +297,7 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		Scoring:    scoringMod,
 		Audit:      auditMod,
 		Report:     reportMod,
+		DataImport: dataImportMod,
 	}
 	return nil
 }
@@ -372,7 +382,7 @@ func buildYouTube(pc connector.PlatformConfig, creds credentials) (connector.Con
 // would mean an audit silently reports on fewer platforms than the operator
 // configured, which is exactly the kind of quiet degradation this product exists
 // to detect in other people's numbers.
-func buildConnectorRegistry(cc *connector.Config) (*connector.Registry, error) {
+func (a *App) buildConnectorRegistry(cc *connector.Config) (*connector.Registry, error) {
 	registry := connector.NewRegistry()
 	for _, pc := range cc.Enabled() {
 		build, ok := connectorBuilders[pc.Platform]
@@ -394,6 +404,18 @@ func buildConnectorRegistry(cc *connector.Config) (*connector.Registry, error) {
 			return nil, err
 		}
 	}
+
+	// Upload-backed fallbacks. Instagram has no live API connector until the Meta
+	// grant clears review (it is enabled:false in config), so the csvimport
+	// connector serves it from the creator's uploaded Insights export. It is
+	// registered only when no live connector already claims the platform, so a
+	// future live Meta connector takes precedence without a code change here.
+	if _, taken := registry.Get(connector.PlatformInstagram); !taken {
+		if err := registry.Register(csvimport.New(connector.PlatformInstagram, a.Pool)); err != nil {
+			return nil, err
+		}
+	}
+
 	return registry, nil
 }
 
