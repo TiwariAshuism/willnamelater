@@ -1,18 +1,16 @@
-"""Comment-text and commenter co-occurrence features.
+"""Rule-based comment-quality classification.
 
-Two unrelated concerns share this module because both operate on comment
-payloads: (1) rule-based quality classification of individual comment text, and
-(2) building the commenter co-occurrence matrix that pod detection clusters.
+Assigns a coarse quality bucket (genuine / generic / emoji-only / duplicate) to
+individual comment text. The commenter co-occurrence graph that coordination
+detection needs is built separately, and sparsely, in :mod:`app.graph.cocomment`.
 """
 
 from __future__ import annotations
 
 import re
-from collections import Counter, defaultdict
+from collections import Counter
 
-import numpy as np
-
-from app.schemas import CommentEvent, CommentLabel
+from app.schemas import CommentLabel
 
 # Broad emoji / pictograph / symbol ranges. A comment that is only these plus
 # whitespace and punctuation carries no linguistic content.
@@ -108,43 +106,3 @@ def duplicate_norms(texts: list[str]) -> set[str]:
     """Normalized forms appearing more than once in the batch."""
     counts = Counter(normalize(t) for t in texts if t.strip())
     return {norm for norm, n in counts.items() if n > 1}
-
-
-def cooccurrence_matrix(
-    events: list[CommentEvent], window_minutes: int
-) -> tuple[list[str], np.ndarray]:
-    """Build a symmetric commenter co-occurrence matrix.
-
-    Two commenters co-occur once for every post on which both leave a comment
-    within ``window_minutes`` of each other. The diagonal holds each
-    commenter's activity count, which the distance conversion uses to normalize.
-    Returns the ordered commenter labels and the counts matrix.
-    """
-    commenters = sorted({e.commenter for e in events})
-    index = {name: i for i, name in enumerate(commenters)}
-    n = len(commenters)
-    matrix = np.zeros((n, n), dtype=float)
-    if n == 0:
-        return commenters, matrix
-
-    window = float(window_minutes) * 60.0
-    by_post: dict[str, list[CommentEvent]] = defaultdict(list)
-    for event in events:
-        by_post[event.post_id].append(event)
-        matrix[index[event.commenter], index[event.commenter]] += 1.0
-
-    for post_events in by_post.values():
-        ordered = sorted(post_events, key=lambda e: e.timestamp)
-        for a in range(len(ordered)):
-            for b in range(a + 1, len(ordered)):
-                ea, eb = ordered[a], ordered[b]
-                if ea.commenter == eb.commenter:
-                    continue
-                gap = (eb.timestamp - ea.timestamp).total_seconds()
-                if gap > window:
-                    break  # events are time-sorted; later ones only widen gap
-                ia, ib = index[ea.commenter], index[eb.commenter]
-                matrix[ia, ib] += 1.0
-                matrix[ib, ia] += 1.0
-
-    return commenters, matrix

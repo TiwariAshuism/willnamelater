@@ -1,27 +1,23 @@
 """Engagement-quality features.
 
-The expected-engagement curve below is a *published industry benchmark* — the
-well-known pattern that engagement rate falls as follower count rises — not
-data we trained on. It anchors the "how far from normal is this account's
-engagement" signal. Both signals here are bounded to [0, 1].
+The expected-engagement curve used by :func:`engagement_deviation_signal` is
+**not** owned by this service. It is supplied per request by the caller (the Go
+``scoring`` module, reading the versioned ``benchmark`` table) as an
+:class:`~app.schemas.EngagementBenchmark` carrying its own provenance label.
+
+This is deliberate. The previous hardcoded curve was corroborated only by a
+competitor's marketing blog across 24 researched sources (see
+``product/research/fraud-detection-signals.md`` §8) yet fed a customer-facing
+score. Rather than keep uncited constants as the default source of truth, the
+deviation signal simply contributes nothing when no sourced benchmark is
+provided. All signals here remain bounded to [0, 1].
 """
 
 from __future__ import annotations
 
 import numpy as np
 
-from app.schemas import PostMetrics
-
-# Expected engagement rate (engagements / follower) by follower tier. Declining
-# curve, midpoints of commonly cited micro/macro benchmark ranges. Used only as
-# a reference anchor for deviation, never presented as the account's own value.
-_ENGAGEMENT_CURVE = (
-    (10_000, 0.050),
-    (100_000, 0.035),
-    (500_000, 0.020),
-    (1_000_000, 0.015),
-)
-_ENGAGEMENT_FLOOR = 0.012
+from app.schemas import EngagementBenchmark, PostMetrics
 
 # Deviation (in absolute engagement-rate points) that saturates the signal.
 _ENGAGEMENT_DEV_SPAN = 0.05
@@ -33,12 +29,18 @@ _LC_NORMAL = 120.0
 _LC_SPAN = 600.0
 
 
-def expected_engagement_rate(follower_count: int) -> float:
-    """Benchmark engagement rate for an account of this size."""
-    for threshold, rate in _ENGAGEMENT_CURVE:
-        if follower_count < threshold:
-            return rate
-    return _ENGAGEMENT_FLOOR
+def expected_engagement_rate(
+    follower_count: int, benchmark: EngagementBenchmark
+) -> float:
+    """Expected engagement rate for this account size, per the sourced curve.
+
+    The curve knots are read lowest-threshold first; the first threshold the
+    account falls under gives its expected rate, else the curve's floor.
+    """
+    for point in sorted(benchmark.curve, key=lambda p: p.follower_threshold):
+        if follower_count < point.follower_threshold:
+            return point.expected_rate
+    return benchmark.floor
 
 
 def observed_engagement_rate(
@@ -52,17 +54,23 @@ def observed_engagement_rate(
 
 
 def engagement_deviation_signal(
-    posts: list[PostMetrics], follower_count: int
+    posts: list[PostMetrics],
+    follower_count: int,
+    benchmark: EngagementBenchmark | None,
 ) -> float:
-    """How far observed engagement sits from the benchmark, in [0, 1].
+    """How far observed engagement sits from the sourced benchmark, in [0, 1].
 
     Two-sided: both suspiciously low engagement (inflated follower base) and
     suspiciously high engagement (bought likes or pod activity) raise it.
+    Returns 0.0 when no benchmark is supplied — the signal is *skipped*, never
+    anchored to a fabricated curve.
     """
+    if benchmark is None:
+        return 0.0
     observed = observed_engagement_rate(posts, follower_count)
     if observed is None:
         return 0.0
-    expected = expected_engagement_rate(follower_count)
+    expected = expected_engagement_rate(follower_count, benchmark)
     deviation = abs(observed - expected)
     return min(deviation / _ENGAGEMENT_DEV_SPAN, 1.0)
 

@@ -1,0 +1,100 @@
+// Package contract holds the scoring module's cross-boundary value types: the
+// fraud input the audit orchestrator hands in, the Score it gets back, and the
+// Profiles port the module uses to resolve an influencer's niche.
+//
+// It is a dependency-free leaf so both the module-private layers
+// (internal/scoring/internal/...) and outside callers (the audit orchestrator,
+// the composition root) can share these types without importing each other. The
+// module facade re-exports the names as aliases, so a caller that imports
+// internal/scoring alone gets scoring.Score, scoring.FraudInput and
+// scoring.Profiles.
+package contract
+
+import (
+	"context"
+	"time"
+
+	"github.com/google/uuid"
+
+	"github.com/getnyx/influaudit/backend/internal/connector"
+)
+
+// The Component names key the scoring_weights.weights JSON object and the score
+// breakdown. They are stable strings: a persisted weight set or score row is
+// read back by these keys, so they must never be renamed casually.
+const (
+	ComponentReach             = "reach"
+	ComponentEngagementQuality = "engagement_quality"
+	ComponentAuthenticity      = "authenticity"
+	ComponentConsistency       = "consistency"
+	ComponentContentQuality    = "content_quality"
+)
+
+// FraudInput is the ML fraud signal the orchestrator passes to Score. Its rates
+// are fractions in [0,1] (not percentages); the orchestrator normalizes the ML
+// service's response onto this shape before calling. Present is false when no
+// fraud pass ran (e.g. every platform degraded), which makes the authenticity
+// subscore neutral and zero-confidence rather than falsely clean.
+type FraudInput struct {
+	Present           bool
+	FakeFollowerRate  float64
+	BotCommentRate    float64
+	EngagementAnomaly float64
+	Confidence        float64
+	ModelVersion      string
+}
+
+// Subscore is one component of the composite: its value on a 0..100 scale and
+// the confidence in [0,1] that qualifies it. Confidence stays low while the
+// evidence behind the value is thin — a bootstrap benchmark with few samples, a
+// missing fraud pass, or too few posts to judge cadence.
+type Subscore struct {
+	Value      float64 `json:"value"`
+	Confidence float64 `json:"confidence"`
+}
+
+// Score is the computed influence + authenticity result for one audit. Overall
+// is the weighted composite of the five subscores on a 0..100 scale. The version
+// stamps pin the exact weight set and benchmark generation used, so the score is
+// reproducible even after newer weights or benchmarks become active.
+type Score struct {
+	AuditJobID   uuid.UUID
+	InfluencerID uuid.UUID
+	Niche        string
+	Tier         string
+
+	Overall           float64
+	Reach             Subscore
+	EngagementQuality Subscore
+	Authenticity      Subscore
+	Consistency       Subscore
+	ContentQuality    Subscore
+
+	// OverallConfidence is the weight-blended confidence across the subscores.
+	OverallConfidence float64
+
+	WeightsVersion   int
+	BenchmarkVersion int
+	// BenchmarkLabel is the human-facing provenance of the benchmark generation,
+	// e.g. "industry-bootstrap v1" for cold-start reference bands or "corpus v3"
+	// once real percentiles have replaced them.
+	BenchmarkLabel string
+
+	// ContributingPlatforms names the platforms that actually fed the number. A
+	// partial audit records the reduced set so a consumer never reads the score
+	// as if it covered every requested platform.
+	ContributingPlatforms []connector.Platform
+
+	CreatedAt time.Time
+}
+
+// Profiles resolves the content niche of an influencer. scoring keys its weights
+// and benchmarks on (niche, tier); tier is derived from the live follower count,
+// but niche is a content category that platform metrics do not carry, so scoring
+// reaches the influencer module through this port. The composition root wires
+// it; the influencer module already stores the niche.
+type Profiles interface {
+	// NicheOf returns the influencer's niche. An empty string (with a nil error)
+	// is treated as "unknown" and falls back to the default benchmark cohort.
+	NicheOf(ctx context.Context, influencerID uuid.UUID) (string, error)
+}

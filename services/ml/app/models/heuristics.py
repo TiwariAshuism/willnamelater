@@ -1,10 +1,25 @@
-"""Composite fraud estimate: the honest cold-start scorer.
+"""Composite per-account fraud estimate: the honest cold-start scorer.
 
-Blends the per-call IsolationForest anomaly signal with four explicit
-heuristics (growth spike, follower/following balance, engagement-curve
-deviation, like-to-comment ratio) into a single 0-100 risk estimate with a
-per-signal breakdown. Every input to the blend is bounded to [0, 1] and the
-weights sum to 1, so the composite is bounded by construction.
+This scorer produces the **per-account** half of the fraud picture. Following
+the coordination-first pivot (research §2.1), the headline fraud signal is the
+co-commenter clique count served by ``/v1/pods/detect``; the per-account signals
+here are tie-breakers and explanations, combined with coordination by the Go
+``scoring`` module. That is why the UnDBot-style signal is weighted modestly and
+labelled a tie-breaker rather than a verdict.
+
+Blends four bounded signals into a single 0-100 estimate with a per-signal
+breakdown:
+
+* ``growth_spike`` — sharpest follower jump vs the account's typical daily gain.
+* ``engagement_deviation`` — observed engagement vs a *caller-supplied, sourced*
+  benchmark (0 when none is supplied; never anchored to a guessed curve).
+* ``like_comment_ratio`` — excess likes per comment over the organic band.
+* ``coordination_undbot`` — UnDBot's three per-account metrics as a tie-breaker.
+
+Every input is bounded to [0, 1] and the weights sum to 1, so the composite is
+bounded by construction. The UnDBot signal already carries the follow/follower
+relationship (via the shared :func:`follower_following_signal`), so there is no
+separate follower/following signal — that would double-count it.
 """
 
 from __future__ import annotations
@@ -17,36 +32,35 @@ from app.features.engagement import (
 )
 from app.features.follower import (
     extract_follower_features,
-    follower_following_signal,
     growth_spike_signal,
 )
-from app.models.anomaly import growth_anomaly_signal
+from app.models.undbot import undbot_signal
 from app.schemas import FraudScoreRequest, SignalContribution
 
-# Signal weights, summing to 1.0. The two growth-driven signals dominate
-# because a manufactured audience shows up first in the follower time series.
+# Signal weights, summing to 1.0. Growth spike and engagement carry the most
+# weight; the UnDBot metrics are a tie-breaker (a single audit cannot run the
+# cross-account structural-entropy step UnDBot's power comes from).
 _WEIGHTS: dict[str, float] = {
-    "growth_spike": 0.28,
-    "follower_growth_anomaly": 0.22,
-    "follower_following_ratio": 0.18,
-    "engagement_deviation": 0.20,
-    "like_comment_ratio": 0.12,
+    "growth_spike": 0.35,
+    "engagement_deviation": 0.30,
+    "like_comment_ratio": 0.15,
+    "coordination_undbot": 0.20,
 }
 
 _SIGNAL_DETAIL: dict[str, str] = {
     "growth_spike": (
         "Sharpest follower gain relative to the account's typical daily gain."
     ),
-    "follower_growth_anomaly": (
-        "Isolation of the most unusual day in the follower series."
-    ),
-    "follower_following_ratio": (
-        "Deviation of the follower/following balance from a normal band."
-    ),
     "engagement_deviation": (
-        "Distance of observed engagement from the size-adjusted benchmark."
+        "Distance of observed engagement from the caller-supplied sourced "
+        "benchmark; 0 when no benchmark is provided."
     ),
     "like_comment_ratio": "Excess of likes per comment over the organic band.",
+    "coordination_undbot": (
+        "UnDBot per-account tie-breaker (posting-type, posting-influence, "
+        "follow-ratio). Weighted low: structural entropy needs a multi-account "
+        "graph a single audit does not have."
+    ),
 }
 
 # A signal at or above this strength is surfaced as a named flag.
@@ -78,22 +92,22 @@ def _confidence(series_len: int, post_count: int) -> float:
 
 
 def score_fraud(request: FraudScoreRequest) -> FraudResult:
-    """Produce the composite fraud estimate for one account."""
+    """Produce the composite per-account fraud estimate for one account."""
     account = request.account
     features = extract_follower_features(
         request.follower_series, account.follower_count, account.following_count
     )
+    undbot = undbot_signal(
+        request.posts, account.follower_count, account.following_count
+    )
 
     values: dict[str, float] = {
         "growth_spike": growth_spike_signal(features),
-        "follower_growth_anomaly": growth_anomaly_signal(features),
-        "follower_following_ratio": follower_following_signal(
-            account.follower_count, account.following_count
-        ),
         "engagement_deviation": engagement_deviation_signal(
-            request.posts, account.follower_count
+            request.posts, account.follower_count, request.engagement_benchmark
         ),
         "like_comment_ratio": like_comment_ratio_signal(request.posts),
+        "coordination_undbot": undbot.value,
     }
 
     signals: list[SignalContribution] = []

@@ -73,12 +73,42 @@ class FollowerPoint(_StrictRequest):
 
 
 class PostMetrics(_StrictRequest):
-    """Public engagement counters for one post."""
+    """Public engagement counters for one post.
 
+    ``post_id`` is the join key: a :class:`CommentEvent` carries the same id, so
+    comments can be attributed to the post they were left on. Without it no
+    per-post coordination feature (co-commenter edges, per-video cliques) is
+    recoverable — see ``product/research/fraud-detection-signals.md`` §6.
+    """
+
+    post_id: str = Field(min_length=1)
     timestamp: datetime = Field(strict=False)
     likes: int = Field(ge=0)
     comments: int = Field(ge=0)
     views: int | None = Field(default=None, ge=0)
+
+
+class EngagementBenchmarkPoint(_StrictRequest):
+    """One (follower-threshold, expected-rate) knot of a benchmark curve."""
+
+    follower_threshold: int = Field(gt=0)
+    expected_rate: float = Field(gt=0.0, le=1.0)
+
+
+class EngagementBenchmark(_StrictRequest):
+    """A sourced expected-engagement curve supplied by the caller.
+
+    The ML service does not own engagement benchmarks: the Go ``scoring`` module
+    reads them from the versioned ``benchmark`` table and passes them in with a
+    provenance label. This exists precisely so this service never again ships an
+    uncited vendor-blog curve as a customer-facing anchor (research §8). When no
+    benchmark is supplied the engagement-deviation signal contributes nothing
+    rather than inventing one.
+    """
+
+    curve: list[EngagementBenchmarkPoint] = Field(min_length=1)
+    floor: float = Field(gt=0.0, le=1.0)
+    source: str = Field(min_length=1)
 
 
 class AccountSnapshot(_StrictRequest):
@@ -100,6 +130,9 @@ class FraudScoreRequest(_StrictRequest):
     account: AccountSnapshot
     follower_series: list[FollowerPoint] = Field(default_factory=list)
     posts: list[PostMetrics] = Field(default_factory=list)
+    # Optional sourced benchmark for the engagement-deviation signal. Absent =>
+    # that signal is skipped (contributes 0), never anchored to a guessed curve.
+    engagement_benchmark: EngagementBenchmark | None = None
 
 
 class FraudScoreResponse(BaseModel):
@@ -126,23 +159,36 @@ class FraudScoreResponse(BaseModel):
 
 
 class CommentEvent(_StrictRequest):
-    """One commenter appearing on one post at a point in time."""
+    """One commenter appearing on one post.
+
+    ``text`` is carried so future *verified* text signals (near-duplicate
+    detection, §4.3) can reach pod detection through the same payload. The
+    current clique model does not read it — it joins purely on ``post_id`` and
+    ``commenter`` — so the field is a wire-contract slot, not a live input.
+    """
 
     post_id: str = Field(min_length=1)
     commenter: str = Field(min_length=1)
+    text: str = ""
     timestamp: datetime = Field(strict=False)
 
 
 class PodsDetectRequest(_StrictRequest):
-    """Comment events plus the co-occurrence rules used to build the graph."""
+    """Comment events plus the parameters of the co-commenter clique model.
+
+    The co-commenter graph weights each edge by the *number of shared posts*
+    between two commenters (arXiv 2311.05791), so no time window is used;
+    ``min_shared_posts`` prunes weak edges and ``min_pod_size`` is the clique
+    size that counts as coordination (the research signal is cliques of ≥ 5).
+    """
 
     events: list[CommentEvent] = Field(default_factory=list)
-    window_minutes: int = Field(default=60, gt=0)
-    min_pod_size: int = Field(default=3, ge=2)
+    min_pod_size: int = Field(default=5, ge=2)
+    min_shared_posts: int = Field(default=2, ge=1)
 
 
 class Pod(BaseModel):
-    """A cluster of commenters that co-appear more than chance would explain."""
+    """A maximal clique of commenters who co-comment on many shared posts."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -153,10 +199,23 @@ class Pod(BaseModel):
 
 
 class PodsDetectResponse(BaseModel):
+    """Coordination estimate for one channel's commenter graph.
+
+    ``clique_count`` (maximal cliques of size ≥ ``min_pod_size``) is the primary
+    signal; ``clique_membership_fraction`` is secondary. ``partial`` is true when
+    the graph had to be reduced to stay inside the compute budget, in which case
+    ``clique_count`` is a lower bound. The honesty markers (``confidence``,
+    ``model_version``, ``estimate``) and per-signal ``signals`` are always set.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     pods: list[Pod]
+    clique_count: int = Field(ge=0)
+    clique_membership_fraction: float = Field(ge=0.0, le=1.0)
     commenters_analyzed: int = Field(ge=0)
+    partial: bool = False
+    signals: list[SignalContribution]
     confidence: float = Field(ge=0.0, le=1.0)
     model_version: str
     estimate: bool = True

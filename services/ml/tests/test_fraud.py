@@ -2,7 +2,8 @@
 
 Asserts schema conformance, determinism, boundedness and that the composite
 score is monotone non-decreasing as an injected follower spike sharpens — all
-provable without any labeled fraud data.
+provable without any labeled fraud data. The engagement benchmark in the payload
+is a synthetic test fixture, exercised for shape only.
 """
 
 from __future__ import annotations
@@ -15,6 +16,16 @@ from fastapi.testclient import TestClient
 from app.main import create_app
 
 _BASE = datetime(2026, 1, 1, tzinfo=UTC)
+
+_BENCHMARK = {
+    "curve": [
+        {"follower_threshold": 10_000, "expected_rate": 0.05},
+        {"follower_threshold": 100_000, "expected_rate": 0.03},
+        {"follower_threshold": 1_000_000, "expected_rate": 0.01},
+    ],
+    "floor": 0.005,
+    "source": "test-fixture",
+}
 
 
 @pytest.fixture(scope="module")
@@ -36,7 +47,12 @@ def _payload(spike_extra: int) -> dict:
         for i, c in enumerate(counts)
     ]
     posts = [
-        {"timestamp": _iso(_BASE + timedelta(days=i)), "likes": 300, "comments": 25}
+        {
+            "post_id": f"post_{i}",
+            "timestamp": _iso(_BASE + timedelta(days=i)),
+            "likes": 300,
+            "comments": 25,
+        }
         for i in range(6)
     ]
     return {
@@ -48,6 +64,7 @@ def _payload(spike_extra: int) -> dict:
         },
         "follower_series": series,
         "posts": posts,
+        "engagement_benchmark": _BENCHMARK,
     }
 
 
@@ -72,14 +89,23 @@ def test_fraud_response_schema_and_bounds(client: TestClient) -> None:
     names = {s["name"] for s in body["signals"]}
     assert names == {
         "growth_spike",
-        "follower_growth_anomaly",
-        "follower_following_ratio",
         "engagement_deviation",
         "like_comment_ratio",
+        "coordination_undbot",
     }
     for signal in body["signals"]:
         assert 0.0 <= signal["value"] <= 1.0
         assert 0.0 <= signal["weighted"] <= 1.0
+
+
+def test_fraud_deviation_skipped_without_benchmark(client: TestClient) -> None:
+    payload = _payload(0)
+    del payload["engagement_benchmark"]
+    body = client.post("/v1/fraud/score", json=payload).json()
+    deviation = next(
+        s for s in body["signals"] if s["name"] == "engagement_deviation"
+    )
+    assert deviation["value"] == 0.0  # no sourced curve => no fabricated anchor
 
 
 def test_fraud_is_deterministic(client: TestClient) -> None:
@@ -93,9 +119,7 @@ def test_fraud_is_deterministic(client: TestClient) -> None:
 
 def test_fraud_growth_spike_signal_is_monotone(client: TestClient) -> None:
     # The growth-spike signal is the component with a provable monotonicity
-    # property: a sharper follower spike can only raise it. (The composite also
-    # folds in an IsolationForest term, which is legitimately non-monotone, so
-    # the guarantee is asserted at the signal level where it truly holds.)
+    # property: a sharper follower spike can only raise it.
     prev = -1.0
     scores: list[float] = []
     for extra in (0, 2_000, 8_000, 32_000, 128_000):
