@@ -56,6 +56,13 @@ type Repository interface {
 	// UpsertResult writes one platform result, keyed on (job, platform), so a
 	// re-run overwrites the previous attempt.
 	UpsertResult(ctx context.Context, jobID uuid.UUID, result model.PlatformResult) error
+	// UpsertFraudResult writes the per-audit fraud estimate keyed on the job id,
+	// overwriting a prior run so a re-run never duplicates the row.
+	UpsertFraudResult(ctx context.Context, jobID uuid.UUID, fr model.FraudResult) error
+	// GetFraudResult returns the stored fraud estimate for a job. found is false
+	// when no fraud row was written for it (a failed audit, or one that never
+	// reached the fraud step).
+	GetFraudResult(ctx context.Context, jobID uuid.UUID) (fr model.FraudResult, found bool, err error)
 }
 
 // taskEnqueuer is the slice of *asynq.Client the submit path needs. Declaring
@@ -212,6 +219,14 @@ func (s *Service) ListAudits(ctx context.Context) ([]model.AuditResponse, error)
 		resp = append(resp, model.ToAuditResponse(job, nil))
 	}
 	return resp, nil
+}
+
+// FraudResultOf returns the stored per-audit fraud estimate for a job. found is
+// false when no fraud pass was recorded for it. It is not caller-scoped: the
+// report and admin modules authorize the audit before reading its fraud row, so
+// this read carries no identity check of its own.
+func (s *Service) FraudResultOf(ctx context.Context, jobID uuid.UUID) (model.FraudResult, bool, error) {
+	return s.repo.GetFraudResult(ctx, jobID)
 }
 
 // respondWithResults loads a job's platform results and projects the full

@@ -253,6 +253,52 @@ func TestRun_FraudUnavailableStillScores(t *testing.T) {
 	}
 }
 
+func TestRun_PersistsFraudResultWithCliqueCount(t *testing.T) {
+	registered := map[connector.Platform]connector.Connector{
+		connector.PlatformYouTube: fakeConnector{platform: connector.PlatformYouTube, snap: goodSnapshot(connector.PlatformYouTube)},
+	}
+	h := newHarness([]port.Connection{connectionFor(connector.PlatformYouTube)}, registered)
+	h.fraud.summary = port.FraudSummary{
+		Present:                  true,
+		CliqueCount:              7,
+		CliqueMembershipFraction: 0.42,
+		Confidence:               0.6,
+		ModelVersion:             "clique-v1",
+	}
+	job := seedQueuedJob(h)
+
+	runTask(t, h, job.ID)
+
+	fr, ok := h.repo.fraudOf(job.ID)
+	if !ok {
+		t.Fatal("fraud result was not persisted for the audit")
+	}
+	if fr.CliqueCount != 7 || fr.CliqueMembershipFraction != 0.42 || fr.ModelVersion != "clique-v1" {
+		t.Fatalf("persisted fraud = %+v, want the clique signals surfaced", fr)
+	}
+}
+
+// Even when the ml service is down, a present=false fraud row is written so the
+// deliverable can distinguish "ran, found nothing" from "never ran".
+func TestRun_PersistsAbsentFraudResultOnOutage(t *testing.T) {
+	registered := map[connector.Platform]connector.Connector{
+		connector.PlatformYouTube: fakeConnector{platform: connector.PlatformYouTube, snap: goodSnapshot(connector.PlatformYouTube)},
+	}
+	h := newHarness([]port.Connection{connectionFor(connector.PlatformYouTube)}, registered)
+	h.fraud.err = errors.New("ml unavailable")
+	job := seedQueuedJob(h)
+
+	runTask(t, h, job.ID)
+
+	fr, ok := h.repo.fraudOf(job.ID)
+	if !ok {
+		t.Fatal("an absent fraud pass must still write a row")
+	}
+	if fr.Present {
+		t.Fatalf("fraud row = %+v, want present=false after an ml outage", fr)
+	}
+}
+
 func TestProcessRun_MalformedPayloadSkipsRetry(t *testing.T) {
 	h := newHarness(nil, nil)
 	err := h.svc.ProcessRun(context.Background(), asynq.NewTask(TaskAuditRun, []byte("{not json")))

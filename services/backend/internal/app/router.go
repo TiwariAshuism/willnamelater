@@ -95,12 +95,29 @@ func (a *App) mountModules(r *gin.Engine) {
 	// they mount on the protected group.
 	m.Audit.RegisterRoutes(protected)
 
-	// The report routes hang off the audit resource and are caller-scoped too.
+	// The report routes hang off the audit resource and are caller-scoped too. The
+	// public badge projection is the exception: it mounts on the public group with
+	// no auth, exposing only the frozen snapshot captured at publish time.
 	m.Report.RegisterRoutes(protected)
+	m.Report.RegisterPublicRoutes(public)
 
 	// The data-import upload endpoint is caller-scoped: a creator uploads their
 	// own data.
 	m.DataImport.RegisterRoutes(protected)
+
+	// Admin routes all require a signed-in caller; the admin-only ones (the review
+	// queue, resolve, dashboards, label export) additionally enforce the admin
+	// role inside the service through the AdminGuard port. Filing a dispute is
+	// open to any authenticated caller, so the whole module mounts on protected.
+	m.Admin.RegisterRoutes(protected)
+
+	// Deferred-feature scaffolds mount on the protected group. Every operation
+	// returns 501 until the feature is built, so the endpoints are a documented,
+	// honest part of the contract rather than a hidden 404.
+	m.Alerts.RegisterRoutes(protected)
+	m.BulkAudit.RegisterRoutes(protected)
+	m.Whitelabel.RegisterRoutes(protected)
+	m.Campaign.RegisterRoutes(protected)
 }
 
 // billingCaller copies the authenticated caller from the auth module's context

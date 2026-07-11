@@ -142,12 +142,18 @@ type MLConfig struct {
 	BaseURL string `koanf:"base_url"`
 }
 
-// StorageConfig holds S3-compatible object storage settings.
+// StorageConfig holds S3-compatible object storage settings. Endpoint is an
+// explicit S3 endpoint (LocalStack/MinIO in dev, or an S3-compatible store in
+// prod); Region is the SigV4 signing region. PublicBaseURL, when set, is the
+// origin browser-facing links resolve to (e.g. a CDN in front of the bucket);
+// when empty the client hands out presigned URLs against Endpoint instead.
 type StorageConfig struct {
-	Endpoint  string `koanf:"endpoint"`
-	Bucket    string `koanf:"bucket"`
-	AccessKey Secret `koanf:"access_key"`
-	SecretKey Secret `koanf:"secret_key"`
+	Endpoint      string `koanf:"endpoint"`
+	Region        string `koanf:"region"`
+	Bucket        string `koanf:"bucket"`
+	AccessKey     Secret `koanf:"access_key"`
+	SecretKey     Secret `koanf:"secret_key"`
+	PublicBaseURL string `koanf:"public_base_url"`
 }
 
 // JWTConfig holds the RS256 signing key, supplied either as a filesystem path
@@ -318,6 +324,7 @@ func (c *Config) Validate() error {
 	requireInProd("gotenberg.url", c.Gotenberg.URL)
 	requireInProd("ml.base_url", c.ML.BaseURL)
 	requireInProd("storage.endpoint", c.Storage.Endpoint)
+	requireInProd("storage.region", c.Storage.Region)
 	requireInProd("storage.bucket", c.Storage.Bucket)
 	requireInProd("razorpay.key_id", c.Razorpay.KeyID)
 	requireInProd("otel.exporter_endpoint", c.OTel.ExporterEndpoint)

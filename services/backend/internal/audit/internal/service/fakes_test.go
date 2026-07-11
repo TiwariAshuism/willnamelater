@@ -21,6 +21,7 @@ type fakeRepo struct {
 	byID      map[uuid.UUID]model.Job
 	byKey     map[string]model.Job
 	results   map[uuid.UUID]map[string]model.PlatformResult
+	fraud     map[uuid.UUID]model.FraudResult
 	statusLog map[uuid.UUID][]model.Status
 
 	createCalls int
@@ -35,6 +36,7 @@ func newFakeRepo() *fakeRepo {
 		byID:      make(map[uuid.UUID]model.Job),
 		byKey:     make(map[string]model.Job),
 		results:   make(map[uuid.UUID]map[string]model.PlatformResult),
+		fraud:     make(map[uuid.UUID]model.FraudResult),
 		statusLog: make(map[uuid.UUID][]model.Status),
 	}
 }
@@ -172,6 +174,27 @@ func (r *fakeRepo) UpsertResult(_ context.Context, jobID uuid.UUID, result model
 	return nil
 }
 
+func (r *fakeRepo) UpsertFraudResult(_ context.Context, jobID uuid.UUID, fr model.FraudResult) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.fraud[jobID] = fr
+	return nil
+}
+
+func (r *fakeRepo) GetFraudResult(_ context.Context, jobID uuid.UUID) (model.FraudResult, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fr, ok := r.fraud[jobID]
+	return fr, ok, nil
+}
+
+func (r *fakeRepo) fraudOf(id uuid.UUID) (model.FraudResult, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	fr, ok := r.fraud[id]
+	return fr, ok
+}
+
 func (r *fakeRepo) statusesOf(id uuid.UUID) []model.Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -298,16 +321,22 @@ func (s *fakeScorer) scoredPlatforms() []connector.Platform {
 	return out
 }
 
-// fakeFraud is a port.FraudClient.
+// fakeFraud is a port.FraudClient. summary, when set, is the estimate it
+// returns, letting a test drive the persisted fraud row; otherwise it returns a
+// minimal present summary.
 type fakeFraud struct {
-	calls int
-	err   error
+	calls   int
+	summary port.FraudSummary
+	err     error
 }
 
 func (f *fakeFraud) ScoreFraud(context.Context, []connector.Snapshot) (port.FraudSummary, error) {
 	f.calls++
 	if f.err != nil {
 		return port.FraudSummary{}, f.err
+	}
+	if f.summary != (port.FraudSummary{}) {
+		return f.summary, nil
 	}
 	return port.FraudSummary{Present: true, ModelVersion: "test"}, nil
 }

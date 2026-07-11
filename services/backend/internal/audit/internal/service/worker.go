@@ -275,6 +275,16 @@ func (s *Service) scoreAndReport(ctx context.Context, job model.Job, snapshots [
 		fraud = port.FraudSummary{Present: false}
 	}
 
+	// Persist the fraud estimate keyed on the job so the deliverable's
+	// coordination headline and the dispute-labelling loop read a stored value
+	// rather than re-running the models. A present=false row is written too: it
+	// records that a fraud pass ran and found nothing, distinct from never having
+	// run one. A write failure here is a system fault, so the run is retried (the
+	// upsert is idempotent).
+	if err := s.repo.UpsertFraudResult(ctx, job.ID, toFraudModel(fraud)); err != nil {
+		return err
+	}
+
 	score, err := s.scorer.Score(ctx, job.ID, job.InfluencerID, snapshots, toFraudInput(fraud))
 	if err != nil {
 		return err
@@ -309,9 +319,33 @@ func (s *Service) finishNoData(ctx context.Context, jobID uuid.UUID, reservation
 }
 
 // toFraudInput maps the ml-agnostic fraud summary onto the scoring engine's
-// fraud contribution.
+// fraud contribution. The clique signals are deliberately dropped: they are a
+// reporting headline, not an input to the composite score, so FraudInput stays
+// aligned with the scoring module's own type.
 func toFraudInput(f port.FraudSummary) port.FraudInput {
-	return port.FraudInput(f)
+	return port.FraudInput{
+		Present:           f.Present,
+		FakeFollowerRate:  f.FakeFollowerRate,
+		BotCommentRate:    f.BotCommentRate,
+		EngagementAnomaly: f.EngagementAnomaly,
+		Confidence:        f.Confidence,
+		ModelVersion:      f.ModelVersion,
+	}
+}
+
+// toFraudModel maps the ml-agnostic fraud summary onto the persisted
+// fraud_result row shape, carrying the clique signals the scoring input drops.
+func toFraudModel(f port.FraudSummary) model.FraudResult {
+	return model.FraudResult{
+		Present:                  f.Present,
+		FakeFollowerRate:         f.FakeFollowerRate,
+		BotCommentRate:           f.BotCommentRate,
+		EngagementAnomaly:        f.EngagementAnomaly,
+		CliqueCount:              f.CliqueCount,
+		CliqueMembershipFraction: f.CliqueMembershipFraction,
+		Confidence:               f.Confidence,
+		ModelVersion:             f.ModelVersion,
+	}
 }
 
 // filterConnections restricts connections to the requested platforms. An empty

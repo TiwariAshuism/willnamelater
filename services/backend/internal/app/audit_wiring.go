@@ -18,6 +18,7 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/ml"
 	"github.com/getnyx/influaudit/backend/internal/oauth"
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
+	"github.com/getnyx/influaudit/backend/internal/platform/storage"
 	reportport "github.com/getnyx/influaudit/backend/internal/report/port"
 	"github.com/getnyx/influaudit/backend/internal/scoring"
 )
@@ -114,6 +115,12 @@ func (a auditFraud) ScoreFraud(ctx context.Context, snapshots []connector.Snapsh
 			if pr, err := a.c.DetectPods(ctx, ml.BuildPodsRequest(snap)); err == nil {
 				anySignal = true
 				out.BotCommentRate = maxF(out.BotCommentRate, pr.CliqueMembershipFraction)
+				// Surface the coordination signals for the deliverable's headline and
+				// the persisted fraud row: the raw count of maximal cliques (primary)
+				// and the membership fraction (secondary). Worst-case across platforms,
+				// so a clean platform never masks a coordinated one.
+				out.CliqueCount = maxI(out.CliqueCount, pr.CliqueCount)
+				out.CliqueMembershipFraction = maxF(out.CliqueMembershipFraction, pr.CliqueMembershipFraction)
 				confs = append(confs, pr.Confidence)
 				versions = appendUnique(versions, pr.ModelVersion)
 			}
@@ -332,9 +339,68 @@ func (r reportNarrativeReader) NarrativeOf(ctx context.Context, auditJobID uuid.
 	return nar, nil
 }
 
+// reportFraudReader adapts audit.Module.FraudResultOf onto the report module's
+// FraudReader port. A job with no stored fraud row (a failed audit, or one that
+// never reached the fraud step) is disclosed as Found=false, not an error, so
+// the report still renders and simply omits the coordination headline.
+type reportFraudReader struct{ a *audit.Module }
+
+func (r reportFraudReader) FraudOf(ctx context.Context, auditJobID uuid.UUID) (reportport.FraudView, error) {
+	fr, found, err := r.a.FraudResultOf(ctx, auditJobID)
+	if err != nil {
+		return reportport.FraudView{}, err
+	}
+	if !found {
+		return reportport.FraudView{Found: false}, nil
+	}
+	return reportport.FraudView{
+		Found:                    true,
+		Present:                  fr.Present,
+		FakeFollowerRate:         fr.FakeFollowerRate,
+		BotCommentRate:           fr.BotCommentRate,
+		EngagementAnomaly:        fr.EngagementAnomaly,
+		CliqueCount:              fr.CliqueCount,
+		CliqueMembershipFraction: fr.CliqueMembershipFraction,
+		Confidence:               fr.Confidence,
+		ModelVersion:             fr.ModelVersion,
+	}, nil
+}
+
+// --- Storage: platform/storage -> reportport.Storage --------------------
+
+// reportStorage adapts the platform S3 client onto the report module's Storage
+// port. The client may be nil when object storage is unconfigured (a dev machine
+// with no S3): rather than fail the boot, the methods then return an unavailable
+// error at call time, so the rest of the API works and only the publish/badge
+// path reports the missing dependency — the same degrade-at-call-time posture the
+// llm module takes for an absent API key.
+type reportStorage struct{ s *storage.Client }
+
+func (r reportStorage) Put(ctx context.Context, key, contentType string, data []byte) error {
+	if r.s == nil {
+		return errs.New(errs.KindUnavailable, "app.storage_unconfigured", "object storage is not configured")
+	}
+	_, err := r.s.PutObject(ctx, key, contentType, data)
+	return err
+}
+
+func (r reportStorage) ShareURL(key string, ttl time.Duration) (string, error) {
+	if r.s == nil {
+		return "", errs.New(errs.KindUnavailable, "app.storage_unconfigured", "object storage is not configured")
+	}
+	return r.s.PresignGetURL(key, ttl)
+}
+
 // --- small numeric / snapshot helpers ------------------------------------
 
 func maxF(a, b float64) float64 {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func maxI(a, b int) int {
 	if a > b {
 		return a
 	}

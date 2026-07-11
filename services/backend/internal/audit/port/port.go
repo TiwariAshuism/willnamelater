@@ -54,8 +54,16 @@ type FraudSummary struct {
 	FakeFollowerRate  float64
 	BotCommentRate    float64
 	EngagementAnomaly float64
-	Confidence        float64
-	ModelVersion      string
+	// CliqueCount is the primary coordination signal: the number of maximal
+	// co-commenter cliques of the model's minimum size. CliqueMembershipFraction
+	// is the secondary signal, the share of analyzed commenters sitting inside
+	// one. Both are surfaced on the deliverable's coordination headline and
+	// persisted per audit; they are not inputs to the composite score, which
+	// consumes only the rates above.
+	CliqueCount              int
+	CliqueMembershipFraction float64
+	Confidence               float64
+	ModelVersion             string
 }
 
 // FraudClient scores coordinated-inauthenticity signals over the snapshots an

@@ -93,6 +93,22 @@ type PlatformResult struct {
 	FetchedAt    *time.Time
 }
 
+// FraudResult is a fraud_result row in domain form: the per-audit fraud and
+// coordination estimate the orchestrator persists after the ml pass. Present is
+// false when a fraud pass ran but produced no signal; a job that never reached
+// the fraud step has no row at all, which the read path distinguishes with a
+// found flag. CliqueCount is the primary coordination signal.
+type FraudResult struct {
+	Present                  bool
+	FakeFollowerRate         float64
+	BotCommentRate           float64
+	EngagementAnomaly        float64
+	CliqueCount              int
+	CliqueMembershipFraction float64
+	Confidence               float64
+	ModelVersion             string
+}
+
 // CreateJobParams is the input to an idempotent job insert.
 type CreateJobParams struct {
 	UserID             uuid.UUID

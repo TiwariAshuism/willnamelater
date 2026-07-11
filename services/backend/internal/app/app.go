@@ -12,6 +12,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"log/slog"
 	"net/http"
 	"os"
 	"time"
@@ -22,11 +23,16 @@ import (
 
 	"github.com/google/uuid"
 
+	"github.com/getnyx/influaudit/backend/internal/admin"
+	"github.com/getnyx/influaudit/backend/internal/alerts"
 	"github.com/getnyx/influaudit/backend/internal/audit"
 	"github.com/getnyx/influaudit/backend/internal/auth"
 	"github.com/getnyx/influaudit/backend/internal/billing"
+	"github.com/getnyx/influaudit/backend/internal/bulkaudit"
+	"github.com/getnyx/influaudit/backend/internal/campaign"
 	"github.com/getnyx/influaudit/backend/internal/connector"
 	"github.com/getnyx/influaudit/backend/internal/connector/csvimport"
+	"github.com/getnyx/influaudit/backend/internal/connector/meta"
 	"github.com/getnyx/influaudit/backend/internal/connector/youtube"
 	"github.com/getnyx/influaudit/backend/internal/dataimport"
 	"github.com/getnyx/influaudit/backend/internal/influencer"
@@ -40,9 +46,11 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
 	"github.com/getnyx/influaudit/backend/internal/platform/pdf"
 	"github.com/getnyx/influaudit/backend/internal/platform/redis"
+	"github.com/getnyx/influaudit/backend/internal/platform/storage"
 	"github.com/getnyx/influaudit/backend/internal/platform/telemetry"
 	"github.com/getnyx/influaudit/backend/internal/report"
 	"github.com/getnyx/influaudit/backend/internal/scoring"
+	"github.com/getnyx/influaudit/backend/internal/whitelabel"
 )
 
 // serviceName identifies this process in traces. Version is stamped at build
@@ -69,6 +77,16 @@ type App struct {
 	// the route tests can build the module graph over an unreachable address.
 	asynqClient *asynq.Client
 
+	// asynqInspector is the read surface of the queue the admin job monitor
+	// reads. Like the client it dials Redis lazily, so it is safe to construct at
+	// boot and over an unreachable address in the route tests.
+	asynqInspector *asynq.Inspector
+
+	// storage is the S3 client the report module publishes PDFs to. It is nil when
+	// object storage is unconfigured (a dev machine with no S3); the report
+	// module's storage port then degrades at call time rather than failing boot.
+	storage *storage.Client
+
 	// Modules are the wired business modules. They are the only things Router
 	// and RegisterTasks mount; nothing else in app knows they exist.
 	Modules Modules
@@ -89,6 +107,15 @@ type Modules struct {
 	Audit      *audit.Module
 	Report     *report.Module
 	DataImport *dataimport.Module
+	Admin      *admin.Module
+
+	// Deferred-feature scaffolds. They are mounted so their shape is a real,
+	// documented part of the contract, but every operation returns 501 until the
+	// feature is built; enabling one is then only a service implementation.
+	Alerts     *alerts.Module
+	BulkAudit  *bulkaudit.Module
+	Whitelabel *whitelabel.Module
+	Campaign   *campaign.Module
 }
 
 // Build constructs every dependency. On any failure it tears down whatever was
@@ -164,6 +191,9 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	if a.asynqClient != nil {
 		a.closers = append(a.closers, func(context.Context) error { return a.asynqClient.Close() })
 	}
+	if a.asynqInspector != nil {
+		a.closers = append(a.closers, func(context.Context) error { return a.asynqInspector.Close() })
+	}
 
 	// Seed the cold-start scoring weights and bootstrap benchmarks. It is
 	// idempotent, so a restart re-seeds nothing, and it is bounded so a slow
@@ -175,6 +205,18 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	defer cancel()
 	if err := a.Modules.Scoring.EnsureBootstrap(seedCtx); err != nil {
 		return nil, a.abort(ctx, fmt.Errorf("seed scoring: %w", err))
+	}
+
+	// Ensure the report bucket exists so the first publish does not 404. This is
+	// best-effort: a dev machine whose S3 (LocalStack) is not up yet must still
+	// boot the rest of the API, and the publish path already surfaces an
+	// unavailable error clearly. A configured-but-unreachable store is logged, not
+	// fatal.
+	if a.storage != nil {
+		if err := a.storage.EnsureBucket(seedCtx); err != nil {
+			slog.WarnContext(ctx, "could not ensure the report storage bucket; publishing will fail until storage is reachable",
+				slog.Any("error", err))
+		}
 	}
 
 	return a, nil
@@ -246,11 +288,13 @@ func (a *App) buildModules(connectors *connector.Config) error {
 
 	// The asynq client is lazy: it dials Redis on first enqueue, not here, so the
 	// audit module can be constructed even when Redis is unreachable.
-	a.asynqClient = asynq.NewClient(asynq.RedisClientOpt{
+	redisOpt := asynq.RedisClientOpt{
 		Addr:     a.Config.Redis.Addr,
 		Password: a.Config.Redis.Password.Reveal(),
 		DB:       a.Config.Redis.DB,
-	})
+	}
+	a.asynqClient = asynq.NewClient(redisOpt)
+	a.asynqInspector = asynq.NewInspector(redisOpt)
 
 	// The audit orchestrator imports no other business module: every collaborator
 	// reaches it through a consumer-side port declared in internal/audit/port,
@@ -270,16 +314,40 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		auditCaller{},
 	)
 
-	// The report module owns no table: it assembles a finished audit's deliverable
-	// (JSON + on-demand PDF) from the audit, scoring, and llm modules, reached
-	// through report ports, and renders the PDF through the platform Gotenberg
-	// client. The pdf client is lazy — it dials Gotenberg on first render — so it
-	// is safe to construct here alongside the route-test module graph.
+	// Object storage for published report PDFs. Constructing the client is pure
+	// (no dial), and it is skipped entirely when no endpoint is configured, so the
+	// route tests build the module graph without S3. A misconfigured (non-empty
+	// but invalid) storage block fails the boot here rather than mid-publish.
+	if a.Config.Storage.Endpoint != "" {
+		sc, err := storage.New(storage.Config{
+			Endpoint:  a.Config.Storage.Endpoint,
+			Region:    a.Config.Storage.Region,
+			Bucket:    a.Config.Storage.Bucket,
+			AccessKey: a.Config.Storage.AccessKey.Reveal(),
+			SecretKey: a.Config.Storage.SecretKey.Reveal(),
+			HTTP:      &http.Client{Timeout: storageHTTPTimeout},
+			PathStyle: true,
+		})
+		if err != nil {
+			return err
+		}
+		a.storage = sc
+	}
+
+	// The report module assembles a finished audit's deliverable (JSON + on-demand
+	// PDF) from the audit, scoring, and llm modules through report ports, renders
+	// the PDF through the platform Gotenberg client, and — for a published report —
+	// persists a durable badge row (its table) and stores the PDF in object
+	// storage. The pdf client is lazy; the storage adapter degrades to an
+	// unavailable error when a.storage is nil.
 	reportMod := report.New(
+		a.Pool,
 		reportAuditReader{a: auditMod},
 		reportScoreReader{s: scoringMod},
 		reportNarrativeReader{l: llmMod},
+		reportFraudReader{a: auditMod},
 		pdf.New(a.Config.Gotenberg.URL, httpDoerForPDF),
+		reportStorage{s: a.storage},
 	)
 
 	// The dataimport module is the real-data ingress for Instagram while its live
@@ -287,6 +355,21 @@ func (a *App) buildModules(connectors *connector.Config) error {
 	// csvimport connector (registered above) serves at audit time. It reaches the
 	// authenticated caller through the same caller adapter the audit module uses.
 	dataImportMod := dataimport.New(a.Pool, auditCaller{})
+
+	// The admin module owns the dispute-review loop (the ML labelling path) and two
+	// operator dashboards. It imports no business module: the audit fraud reader,
+	// the llm cost reader, the asynq inspector, the caller identity, and the admin
+	// guard are all supplied here as adapters. The inspector satisfies the queue
+	// port directly. Filing a dispute needs only a signed-in caller (the same
+	// auditCaller adapter); every other route is gated by the admin guard.
+	adminMod := admin.New(
+		a.Pool,
+		auditCaller{},
+		adminGuard{},
+		adminFraudReader{a: auditMod},
+		adminCostReader{l: llmMod},
+		a.asynqInspector,
+	)
 
 	a.Modules = Modules{
 		Auth:       authMod,
@@ -298,6 +381,11 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		Audit:      auditMod,
 		Report:     reportMod,
 		DataImport: dataImportMod,
+		Admin:      adminMod,
+		Alerts:     alerts.New(),
+		BulkAudit:  bulkaudit.New(),
+		Whitelabel: whitelabel.New(),
+		Campaign:   campaign.New(),
 	}
 	return nil
 }
@@ -355,13 +443,19 @@ type credentials struct {
 //
 // An enabled connector with no builder is a configuration error, caught at boot.
 var connectorBuilders = map[connector.Platform]connectorBuilder{
-	connector.PlatformYouTube: buildYouTube,
+	connector.PlatformYouTube:   buildYouTube,
+	connector.PlatformInstagram: buildInstagram,
 }
 
 // connectorHTTPTimeout bounds a single call to a platform API. The audit
 // orchestrator also imposes a per-platform deadline; this is the inner bound, so
 // one wedged request cannot consume the whole platform's budget.
 const connectorHTTPTimeout = 20 * time.Second
+
+// storageHTTPTimeout bounds a single object-storage call. A report PDF is a
+// modest payload, so this is generous without letting a wedged S3 request hang a
+// publish indefinitely.
+const storageHTTPTimeout = 30 * time.Second
 
 // buildYouTube constructs the YouTube connector. Its API key authenticates
 // public reads, which is what makes it the only platform that needs no app
@@ -370,6 +464,19 @@ func buildYouTube(pc connector.PlatformConfig, creds credentials) (connector.Con
 	return youtube.New(youtube.Config{
 		BaseURL: pc.BaseURL,
 		APIKey:  creds.APIKey,
+		HTTP:    &http.Client{Timeout: connectorHTTPTimeout},
+	})
+}
+
+// buildInstagram constructs the Instagram connector over the Meta Graph API. It
+// carries no static key: each Fetch authenticates with the connected user's
+// OAuth token. The entry stays dormant until instagram is enabled in
+// connectors.yaml (pending Meta app review); until then the csvimport fallback
+// serves Instagram, and this builder is never invoked because buildConnectorRegistry
+// iterates only enabled platforms.
+func buildInstagram(pc connector.PlatformConfig, _ credentials) (connector.Connector, error) {
+	return meta.New(meta.Config{
+		BaseURL: pc.BaseURL,
 		HTTP:    &http.Client{Timeout: connectorHTTPTimeout},
 	})
 }

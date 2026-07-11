@@ -24,4 +24,10 @@ type ReportAPI interface {
 
 	// GET /audits/:id/report.pdf
 	GetReportPDF(ctx context.Context, id string) ([]byte, error)
+
+	// POST /audits/:id/report/publish
+	PublishReport(ctx context.Context, id string) (render.PublishResult, error)
+
+	// GET /reports/:slug
+	GetPublicBadge(ctx context.Context, slug string) (render.PublicBadge, error)
 }

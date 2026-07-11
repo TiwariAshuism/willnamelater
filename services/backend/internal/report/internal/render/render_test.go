@@ -23,6 +23,16 @@ func fullReport() Report {
 				{Name: "authenticity", Value: 74.1, Confidence: 0.5},
 			},
 		},
+		Fraud: FraudBlock{
+			Available:                true,
+			CliqueCount:              7,
+			CliqueMembershipFraction: 0.42,
+			FakeFollowerRate:         0.11,
+			BotCommentRate:           0.42,
+			EngagementAnomaly:        0.2,
+			Confidence:               0.6,
+			ModelVersion:             "clique-v1",
+		},
 		NarrativeAvailable: true,
 		Narrative: Narrative{
 			Summary:          "Your engagement is below the beauty micro benchmark.",
@@ -41,12 +51,15 @@ func TestHTMLRendersScoreAndNarrative(t *testing.T) {
 	html := string(out)
 
 	for _, want := range []string{
-		"82.4",                    // overall
-		"74.1",                    // authenticity
-		"beauty",                  // niche
-		"industry-bootstrap v1",   // benchmark provenance disclosed
-		"estimates, not measured", // fraud-is-an-estimate labelling
-		"Low comments",            // weakness
+		"82.4",                            // overall
+		"74.1",                            // authenticity
+		"beauty",                          // niche
+		"industry-bootstrap v1",           // benchmark provenance disclosed
+		"estimates, not measured",         // fraud-is-an-estimate labelling
+		"Authenticity &amp; coordination", // fraud headline section
+		"Coordinated commenter cliques",   // clique-count row
+		"clique-v1",                       // fraud model provenance
+		"Low comments",                    // weakness
 		"Ask questions in captions",
 		"Post Reels 3x/week",
 		"clean-beauty",

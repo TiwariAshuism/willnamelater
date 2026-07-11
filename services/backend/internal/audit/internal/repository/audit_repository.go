@@ -232,6 +232,65 @@ func (r *PostgresRepository) UpsertResult(ctx context.Context, jobID uuid.UUID, 
 	return nil
 }
 
+// fraudColumns is the fraud_result projection, in the order UpsertFraudResult
+// writes and GetFraudResult scans.
+const fraudColumns = "present, fake_follower_rate, bot_comment_rate, engagement_anomaly, " +
+	"clique_count, clique_membership_fraction, confidence, model_version"
+
+// UpsertFraudResult writes the per-audit fraud estimate keyed on the job id,
+// overwriting a prior run so a re-run never duplicates the row.
+func (r *PostgresRepository) UpsertFraudResult(ctx context.Context, jobID uuid.UUID, fr model.FraudResult) error {
+	const q = "INSERT INTO fraud_result " +
+		"(audit_job_id, " + fraudColumns + ") " +
+		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) " +
+		"ON CONFLICT (audit_job_id) DO UPDATE SET " +
+		"present = EXCLUDED.present, fake_follower_rate = EXCLUDED.fake_follower_rate, " +
+		"bot_comment_rate = EXCLUDED.bot_comment_rate, engagement_anomaly = EXCLUDED.engagement_anomaly, " +
+		"clique_count = EXCLUDED.clique_count, clique_membership_fraction = EXCLUDED.clique_membership_fraction, " +
+		"confidence = EXCLUDED.confidence, model_version = EXCLUDED.model_version"
+
+	_, err := r.pool.Exec(ctx, q,
+		jobID,
+		fr.Present,
+		fr.FakeFollowerRate,
+		fr.BotCommentRate,
+		fr.EngagementAnomaly,
+		fr.CliqueCount,
+		fr.CliqueMembershipFraction,
+		fr.Confidence,
+		fr.ModelVersion,
+	)
+	if err != nil {
+		return errs.Wrap(err, errs.KindInternal, "audit.fraud_write_failed", "could not persist fraud result")
+	}
+	return nil
+}
+
+// GetFraudResult returns the stored fraud estimate for a job. found is false,
+// with no error, when no fraud row was written for it.
+func (r *PostgresRepository) GetFraudResult(ctx context.Context, jobID uuid.UUID) (model.FraudResult, bool, error) {
+	const q = "SELECT " + fraudColumns + " FROM fraud_result WHERE audit_job_id = $1"
+
+	var fr model.FraudResult
+	err := r.pool.QueryRow(ctx, q, jobID).Scan(
+		&fr.Present,
+		&fr.FakeFollowerRate,
+		&fr.BotCommentRate,
+		&fr.EngagementAnomaly,
+		&fr.CliqueCount,
+		&fr.CliqueMembershipFraction,
+		&fr.Confidence,
+		&fr.ModelVersion,
+	)
+	if err != nil {
+		if notFound(err) {
+			return model.FraudResult{}, false, nil
+		}
+		return model.FraudResult{}, false, errs.Wrap(err, errs.KindInternal, "audit.fraud_read_failed", "could not load fraud result")
+	}
+	return fr, true, nil
+}
+
 // scanJob reads one audit_job row into a domain Job.
 func scanJob(row rowScanner) (model.Job, error) {
 	var (

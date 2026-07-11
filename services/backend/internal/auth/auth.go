@@ -74,3 +74,13 @@ func UserID(ctx context.Context) (uuid.UUID, bool) {
 	id, ok := authctx.From(ctx)
 	return id.UserID, ok
 }
+
+// Role returns the authenticated caller's role from ctx, and false when the
+// request was not authenticated. Like UserID it reads the identity the auth
+// middleware placed under the unexported authctx key, so no package outside this
+// module can forge a role. The composition root composes it with UserID to
+// satisfy a collaborating module's admin-guard port.
+func Role(ctx context.Context) (string, bool) {
+	id, ok := authctx.From(ctx)
+	return id.Role, ok
+}

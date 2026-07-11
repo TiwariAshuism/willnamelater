@@ -22,6 +22,15 @@ x-backend-env: &backend-env
   INFLUAUDIT_REDIS__ADDR: redis:6379
   INFLUAUDIT_GOTENBERG__URL: http://gotenberg:3000
   INFLUAUDIT_ML__BASE_URL: http://ml:8000
+  # Object storage for published report PDFs. In dev this is LocalStack S3,
+  # reached by service name from inside the compose network. The credentials are
+  # LocalStack's well-known dummies (test/test) — they are not secrets and never
+  # reach a real AWS account. The app ensures the bucket exists at boot.
+  INFLUAUDIT_STORAGE__ENDPOINT: ${INFLUAUDIT_STORAGE__ENDPOINT:-http://localstack:4566}
+  INFLUAUDIT_STORAGE__REGION: ${INFLUAUDIT_STORAGE__REGION:-us-east-1}
+  INFLUAUDIT_STORAGE__BUCKET: ${INFLUAUDIT_STORAGE__BUCKET:-influaudit}
+  INFLUAUDIT_STORAGE__ACCESS_KEY: ${INFLUAUDIT_STORAGE__ACCESS_KEY:-test}
+  INFLUAUDIT_STORAGE__SECRET_KEY: ${INFLUAUDIT_STORAGE__SECRET_KEY:-test}
   # A non-secret, well-known DEV key so the stack comes up out of the box. The
   # api refuses to boot without one: oauth token sealing and commenter
   # pseudonymization both depend on it. config.Validate rejects prod without a
@@ -81,6 +90,24 @@ services:
       retries: 10
       start_period: 5s
 
+  # S3-compatible object storage for dev. The api ensures the report bucket at
+  # boot, so no init container is needed. Credentials are LocalStack's dummies.
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: ${INFLUAUDIT_STORAGE__REGION:-us-east-1}
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    volumes:
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal s3 ls || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
   gotenberg:
     image: gotenberg/gotenberg:8
     ports:
@@ -132,6 +159,8 @@ services:
         condition: service_healthy
       ml:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     healthcheck:
@@ -159,6 +188,8 @@ services:
         condition: service_healthy
       ml:
         condition: service_healthy
+      localstack:
+        condition: service_healthy
       migrate:
         condition: service_completed_successfully
     restart: unless-stopped
@@ -166,3 +197,4 @@ services:
 volumes:
   postgres-data:
   redis-data:
+  localstack-data:

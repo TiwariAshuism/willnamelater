@@ -1,5 +1,261 @@
 components:
   schemas:
+    admin.CostDashboardResponse:
+      properties:
+        by_model:
+          items:
+            $ref: "#/components/schemas/admin.CostResponse"
+          type: array
+        cache_hit_rate:
+          type: number
+        cached_generations:
+          type: integer
+        total_cost_micros:
+          type: integer
+        total_cost_usd:
+          type: number
+        total_generations:
+          type: integer
+        total_input_tokens:
+          type: integer
+        total_output_tokens:
+          type: integer
+      required:
+      - by_model
+      - cache_hit_rate
+      - cached_generations
+      - total_cost_micros
+      - total_cost_usd
+      - total_generations
+      - total_input_tokens
+      - total_output_tokens
+      type: object
+    admin.CostResponse:
+      properties:
+        cached_generations:
+          type: integer
+        cost_micros:
+          type: integer
+        cost_usd:
+          type: number
+        generations:
+          type: integer
+        input_tokens:
+          type: integer
+        model:
+          type: string
+        output_tokens:
+          type: integer
+      required:
+      - cached_generations
+      - cost_micros
+      - cost_usd
+      - generations
+      - input_tokens
+      - model
+      - output_tokens
+      type: object
+    admin.DisputeResponse:
+      properties:
+        audit_job_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        raised_by:
+          type: string
+        reason:
+          type: string
+        resolution:
+          type: string
+        resolved_at:
+          format: date-time
+          nullable: true
+          type: string
+        resolved_by:
+          type: string
+        status:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - audit_job_id
+      - created_at
+      - id
+      - reason
+      - status
+      - updated_at
+      type: object
+    admin.FileDisputeRequest:
+      properties:
+        reason:
+          type: string
+      required:
+      - reason
+      type: object
+    admin.FraudFeatures:
+      properties:
+        bot_comment_rate:
+          type: number
+        clique_count:
+          type: integer
+        clique_membership_fraction:
+          type: number
+        confidence:
+          type: number
+        engagement_anomaly:
+          type: number
+        fake_follower_rate:
+          type: number
+        model_version:
+          type: string
+        present:
+          type: boolean
+      required:
+      - bot_comment_rate
+      - clique_count
+      - clique_membership_fraction
+      - confidence
+      - engagement_anomaly
+      - fake_follower_rate
+      - model_version
+      - present
+      type: object
+    admin.LabelExportResponse:
+      properties:
+        count:
+          type: integer
+        labels:
+          items:
+            $ref: "#/components/schemas/admin.TrainingLabel"
+          type: array
+      required:
+      - count
+      - labels
+      type: object
+    admin.QueueMonitorResponse:
+      properties:
+        queues:
+          items:
+            $ref: "#/components/schemas/admin.QueueSnapshot"
+          type: array
+      required:
+      - queues
+      type: object
+    admin.QueueSnapshot:
+      properties:
+        active:
+          type: integer
+        archived:
+          type: integer
+        completed:
+          type: integer
+        failed:
+          type: integer
+        latency_ms:
+          type: integer
+        paused:
+          type: boolean
+        pending:
+          type: integer
+        processed:
+          type: integer
+        queue:
+          type: string
+        retry:
+          type: integer
+        scheduled:
+          type: integer
+        size:
+          type: integer
+      required:
+      - active
+      - archived
+      - completed
+      - failed
+      - latency_ms
+      - paused
+      - pending
+      - processed
+      - queue
+      - retry
+      - scheduled
+      - size
+      type: object
+    admin.ResolveDisputeRequest:
+      properties:
+        decision:
+          type: string
+        notes:
+          type: string
+      required:
+      - decision
+      type: object
+    admin.TrainingLabel:
+      properties:
+        audit_job_id:
+          type: string
+        dispute_id:
+          type: string
+        features:
+          $ref: "#/components/schemas/admin.FraudFeatures"
+        has_features:
+          type: boolean
+        label:
+          type: boolean
+        resolved_at:
+          format: date-time
+          type: string
+      required:
+      - audit_job_id
+      - dispute_id
+      - features
+      - has_features
+      - label
+      - resolved_at
+      type: object
+    alerts.AlertResponse:
+      properties:
+        comparator:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        influencer_id:
+          type: string
+        metric:
+          type: string
+        threshold:
+          type: number
+      required:
+      - comparator
+      - created_at
+      - id
+      - influencer_id
+      - metric
+      - threshold
+      type: object
+    alerts.CreateAlertRequest:
+      properties:
+        comparator:
+          type: string
+        influencer_id:
+          type: string
+        metric:
+          type: string
+        threshold:
+          type: number
+      required:
+      - comparator
+      - influencer_id
+      - metric
+      - threshold
+      type: object
     audit.AuditResponse:
       properties:
         error_code:
@@ -212,6 +468,72 @@ components:
       - status
       type: object
     billing.WebhookRequest:
+      type: object
+    bulkaudit.BulkAuditResponse:
+      properties:
+        completed:
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        platform:
+          type: string
+        status:
+          type: string
+        total:
+          type: integer
+      required:
+      - completed
+      - created_at
+      - id
+      - platform
+      - status
+      - total
+      type: object
+    bulkaudit.CreateBulkAuditRequest:
+      properties:
+        handles:
+          items:
+            type: string
+          type: array
+        platform:
+          type: string
+      required:
+      - handles
+      - platform
+      type: object
+    campaign.CampaignResponse:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        influencer_ids:
+          items:
+            type: string
+          type: array
+        name:
+          type: string
+      required:
+      - created_at
+      - id
+      - influencer_ids
+      - name
+      type: object
+    campaign.CreateCampaignRequest:
+      properties:
+        influencer_ids:
+          items:
+            type: string
+          type: array
+        name:
+          type: string
+      required:
+      - influencer_ids
+      - name
       type: object
     dataimport.ImportRequest:
       properties:
@@ -560,6 +882,34 @@ components:
       - provider_account_id
       - scopes
       type: object
+    report.FraudBlock:
+      properties:
+        available:
+          type: boolean
+        bot_comment_rate:
+          type: number
+        clique_count:
+          type: integer
+        clique_membership_fraction:
+          type: number
+        confidence:
+          type: number
+        engagement_anomaly:
+          type: number
+        fake_follower_rate:
+          type: number
+        model_version:
+          type: string
+      required:
+      - available
+      - bot_comment_rate
+      - clique_count
+      - clique_membership_fraction
+      - confidence
+      - engagement_anomaly
+      - fake_follower_rate
+      - model_version
+      type: object
     report.Narrative:
       properties:
         brand_fit:
@@ -586,6 +936,8 @@ components:
           type: string
         finished_at:
           type: string
+        fraud:
+          $ref: "#/components/schemas/report.FraudBlock"
         influencer_id:
           type: string
         narrative:
@@ -602,6 +954,7 @@ components:
           type: string
       required:
       - audit_id
+      - fraud
       - influencer_id
       - narrative
       - narrative_available
@@ -739,11 +1092,150 @@ components:
       - confidence
       - value
       type: object
+    whitelabel.UpdateWhitelabelRequest:
+      properties:
+        brand_name:
+          type: string
+        custom_domain:
+          type: string
+        logo_url:
+          type: string
+        primary_color:
+          type: string
+      required:
+      - brand_name
+      - custom_domain
+      - logo_url
+      - primary_color
+      type: object
+    whitelabel.WhitelabelResponse:
+      properties:
+        brand_name:
+          type: string
+        custom_domain:
+          type: string
+        logo_url:
+          type: string
+        primary_color:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - brand_name
+      - custom_domain
+      - logo_url
+      - primary_color
+      - updated_at
+      type: object
 info:
   title: InfluAudit API
   version: 0.1.0
 openapi: 3.0.3
 paths:
+  /admin/costs:
+    get:
+      operationId: CostDashboard
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.CostDashboardResponse"
+          description: OK
+  /admin/disputes:
+    get:
+      operationId: ListDisputeQueue
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/admin.DisputeResponse"
+                type: array
+          description: OK
+  /admin/disputes/{id}/resolve:
+    post:
+      operationId: ResolveDispute
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/admin.ResolveDisputeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.DisputeResponse"
+          description: OK
+  /admin/queues:
+    get:
+      operationId: QueueMonitor
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.QueueMonitorResponse"
+          description: OK
+  /admin/training/labels:
+    get:
+      operationId: ExportLabels
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.LabelExportResponse"
+          description: OK
+  /alerts:
+    get:
+      operationId: ListAlerts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/alerts.AlertResponse"
+                type: array
+          description: OK
+    post:
+      operationId: CreateAlert
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/alerts.CreateAlertRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/alerts.AlertResponse"
+          description: OK
+  /alerts/{id}:
+    delete:
+      operationId: DeleteAlert
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
   /audits:
     get:
       operationId: ListAudits
@@ -786,6 +1278,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/audit.AuditResponse"
+          description: OK
+  /audits/{id}/disputes:
+    post:
+      operationId: FileDispute
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/admin.FileDisputeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.DisputeResponse"
           description: OK
   /audits/{id}/report:
     get:
@@ -939,6 +1453,92 @@ paths:
         required: true
       responses:
         "200":
+          description: OK
+  /bulk-audits:
+    get:
+      operationId: ListBulkAudits
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/bulkaudit.BulkAuditResponse"
+                type: array
+          description: OK
+    post:
+      operationId: CreateBulkAudit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/bulkaudit.CreateBulkAuditRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/bulkaudit.BulkAuditResponse"
+          description: OK
+  /bulk-audits/{id}:
+    get:
+      operationId: GetBulkAudit
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/bulkaudit.BulkAuditResponse"
+          description: OK
+  /campaigns:
+    get:
+      operationId: ListCampaigns
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/campaign.CampaignResponse"
+                type: array
+          description: OK
+    post:
+      operationId: CreateCampaign
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/campaign.CreateCampaignRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/campaign.CampaignResponse"
+          description: OK
+  /campaigns/{id}:
+    get:
+      operationId: GetCampaign
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/campaign.CampaignResponse"
           description: OK
   /imports/instagram:
     post:
@@ -1196,6 +1796,31 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/oauth.ConnectionResponse"
+          description: OK
+  /whitelabel:
+    get:
+      operationId: GetWhitelabel
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/whitelabel.WhitelabelResponse"
+          description: OK
+    put:
+      operationId: UpdateWhitelabel
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/whitelabel.UpdateWhitelabelRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/whitelabel.WhitelabelResponse"
           description: OK
 servers:
 - url: /v1

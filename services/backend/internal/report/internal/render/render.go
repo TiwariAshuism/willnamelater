@@ -21,11 +21,32 @@ type Report struct {
 	Status       string     `json:"status"`
 	Platforms    []string   `json:"platforms"`
 	Score        ScoreBlock `json:"score"`
+	// Fraud is the coordinated-inauthenticity headline. FraudBlock.Available is
+	// false when no fraud pass produced a signal, in which case the block is
+	// omitted rather than shown as a misleading zero.
+	Fraud FraudBlock `json:"fraud"`
 	// Narrative is the advisory content. NarrativeAvailable is false when the
 	// ml/llm step was skipped or failed; the report then shows the score alone.
 	Narrative          Narrative `json:"narrative"`
 	NarrativeAvailable bool      `json:"narrative_available"`
 	FinishedAt         string    `json:"finished_at,omitempty"`
+}
+
+// FraudBlock is the coordinated-inauthenticity estimate presented as a headline.
+// Available is false when no fraud pass produced a signal; the report then omits
+// the block rather than showing a misleading zero. Every figure here is a model
+// estimate, labelled as such in the rendered document. CliqueCount (maximal
+// commenter cliques of the model's minimum size) is the primary signal; the
+// rates are fractions in [0,1] rendered as percentages.
+type FraudBlock struct {
+	Available                bool    `json:"available"`
+	CliqueCount              int     `json:"clique_count"`
+	CliqueMembershipFraction float64 `json:"clique_membership_fraction"`
+	FakeFollowerRate         float64 `json:"fake_follower_rate"`
+	BotCommentRate           float64 `json:"bot_comment_rate"`
+	EngagementAnomaly        float64 `json:"engagement_anomaly"`
+	Confidence               float64 `json:"confidence"`
+	ModelVersion             string  `json:"model_version"`
 }
 
 // ScoreBlock is the composite score presented in the report. Available is false
@@ -80,6 +101,11 @@ func HTML(r Report) ([]byte, error) {
 var reportTemplate = template.Must(template.New("report").Funcs(template.FuncMap{
 	"pct": func(f float64) string {
 		return template.HTMLEscapeString(formatOne(f))
+	},
+	// frac formats a fraction in [0,1] as a percentage with one decimal, for the
+	// fraud estimates (which are fractions, unlike the 0-100 subscores).
+	"frac": func(f float64) string {
+		return template.HTMLEscapeString(formatOne(f * 100))
 	},
 }).Parse(reportHTML))
 
@@ -171,6 +197,21 @@ const reportHTML = `<!doctype html>
   </table>
   {{else}}
   <div class="banner">This audit produced no score. No platform returned usable data, so no number is shown rather than an invented one.</div>
+  {{end}}
+
+  {{if .Fraud.Available}}
+  <h2>Authenticity &amp; coordination</h2>
+  <p class="note">Model estimates, not measured percentages. Model {{.Fraud.ModelVersion}} &middot; confidence {{frac .Fraud.Confidence}}%.</p>
+  <table>
+    <thead><tr><th>Signal</th><th>Estimate</th></tr></thead>
+    <tbody>
+      <tr><td>Coordinated commenter cliques</td><td>{{.Fraud.CliqueCount}}</td></tr>
+      <tr><td>Commenters inside a coordinated clique</td><td>{{frac .Fraud.CliqueMembershipFraction}}%</td></tr>
+      <tr><td>Estimated fake-follower rate</td><td>{{frac .Fraud.FakeFollowerRate}}%</td></tr>
+      <tr><td>Estimated bot-comment rate</td><td>{{frac .Fraud.BotCommentRate}}%</td></tr>
+      <tr><td>Engagement anomaly</td><td>{{frac .Fraud.EngagementAnomaly}}%</td></tr>
+    </tbody>
+  </table>
   {{end}}
 
   {{if .NarrativeAvailable}}

@@ -13,28 +13,40 @@ package report
 import (
 	"github.com/gin-gonic/gin"
 
+	"github.com/getnyx/influaudit/backend/internal/platform/db"
 	"github.com/getnyx/influaudit/backend/internal/report/internal/handler"
+	"github.com/getnyx/influaudit/backend/internal/report/internal/repository"
 	"github.com/getnyx/influaudit/backend/internal/report/internal/service"
 	"github.com/getnyx/influaudit/backend/internal/report/port"
 )
 
-// Module is the wired report module. Construct it with New and mount it with
-// RegisterRoutes.
+// Module is the wired report module. Construct it with New, mount its
+// caller-scoped routes with RegisterRoutes, and its public badge route with
+// RegisterPublicRoutes.
 type Module struct {
 	handler *handler.Handler
 }
 
-// New wires the module. Each argument is a consumer-side port (declared in
+// New wires the module. pool backs the report table (the durable published-badge
+// record); every remaining argument is a consumer-side port (declared in
 // internal/report/port) the composition root satisfies with an adapter over the
-// audit, scoring, llm, and platform-PDF implementations.
-func New(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, pdf port.PDFRenderer) *Module {
-	svc := service.New(audit, score, narrative, pdf)
+// audit, scoring, llm, platform-PDF, and object-storage implementations.
+func New(pool *db.Pool, audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, storage port.Storage) *Module {
+	svc := service.New(audit, score, narrative, fraud, pdf, repository.New(pool), storage)
 	return &Module{handler: handler.New(svc)}
 }
 
-// RegisterRoutes mounts the report endpoints on rg (typically the protected /v1
-// group). Both routes act on behalf of a signed-in caller, so the composition
-// root must pass a group carrying the auth middleware.
+// RegisterRoutes mounts the caller-scoped report endpoints on rg (typically the
+// protected /v1 group). Every route acts on behalf of a signed-in caller, so the
+// composition root must pass a group carrying the auth middleware.
 func (m *Module) RegisterRoutes(rg gin.IRouter) {
 	m.handler.Register(rg)
+}
+
+// RegisterPublicRoutes mounts the unauthenticated public badge route on rg
+// (typically the public /v1 group, with no auth middleware). A badge is a
+// shareable public credential; it exposes only the frozen snapshot captured at
+// publish time.
+func (m *Module) RegisterPublicRoutes(rg gin.IRouter) {
+	m.handler.RegisterPublic(rg)
 }

@@ -122,3 +122,39 @@ func (m *Module) AuditView(ctx context.Context, auditID string) (View, error) {
 	}
 	return view, nil
 }
+
+// FraudView is the per-audit fraud / coordination estimate in the shape the
+// report and admin modules consume. Present is false when a fraud pass ran but
+// found no signal; the found return of FraudResultOf distinguishes that from a
+// job that never reached the fraud step and has no stored row.
+type FraudView struct {
+	Present                  bool
+	FakeFollowerRate         float64
+	BotCommentRate           float64
+	EngagementAnomaly        float64
+	CliqueCount              int
+	CliqueMembershipFraction float64
+	Confidence               float64
+	ModelVersion             string
+}
+
+// FraudResultOf returns the stored fraud estimate for an audit job. found is
+// false when no fraud row was written for it. The composition root adapts it
+// onto the report module's FraudReader port (and the admin module's). It is not
+// an HTTP route and not caller-scoped; consumers authorize the audit first.
+func (m *Module) FraudResultOf(ctx context.Context, auditJobID uuid.UUID) (FraudView, bool, error) {
+	fr, found, err := m.svc.FraudResultOf(ctx, auditJobID)
+	if err != nil || !found {
+		return FraudView{}, found, err
+	}
+	return FraudView{
+		Present:                  fr.Present,
+		FakeFollowerRate:         fr.FakeFollowerRate,
+		BotCommentRate:           fr.BotCommentRate,
+		EngagementAnomaly:        fr.EngagementAnomaly,
+		CliqueCount:              fr.CliqueCount,
+		CliqueMembershipFraction: fr.CliqueMembershipFraction,
+		Confidence:               fr.Confidence,
+		ModelVersion:             fr.ModelVersion,
+	}, true, nil
+}
