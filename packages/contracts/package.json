@@ -13,7 +13,7 @@
     "gen"
   ],
   "scripts": {
-    "generate": "openapi-typescript ./openapi/influaudit.yaml --output ./gen/ts/schema.d.ts --root-types --root-types-no-schema-prefix",
+    "generate": "openapi-typescript ./openapi/influaudit.yaml --output ./gen/ts/schema.d.ts",
     "clean": "rimraf ./gen"
   },
   "devDependencies": {

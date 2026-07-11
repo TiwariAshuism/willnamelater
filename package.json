@@ -1,0 +1,16 @@
+{
+  "name": "influaudit-workspace",
+  "version": "0.0.0",
+  "private": true,
+  "packageManager": "pnpm@10.32.1",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "contracts:generate": "pnpm --filter @influaudit/contracts generate",
+    "web:dev": "pnpm --filter @influaudit/web dev",
+    "web:build": "pnpm --filter @influaudit/web build",
+    "web:test": "pnpm --filter @influaudit/web test",
+    "web:typecheck": "pnpm --filter @influaudit/web typecheck"
+  }
+}

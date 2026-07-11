@@ -930,6 +930,43 @@ components:
       - summary
       - weakness_fix_pairs
       type: object
+    report.PublicBadge:
+      properties:
+        authenticity:
+          type: number
+        benchmark_label:
+          type: string
+        generated_at:
+          type: string
+        handle:
+          type: string
+        niche:
+          type: string
+        overall:
+          type: number
+        pdf_url:
+          type: string
+        tier:
+          type: string
+      required:
+      - authenticity
+      - overall
+      type: object
+    report.PublishResult:
+      properties:
+        badge_url:
+          type: string
+        expires_at:
+          type: string
+        pdf_url:
+          type: string
+        public_slug:
+          type: string
+      required:
+      - badge_url
+      - pdf_url
+      - public_slug
+      type: object
     report.Report:
       properties:
         audit_id:
@@ -1333,6 +1370,22 @@ paths:
               schema:
                 format: byte
                 type: string
+          description: OK
+  /audits/{id}/report/publish:
+    post:
+      operationId: PublishReport
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.PublishResult"
           description: OK
   /auth/login:
     post:
@@ -1796,6 +1849,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/oauth.ConnectionResponse"
+          description: OK
+  /reports/{slug}:
+    get:
+      operationId: GetPublicBadge
+      parameters:
+      - in: path
+        name: slug
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.PublicBadge"
           description: OK
   /whitelabel:
     get:
