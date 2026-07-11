@@ -8,6 +8,11 @@ const navItems = [
   { href: "/connections", label: "Connections" },
 ];
 
+// The admin area is shown only to admins; the backend also enforces the role on
+// every /admin request, so the nav gate is convenience, not the security
+// boundary.
+const adminItem = { href: "/admin", label: "Admin" };
+
 export default async function DashboardLayout({
   children,
 }: {
@@ -15,6 +20,9 @@ export default async function DashboardLayout({
 }) {
   // Redirects to /login if the session is missing or rejected.
   const user = await getCurrentUser();
+
+  const items =
+    user.role === "admin" ? [...navItems, adminItem] : navItems;
 
   return (
     <div className="min-h-screen">
@@ -25,7 +33,7 @@ export default async function DashboardLayout({
               InfluAudit
             </Link>
             <nav className="flex items-center gap-1 text-sm">
-              {navItems.map((item) => (
+              {items.map((item) => (
                 <Link
                   key={item.href}
                   href={item.href}

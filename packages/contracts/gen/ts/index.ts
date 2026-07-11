@@ -31,6 +31,8 @@ export type Report = Schemas["report.Report"];
 export type ReportScoreBlock = Schemas["report.ScoreBlock"];
 export type ReportFraudBlock = Schemas["report.FraudBlock"];
 export type ReportNarrative = Schemas["report.Narrative"];
+export type PublishResult = Schemas["report.PublishResult"];
+export type PublicBadge = Schemas["report.PublicBadge"];
 
 // --- scoring ---
 export type ScoreResponse = Schemas["scoring.ScoreResponse"];
@@ -45,3 +47,14 @@ export type ConnectionResponse = Schemas["oauth.ConnectionResponse"];
 export type InfluencerResponse = Schemas["influencer.InfluencerResponse"];
 export type CreateInfluencerRequest = Schemas["influencer.CreateInfluencerRequest"];
 export type HandleResponse = Schemas["influencer.HandleResponse"];
+
+// --- admin ---
+export type DisputeResponse = Schemas["admin.DisputeResponse"];
+export type FileDisputeRequest = Schemas["admin.FileDisputeRequest"];
+export type ResolveDisputeRequest = Schemas["admin.ResolveDisputeRequest"];
+export type CostDashboardResponse = Schemas["admin.CostDashboardResponse"];
+export type CostResponse = Schemas["admin.CostResponse"];
+export type QueueMonitorResponse = Schemas["admin.QueueMonitorResponse"];
+export type QueueSnapshot = Schemas["admin.QueueSnapshot"];
+export type LabelExportResponse = Schemas["admin.LabelExportResponse"];
+export type TrainingLabel = Schemas["admin.TrainingLabel"];

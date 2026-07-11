@@ -11,6 +11,7 @@ import { AuditAutoRefresh } from "@/components/audits/AuditAutoRefresh";
 import { ScoreTrendChart } from "@/components/audits/ScoreTrendChart";
 import { ReportView } from "@/components/audits/ReportView";
 import { DownloadPdfButton } from "@/components/audits/DownloadPdfButton";
+import { ShareReport } from "@/components/audits/ShareReport";
 import type { Report, ScorePoint } from "@influaudit/contracts";
 
 const PENDING = new Set(["queued", "running"]);
@@ -111,6 +112,18 @@ export default async function AuditDetailPage({
 
       {/* Full report */}
       {report && <ReportView report={report} />}
+
+      {/* Publish a shareable public badge (a scored report only). */}
+      {report && report.score?.available && (
+        <Card>
+          <CardTitle className="mb-3">Share</CardTitle>
+          <p className="mb-3 text-sm text-[var(--muted)]">
+            Publish a public badge others can view without signing in — the score
+            and its context only, never your private recommendations.
+          </p>
+          <ShareReport auditId={audit.id} />
+        </Card>
+      )}
 
       {isPending && (
         <p className="text-sm text-[var(--ink-secondary)]">
