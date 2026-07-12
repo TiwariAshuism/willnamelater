@@ -38,6 +38,12 @@ func seedQueuedJob(h *harness) model.Job {
 	return job
 }
 
+// f64p / intp take the address of a literal. Every fraud measurement is a
+// pointer now: nil means "we could not measure this", and 0 means "we measured
+// it and it was zero". A test that wants a measurement must spell it out.
+func f64p(v float64) *float64 { return &v }
+func intp(v int) *int         { return &v }
+
 // runTask drives ProcessRun for a job, mirroring what the worker does on
 // delivery.
 func runTask(t *testing.T, h *harness, jobID uuid.UUID) {
@@ -258,10 +264,15 @@ func TestRun_PersistsFraudResultWithCliqueCount(t *testing.T) {
 		connector.PlatformYouTube: fakeConnector{platform: connector.PlatformYouTube, snap: goodSnapshot(connector.PlatformYouTube)},
 	}
 	h := newHarness([]port.Connection{connectionFor(connector.PlatformYouTube)}, registered)
+	// EXPECTATION CHANGED: the summary no longer carries FakeFollowerRate (it was
+	// the composite risk score renamed — no follower list is ever fetched) or
+	// BotCommentRate (a bit-for-bit duplicate of CliqueMembershipFraction). The
+	// honest composite is RiskScore, and every measurement is a pointer.
 	h.fraud.summary = port.FraudSummary{
 		Present:                  true,
-		CliqueCount:              7,
-		CliqueMembershipFraction: 0.42,
+		RiskScore:                f64p(63.5),
+		CliqueCount:              intp(7),
+		CliqueMembershipFraction: f64p(0.42),
 		Confidence:               0.6,
 		ModelVersion:             "clique-v1",
 	}
@@ -273,8 +284,114 @@ func TestRun_PersistsFraudResultWithCliqueCount(t *testing.T) {
 	if !ok {
 		t.Fatal("fraud result was not persisted for the audit")
 	}
-	if fr.CliqueCount != 7 || fr.CliqueMembershipFraction != 0.42 || fr.ModelVersion != "clique-v1" {
+	if fr.CliqueCount == nil || *fr.CliqueCount != 7 {
+		t.Fatalf("persisted clique_count = %v, want 7", fr.CliqueCount)
+	}
+	if fr.CliqueMembershipFraction == nil || *fr.CliqueMembershipFraction != 0.42 {
+		t.Fatalf("persisted clique_membership_fraction = %v, want 0.42", fr.CliqueMembershipFraction)
+	}
+	if fr.RiskScore == nil || *fr.RiskScore != 63.5 {
+		t.Fatalf("persisted risk_score = %v, want 63.5", fr.RiskScore)
+	}
+	if fr.ModelVersion != "clique-v1" {
 		t.Fatalf("persisted fraud = %+v, want the clique signals surfaced", fr)
+	}
+}
+
+// The fraud row feeds both the brand's deliverable and the training feature
+// store, so an unmeasured signal must reach the database as NULL. A 0 would
+// assert "we analyzed the commenters and found no coordination" — a claim nobody
+// made. This is the common case: Instagram and CSV audits pull no comment events
+// at all, so the clique model never runs.
+func TestToFraudModel_UnobservedSignalsPersistAsNil(t *testing.T) {
+	// A fraud pass that ran and produced a risk score, but could analyze no
+	// commenters and had no benchmark to compare engagement against.
+	fr := toFraudModel(port.FraudSummary{
+		Present:      true,
+		RiskScore:    f64p(41),
+		Confidence:   0.25,
+		ModelVersion: "risk-v2",
+	})
+
+	if fr.CliqueCount != nil {
+		t.Errorf("clique_count = %d, want nil: no commenter was ever analyzed", *fr.CliqueCount)
+	}
+	if fr.CliqueMembershipFraction != nil {
+		t.Errorf("clique_membership_fraction = %v, want nil", *fr.CliqueMembershipFraction)
+	}
+	if fr.EngagementAnomaly != nil {
+		t.Errorf("engagement_anomaly = %v, want nil: no benchmark was supplied", *fr.EngagementAnomaly)
+	}
+	// What WAS measured still lands, unchanged.
+	if fr.RiskScore == nil || *fr.RiskScore != 41 {
+		t.Errorf("risk_score = %v, want 41 carried through", fr.RiskScore)
+	}
+}
+
+// The mirror of the rule above: 0 is a real measurement ("we looked at the
+// commenter graph and found no clique") and must survive as 0, never be
+// collapsed back into absence.
+func TestToFraudModel_ObservedZeroIsNotAbsence(t *testing.T) {
+	fr := toFraudModel(port.FraudSummary{
+		Present:                  true,
+		CliqueCount:              intp(0),
+		CliqueMembershipFraction: f64p(0),
+	})
+
+	if fr.CliqueCount == nil || *fr.CliqueCount != 0 {
+		t.Errorf("clique_count = %v, want a measured 0", fr.CliqueCount)
+	}
+	if fr.CliqueMembershipFraction == nil || *fr.CliqueMembershipFraction != 0 {
+		t.Errorf("clique_membership_fraction = %v, want a measured 0", fr.CliqueMembershipFraction)
+	}
+}
+
+// The scoring engine excludes a nil signal and renormalizes its weight away, so
+// the orchestrator must hand it nil rather than a clean-looking zero that would
+// drag the composite toward "authentic" on evidence that was never gathered.
+func TestToFraudInput_UnobservedSignalsStayNil(t *testing.T) {
+	in := toFraudInput(port.FraudSummary{
+		Present:      true,
+		Confidence:   0.3,
+		ModelVersion: "risk-v2",
+	})
+
+	if in.RiskScore != nil {
+		t.Errorf("risk_score = %v, want nil", *in.RiskScore)
+	}
+	if in.CliqueMembershipFraction != nil {
+		t.Errorf("clique_membership_fraction = %v, want nil", *in.CliqueMembershipFraction)
+	}
+	if in.RefinedScore != nil {
+		t.Errorf("refined_score = %v, want nil (no champion is serving)", *in.RefinedScore)
+	}
+	if !in.Present || in.Confidence != 0.3 || in.ModelVersion != "risk-v2" {
+		t.Errorf("fraud input = %+v, want the pass's provenance carried through", in)
+	}
+}
+
+// The measured signals reach scoring verbatim. The clique COUNT is deliberately
+// dropped (it is a reporting headline, not a score input); the coordination
+// FRACTION is an independent measurement and IS blended into the composite.
+func TestToFraudInput_CarriesMeasuredSignals(t *testing.T) {
+	in := toFraudInput(port.FraudSummary{
+		Present:                  true,
+		RiskScore:                f64p(63.5),
+		CliqueCount:              intp(7),
+		CliqueMembershipFraction: f64p(0.42),
+		RefinedScore:             f64p(58),
+		Confidence:               0.6,
+		ModelVersion:             "clique-v1",
+	})
+
+	if in.RiskScore == nil || *in.RiskScore != 63.5 {
+		t.Errorf("risk_score = %v, want 63.5", in.RiskScore)
+	}
+	if in.CliqueMembershipFraction == nil || *in.CliqueMembershipFraction != 0.42 {
+		t.Errorf("clique_membership_fraction = %v, want 0.42", in.CliqueMembershipFraction)
+	}
+	if in.RefinedScore == nil || *in.RefinedScore != 58 {
+		t.Errorf("refined_score = %v, want 58", in.RefinedScore)
 	}
 }
 

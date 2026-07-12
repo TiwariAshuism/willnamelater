@@ -349,23 +349,27 @@ func (s *Service) recordFeatures(ctx context.Context, job model.Job, snapshots [
 // aligned with the scoring module's own type.
 func toFraudInput(f port.FraudSummary) port.FraudInput {
 	return port.FraudInput{
-		Present:           f.Present,
-		FakeFollowerRate:  f.FakeFollowerRate,
-		BotCommentRate:    f.BotCommentRate,
-		EngagementAnomaly: f.EngagementAnomaly,
-		Confidence:        f.Confidence,
-		ModelVersion:      f.ModelVersion,
-		RefinedScore:      f.RefinedScore,
+		Present:   f.Present,
+		RiskScore: f.RiskScore,
+		// The coordination fraction IS an input to the composite: it is an
+		// independent measurement from a different model, blended (and renormalized)
+		// with the risk score in the authenticity subscore. The clique COUNT stays a
+		// reporting headline.
+		CliqueMembershipFraction: f.CliqueMembershipFraction,
+		Confidence:               f.Confidence,
+		ModelVersion:             f.ModelVersion,
+		RefinedScore:             f.RefinedScore,
 	}
 }
 
 // toFraudModel maps the ml-agnostic fraud summary onto the persisted
-// fraud_result row shape, carrying the clique signals the scoring input drops.
+// fraud_result row shape. An unmeasured signal persists as NULL, never as 0 —
+// these rows feed the training feature store, and a zero-filled row teaches a
+// model that "we didn't look" is a specific point in feature space.
 func toFraudModel(f port.FraudSummary) model.FraudResult {
 	return model.FraudResult{
 		Present:                  f.Present,
-		FakeFollowerRate:         f.FakeFollowerRate,
-		BotCommentRate:           f.BotCommentRate,
+		RiskScore:                f.RiskScore,
 		EngagementAnomaly:        f.EngagementAnomaly,
 		CliqueCount:              f.CliqueCount,
 		CliqueMembershipFraction: f.CliqueMembershipFraction,

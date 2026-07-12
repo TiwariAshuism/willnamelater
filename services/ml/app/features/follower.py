@@ -62,22 +62,29 @@ def extract_follower_features(
     return FollowerFeatures(deltas, growth_rates, follower_count, following_count)
 
 
-def growth_spike_signal(features: FollowerFeatures) -> float:
+def growth_spike_signal(features: FollowerFeatures) -> float | None:
     """Strength of the sharpest positive follower jump, in [0, 1].
 
     Defined as a saturating function of the ratio between the largest positive
     daily gain and the *median* positive daily gain. The median is used as the
     baseline precisely because increasing only the largest gain leaves it
     unchanged, which makes the signal provably monotone in that largest gain.
+
+    Returns **None** when the follower series is too short to establish a baseline
+    (fewer than two positive daily gains) — the spike is UNMEASURABLE, not zero. A
+    0.0 there would cast a full-weight vote for "no suspicious growth" over an
+    account whose growth we never actually saw, which is precisely how an unaudited
+    account gets certified clean. A genuine 0.0 (measured, no spike) is still
+    returned below.
     """
     deltas = features.deltas
     positive = deltas[deltas > 0.0]
     if positive.size < 2:
-        return 0.0
+        return None
 
     baseline = float(np.median(positive))
     if baseline <= 0.0:
-        return 0.0
+        return None
 
     ratio = float(np.max(positive)) / baseline
     if ratio <= 1.0:

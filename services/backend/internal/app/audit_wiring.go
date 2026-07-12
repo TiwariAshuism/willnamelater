@@ -3,6 +3,7 @@ package app
 import (
 	"context"
 	"net/http"
+	"slices"
 	"strings"
 	"time"
 
@@ -58,13 +59,12 @@ type auditScorer struct{ s *scoring.Module }
 
 func (a auditScorer) Score(ctx context.Context, auditJobID, influencerID uuid.UUID, snapshots []connector.Snapshot, fraud port.FraudInput) (port.ScoreResult, error) {
 	sc, err := a.s.Score(ctx, auditJobID, influencerID, snapshots, scoring.FraudInput{
-		Present:           fraud.Present,
-		FakeFollowerRate:  fraud.FakeFollowerRate,
-		BotCommentRate:    fraud.BotCommentRate,
-		EngagementAnomaly: fraud.EngagementAnomaly,
-		Confidence:        fraud.Confidence,
-		ModelVersion:      fraud.ModelVersion,
-		RefinedScore:      fraud.RefinedScore,
+		Present:                  fraud.Present,
+		RiskScore:                fraud.RiskScore,
+		CliqueMembershipFraction: fraud.CliqueMembershipFraction,
+		Confidence:               fraud.Confidence,
+		ModelVersion:             fraud.ModelVersion,
+		RefinedScore:             fraud.RefinedScore,
 	})
 	if err != nil {
 		return port.ScoreResult{}, err
@@ -101,27 +101,30 @@ func (a auditFraud) ScoreFraud(ctx context.Context, snapshots []connector.Snapsh
 	)
 
 	for _, snap := range snapshots {
-		if fr, err := a.c.ScoreFraud(ctx, ml.BuildFraudRequest(snap)); err == nil {
+		if fr, err := a.c.ScoreFraud(ctx, ml.BuildFraudRequest(snap)); err == nil && fr.Observed && fr.Score != nil {
 			anySignal = true
-			out.FakeFollowerRate = maxF(out.FakeFollowerRate, fr.Score/100)
-			out.EngagementAnomaly = maxF(out.EngagementAnomaly, signalValue(fr.Signals, "engagement"))
+			// The ml service's composite per-account risk estimate, carried through
+			// as what it is. It was previously assigned to a field called
+			// FakeFollowerRate — a rename, not a measurement: nothing in this pipeline
+			// has ever seen a follower list, so no fake-follower RATE has ever been
+			// computed. The field is gone and the honest one is here.
+			out.RiskScore = maxPtr(out.RiskScore, *fr.Score)
 			confs = append(confs, fr.Confidence)
 			versions = appendUnique(versions, fr.ModelVersion)
 		}
 
 		// The clique model only has signal when the snapshot carried sampled
-		// comments; with none it returns a zero clique fraction, which correctly
-		// contributes no coordination evidence.
+		// comments. With none, the coordination signals stay NIL — absent, not zero.
+		// A zero would tell a brand "we analyzed the commenters and found no
+		// coordination", when in fact no commenter was ever looked at. Instagram and
+		// CSV audits pull no comments at all, so this is the common case.
 		if len(snap.Comments) > 0 {
 			if pr, err := a.c.DetectPods(ctx, ml.BuildPodsRequest(snap)); err == nil {
 				anySignal = true
-				out.BotCommentRate = maxF(out.BotCommentRate, pr.CliqueMembershipFraction)
-				// Surface the coordination signals for the deliverable's headline and
-				// the persisted fraud row: the raw count of maximal cliques (primary)
-				// and the membership fraction (secondary). Worst-case across platforms,
-				// so a clean platform never masks a coordinated one.
-				out.CliqueCount = maxI(out.CliqueCount, pr.CliqueCount)
-				out.CliqueMembershipFraction = maxF(out.CliqueMembershipFraction, pr.CliqueMembershipFraction)
+				// Worst-case across platforms, so a clean platform never masks a
+				// coordinated one.
+				out.CliqueCount = maxPtrI(out.CliqueCount, pr.CliqueCount)
+				out.CliqueMembershipFraction = maxPtr(out.CliqueMembershipFraction, pr.CliqueMembershipFraction)
 				confs = append(confs, pr.Confidence)
 				versions = appendUnique(versions, pr.ModelVersion)
 			}
@@ -137,25 +140,45 @@ func (a auditFraud) ScoreFraud(ctx context.Context, snapshots []connector.Snapsh
 
 	// If a fraud champion is promoted, refine the whole assembled vector through
 	// it — the exact FEATURE_ORDER it trained on, so the champion serves without
-	// train/serve skew (unlike the per-account /score calls above). The assembled
-	// values are passed verbatim, including a genuine zero where a sub-model had no
-	// signal: the feature store froze training rows the same way, so this keeps
-	// train and serve aligned. Best-effort: a refine error or a cold-start decline
-	// leaves RefinedScore nil and scoring keeps its heuristic authenticity blend.
-	ffr, bcr, ea := out.FakeFollowerRate, out.BotCommentRate, out.EngagementAnomaly
-	cmf, conf, cc := out.CliqueMembershipFraction, out.Confidence, out.CliqueCount
+	// train/serve skew (unlike the per-account /score calls above).
+	//
+	// An UNOBSERVED signal is sent as null, never as a zero. The champion consumes
+	// it as native-missing (NaN), which is what LightGBM is built for, and the
+	// feature store freezes training rows the same way — so train and serve agree
+	// about what "we didn't measure this" looks like. Zero-filling here would both
+	// lie to the model and skew it against every account whose comments we never
+	// pulled. Best-effort: a refine error or a cold-start decline leaves RefinedScore
+	// nil and scoring keeps its heuristic authenticity blend.
+	conf := out.Confidence
 	if rr, err := a.c.RefineFraud(ctx, ml.FraudRefineRequest{
-		FakeFollowerRate:         &ffr,
-		BotCommentRate:           &bcr,
-		EngagementAnomaly:        &ea,
-		CliqueCount:              &cc,
-		CliqueMembershipFraction: &cmf,
+		RiskScore:                out.RiskScore,
+		EngagementAnomaly:        out.EngagementAnomaly,
+		CliqueCount:              out.CliqueCount,
+		CliqueMembershipFraction: out.CliqueMembershipFraction,
 		Confidence:               &conf,
 	}); err == nil && rr.Refined && rr.Score != nil {
 		out.RefinedScore = rr.Score
 		out.ModelVersion = strings.Join(append(versions, "refine:"+rr.ModelVersion), "+")
 	}
 	return out, nil
+}
+
+// maxPtr keeps the worst-case (largest) observed value across platforms. A nil
+// current value means nothing has been observed yet, so the first real reading
+// wins; nil is never treated as a zero to beat.
+func maxPtr(current *float64, observed float64) *float64 {
+	if current == nil || observed > *current {
+		return &observed
+	}
+	return current
+}
+
+// maxPtrI is maxPtr for counts.
+func maxPtrI(current *int, observed int) *int {
+	if current == nil || observed > *current {
+		return &observed
+	}
+	return current
 }
 
 // --- Reporter: llm.Module (+ scoring read) -> port.Reporter --------------
@@ -430,8 +453,7 @@ func (r reportFraudReader) FraudOf(ctx context.Context, auditJobID uuid.UUID) (r
 	return reportport.FraudView{
 		Found:                    true,
 		Present:                  fr.Present,
-		FakeFollowerRate:         fr.FakeFollowerRate,
-		BotCommentRate:           fr.BotCommentRate,
+		RiskScore:                fr.RiskScore,
 		EngagementAnomaly:        fr.EngagementAnomaly,
 		CliqueCount:              fr.CliqueCount,
 		CliqueMembershipFraction: fr.CliqueMembershipFraction,
@@ -467,20 +489,6 @@ func (r reportStorage) ShareURL(key string, ttl time.Duration) (string, error) {
 
 // --- small numeric / snapshot helpers ------------------------------------
 
-func maxF(a, b float64) float64 {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func maxI(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
 func meanF(xs []float64) float64 {
 	if len(xs) == 0 {
 		return 0
@@ -493,28 +501,10 @@ func meanF(xs []float64) float64 {
 }
 
 func appendUnique(xs []string, v string) []string {
-	if v == "" {
+	if v == "" || slices.Contains(xs, v) {
 		return xs
 	}
-	for _, x := range xs {
-		if x == v {
-			return xs
-		}
-	}
 	return append(xs, v)
-}
-
-// signalValue returns the value of the first signal whose name contains sub, or
-// 0 when none matches. It lets the fraud adapter pull one named component (the
-// engagement-deviation signal) out of the model's explainable signal list
-// without hard-coding its exact name.
-func signalValue(signals []ml.SignalContribution, sub string) float64 {
-	for _, s := range signals {
-		if strings.Contains(s.Name, sub) {
-			return s.Value
-		}
-	}
-	return 0
 }
 
 // primaryHandle returns the handle of the first snapshot that carried one, used

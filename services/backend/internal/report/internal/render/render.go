@@ -8,6 +8,7 @@ package render
 import (
 	"bytes"
 	"html/template"
+	"strconv"
 
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
 )
@@ -38,15 +39,36 @@ type Report struct {
 // estimate, labelled as such in the rendered document. CliqueCount (maximal
 // commenter cliques of the model's minimum size) is the primary signal; the
 // rates are fractions in [0,1] rendered as percentages.
+// Every measurement is a pointer: nil means we could not measure it, and the
+// deliverable says so in words rather than printing a 0% that reads as a clean
+// bill of health.
+//
+// Three fields were removed outright because they were never measurements:
+//   - fake_follower_rate was the composite risk score renamed (no follower list is
+//     ever fetched, so no fake-follower rate has ever been computed);
+//   - bot_comment_rate was a verbatim duplicate of clique_membership_fraction (no
+//     comment's text is ever classified), and printing both manufactured fake
+//     corroboration between two identical numbers; and
+//   - engagement_anomaly was a structural constant 0%, printed to brands as though
+//     we had checked engagement against a benchmark we never supplied.
 type FraudBlock struct {
-	Available                bool    `json:"available"`
-	CliqueCount              int     `json:"clique_count"`
-	CliqueMembershipFraction float64 `json:"clique_membership_fraction"`
-	FakeFollowerRate         float64 `json:"fake_follower_rate"`
-	BotCommentRate           float64 `json:"bot_comment_rate"`
-	EngagementAnomaly        float64 `json:"engagement_anomaly"`
-	Confidence               float64 `json:"confidence"`
-	ModelVersion             string  `json:"model_version"`
+	Available bool `json:"available"`
+
+	// RiskScore is the ml service's composite per-account risk estimate, 0-100,
+	// higher = more likely inauthentic. It is an estimate over behavioural signals,
+	// NOT a measured rate of anything.
+	RiskScore *float64 `json:"risk_score,omitempty"`
+
+	// CoordinationAnalyzed is false when no commenters could be analyzed at all —
+	// the usual case for Instagram and CSV audits, which pull no comment events. The
+	// clique figures are then nil and the report states plainly that coordination
+	// was not assessed, instead of implying none was found.
+	CoordinationAnalyzed     bool     `json:"coordination_analyzed"`
+	CliqueCount              *int     `json:"clique_count,omitempty"`
+	CliqueMembershipFraction *float64 `json:"clique_membership_fraction,omitempty"`
+
+	Confidence   float64 `json:"confidence"`
+	ModelVersion string  `json:"model_version"`
 }
 
 // ScoreBlock is the composite score presented in the report. Available is false
@@ -110,7 +132,35 @@ var reportTemplate = template.Must(template.New("report").Funcs(template.FuncMap
 	"frac": func(f float64) string {
 		return template.HTMLEscapeString(formatOne(f * 100))
 	},
+	// scoreP and fracP take POINTERS, because an unmeasured signal is nil. They
+	// render it as an em dash — never as a 0, which is the whole point of the
+	// pointers — and never panic on a nil deref the way `frac` on a nil *float64
+	// would. `printf "%.1f"` must NOT be used on a pointer: printf takes `any`, so
+	// the template does not auto-dereference and it would emit
+	// `%!f(*float64=0xc000188648)` into the customer's PDF.
+	"scoreP": func(f *float64) string {
+		if f == nil {
+			return notMeasured
+		}
+		return template.HTMLEscapeString(formatOne(*f))
+	},
+	"fracP": func(f *float64) string {
+		if f == nil {
+			return notMeasured
+		}
+		return template.HTMLEscapeString(formatOne(*f * 100))
+	},
+	"countP": func(i *int) string {
+		if i == nil {
+			return notMeasured
+		}
+		return template.HTMLEscapeString(strconv.Itoa(*i))
+	},
 }).Parse(reportHTML))
+
+// notMeasured is what an absent measurement renders as. It is deliberately not a
+// number: a "0" here would read as a clean measurement we never took.
+const notMeasured = "not measured"
 
 // formatOne formats a float to one decimal place without importing fmt into the
 // hot path repeatedly; it is small and dependency-light on purpose.
@@ -208,13 +258,18 @@ const reportHTML = `<!doctype html>
   <table>
     <thead><tr><th>Signal</th><th>Estimate</th></tr></thead>
     <tbody>
-      <tr><td>Coordinated commenter cliques</td><td>{{.Fraud.CliqueCount}}</td></tr>
-      <tr><td>Commenters inside a coordinated clique</td><td>{{frac .Fraud.CliqueMembershipFraction}}%</td></tr>
-      <tr><td>Estimated fake-follower rate</td><td>{{frac .Fraud.FakeFollowerRate}}%</td></tr>
-      <tr><td>Estimated bot-comment rate</td><td>{{frac .Fraud.BotCommentRate}}%</td></tr>
-      <tr><td>Engagement anomaly</td><td>{{frac .Fraud.EngagementAnomaly}}%</td></tr>
+      {{if .Fraud.RiskScore}}
+      <tr><td>Authenticity risk score (0-100, higher = more suspicious)</td><td>{{scoreP .Fraud.RiskScore}}</td></tr>
+      {{end}}
+      {{if .Fraud.CoordinationAnalyzed}}
+      <tr><td>Coordinated commenter cliques</td><td>{{countP .Fraud.CliqueCount}}</td></tr>
+      <tr><td>Commenters inside a coordinated clique</td><td>{{fracP .Fraud.CliqueMembershipFraction}}%</td></tr>
+      {{end}}
     </tbody>
   </table>
+  {{if not .Fraud.CoordinationAnalyzed}}
+  <p class="note">Coordination was <strong>not assessed</strong>: this platform returned no comment data, so no commenter graph could be built. This is not a finding of "no coordination" — it means we could not look.</p>
+  {{end}}
   {{end}}
 
   {{if .NarrativeAvailable}}

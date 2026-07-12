@@ -41,8 +41,7 @@ func computeFeatureVector(capture contract.FeatureCapture, primary connector.Sna
 	followerCount := primary.Followers
 
 	v := model.FeatureVector{
-		FakeFollowerRate:         capture.Fraud.FakeFollowerRate,
-		BotCommentRate:           capture.Fraud.BotCommentRate,
+		RiskScore:                capture.Fraud.RiskScore,
 		EngagementAnomaly:        capture.Fraud.EngagementAnomaly,
 		CliqueCount:              capture.Fraud.CliqueCount,
 		CliqueMembershipFraction: capture.Fraud.CliqueMembershipFraction,

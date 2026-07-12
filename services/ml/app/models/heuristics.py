@@ -77,10 +77,15 @@ _POSTS_TARGET = 12.0
 
 @dataclass(frozen=True)
 class FraudResult:
-    score: float
+    #: None when NO signal could be computed at all. A 0.0 here would assert
+    #: "certified clean"; None honestly says "we could not look".
+    score: float | None
     confidence: float
     signals: list[SignalContribution]
     flags: list[str]
+    #: False when no signal was observable. The caller must not present an
+    #: unobserved account as a clean one.
+    observed: bool = True
 
 
 def _confidence(series_len: int, post_count: int) -> float:
@@ -101,7 +106,11 @@ def score_fraud(request: FraudScoreRequest) -> FraudResult:
         request.posts, account.follower_count, account.following_count
     )
 
-    values: dict[str, float] = {
+    # A signal that could not be computed is None — ABSENT, not zero. Zero is a
+    # measurement ("we looked, it's clean"); None is an admission ("we could not
+    # look"). Conflating them is how a scorer silently certifies accounts it never
+    # examined.
+    values: dict[str, float | None] = {
         "growth_spike": growth_spike_signal(features),
         "engagement_deviation": engagement_deviation_signal(
             request.posts, account.follower_count, request.engagement_benchmark
@@ -110,25 +119,47 @@ def score_fraud(request: FraudScoreRequest) -> FraudResult:
         "coordination_undbot": undbot.value,
     }
 
+    # Renormalize over the signals actually OBSERVED. Summing weight*value across
+    # all four with absent ones at 0.0 does not "skip" them — it votes clean at
+    # full weight, and caps the achievable score at the surviving weight mass (with
+    # engagement_deviation absent, as it is whenever no benchmark is supplied, the
+    # old code could never score above 70/100 no matter how fraudulent the account).
+    observed = {name: v for name, v in values.items() if v is not None}
+    present_weight = sum(_WEIGHTS[name] for name in observed)
+
     signals: list[SignalContribution] = []
     composite = 0.0
-    for name, weight in _WEIGHTS.items():
-        value = values[name]
+    for name, value in observed.items():
+        # The reported weight is the RENORMALIZED one — what the signal actually
+        # contributed to this account's score, not its nominal share of a full
+        # vector we did not have.
+        weight = _WEIGHTS[name] / present_weight
         weighted = value * weight
         composite += weighted
         signals.append(
             SignalContribution(
                 name=name,
                 value=round(value, 6),
-                weight=weight,
+                weight=round(weight, 6),
                 weighted=round(weighted, 6),
                 detail=_SIGNAL_DETAIL[name],
             )
         )
 
-    flags = [name for name, value in values.items() if value >= _FLAG_THRESHOLD]
+    # No signal at all could be computed: say so. A score of 0 here would mean
+    # "certified clean" on the basis of nothing.
+    if not observed:
+        return FraudResult(
+            score=None, confidence=0.0, signals=[], flags=[], observed=False
+        )
+
+    flags = [name for name, value in observed.items() if value >= _FLAG_THRESHOLD]
     score = round(min(composite, 1.0) * 100.0, 4)
     confidence = _confidence(features.series_len, len(request.posts))
+    # Confidence is scaled by how much of the signal vector we actually saw: a score
+    # resting on one of four signals is not as trustworthy as one resting on all
+    # four, and the number must say so.
+    confidence = round(confidence * present_weight, 4)
     return FraudResult(
-        score=score, confidence=confidence, signals=signals, flags=flags
+        score=score, confidence=confidence, signals=signals, flags=flags, observed=True
     )

@@ -234,7 +234,11 @@ func (r *PostgresRepository) UpsertResult(ctx context.Context, jobID uuid.UUID, 
 
 // fraudColumns is the fraud_result projection, in the order UpsertFraudResult
 // writes and GetFraudResult scans.
-const fraudColumns = "present, fake_follower_rate, bot_comment_rate, engagement_anomaly, " +
+// A nil measurement writes SQL NULL. NULL is "we could not measure this"; 0 is "we
+// measured it and it was zero". These rows feed the training feature store, so the
+// distinction is not cosmetic — a zero-filled unobserved signal is a fabricated
+// observation.
+const fraudColumns = "present, risk_score, engagement_anomaly, " +
 	"clique_count, clique_membership_fraction, confidence, model_version"
 
 // UpsertFraudResult writes the per-audit fraud estimate keyed on the job id,
@@ -242,18 +246,17 @@ const fraudColumns = "present, fake_follower_rate, bot_comment_rate, engagement_
 func (r *PostgresRepository) UpsertFraudResult(ctx context.Context, jobID uuid.UUID, fr model.FraudResult) error {
 	const q = "INSERT INTO fraud_result " +
 		"(audit_job_id, " + fraudColumns + ") " +
-		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) " +
+		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8) " +
 		"ON CONFLICT (audit_job_id) DO UPDATE SET " +
-		"present = EXCLUDED.present, fake_follower_rate = EXCLUDED.fake_follower_rate, " +
-		"bot_comment_rate = EXCLUDED.bot_comment_rate, engagement_anomaly = EXCLUDED.engagement_anomaly, " +
+		"present = EXCLUDED.present, risk_score = EXCLUDED.risk_score, " +
+		"engagement_anomaly = EXCLUDED.engagement_anomaly, " +
 		"clique_count = EXCLUDED.clique_count, clique_membership_fraction = EXCLUDED.clique_membership_fraction, " +
 		"confidence = EXCLUDED.confidence, model_version = EXCLUDED.model_version"
 
 	_, err := r.pool.Exec(ctx, q,
 		jobID,
 		fr.Present,
-		fr.FakeFollowerRate,
-		fr.BotCommentRate,
+		fr.RiskScore,
 		fr.EngagementAnomaly,
 		fr.CliqueCount,
 		fr.CliqueMembershipFraction,
@@ -274,8 +277,7 @@ func (r *PostgresRepository) GetFraudResult(ctx context.Context, jobID uuid.UUID
 	var fr model.FraudResult
 	err := r.pool.QueryRow(ctx, q, jobID).Scan(
 		&fr.Present,
-		&fr.FakeFollowerRate,
-		&fr.BotCommentRate,
+		&fr.RiskScore,
 		&fr.EngagementAnomaly,
 		&fr.CliqueCount,
 		&fr.CliqueMembershipFraction,

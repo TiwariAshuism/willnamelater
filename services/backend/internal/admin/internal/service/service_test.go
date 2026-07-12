@@ -101,6 +101,12 @@ func (q fakeQueues) GetQueueInfo(name string) (*asynq.QueueInfo, error) {
 	return q.infos[name], nil
 }
 
+// f64p / intp are observed fraud measurements. Every fraud figure is a pointer:
+// nil means the signal was never observed, and an exported training label must
+// carry that absence as NULL rather than a fabricated zero.
+func f64p(v float64) *float64 { return &v }
+func intp(v int) *int         { return &v }
+
 // admin is a fixed admin id every guard-passing test shares.
 func adminID() uuid.UUID { return uuid.MustParse("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa") }
 func userID() uuid.UUID  { return uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb") }
@@ -249,7 +255,10 @@ func TestExportLabelsLabelsAndAttachesFeatures(t *testing.T) {
 	repo := &fakeRepo{decided: []model.Dispute{
 		{ID: uuid.New(), AuditJobID: jobID(), Status: model.StatusRejected, ResolvedAt: &resolvedAt},
 	}}
-	fraud := fakeFraud{found: true, view: port.FraudView{Present: true, CliqueCount: 9, ModelVersion: "clique-v1"}}
+	// EXPECTATION CHANGED: the fraud view carries RiskScore (the honest composite)
+	// instead of FakeFollowerRate/BotCommentRate, and its measurements are pointers.
+	fraud := fakeFraud{found: true, view: port.FraudView{Present: true, RiskScore: f64p(63.5),
+		CliqueCount: intp(9), ModelVersion: "clique-v1"}}
 	svc := newService(repo, fakeCaller{}, fakeGuard{id: adminID()}, fraud, fakeCost{}, fakeQueues{})
 
 	resp, err := svc.ExportLabels(context.Background())
@@ -263,8 +272,46 @@ func TestExportLabelsLabelsAndAttachesFeatures(t *testing.T) {
 	if !l.Label {
 		t.Error("a rejected dispute must label the account fraudulent (true)")
 	}
-	if !l.HasFeatures || l.Features.CliqueCount != 9 || l.Features.ModelVersion != "clique-v1" {
+	if !l.HasFeatures || l.Features.ModelVersion != "clique-v1" {
 		t.Errorf("stored fraud estimate not attached as features: %+v", l.Features)
+	}
+	if l.Features.CliqueCount == nil || *l.Features.CliqueCount != 9 {
+		t.Errorf("clique count not attached: %v", l.Features.CliqueCount)
+	}
+	if l.Features.RiskScore == nil || *l.Features.RiskScore != 63.5 {
+		t.Errorf("risk score not attached: %v", l.Features.RiskScore)
+	}
+}
+
+// The exported label is training input. A signal the audit never observed must
+// leave the export as null, not 0: a zero-filled feature teaches the fraud model
+// that "we didn't look" is a confident measurement, and these rows are the
+// supervised set the champion is fit on.
+func TestExportLabelsCarriesUnobservedFeaturesAsNull(t *testing.T) {
+	repo := &fakeRepo{decided: []model.Dispute{
+		{ID: uuid.New(), AuditJobID: jobID(), Status: model.StatusRejected},
+	}}
+	// A fraud pass that produced a risk score but analyzed no commenters.
+	fraud := fakeFraud{found: true, view: port.FraudView{Present: true, RiskScore: f64p(41),
+		Confidence: 0.25, ModelVersion: "risk-v2"}}
+	svc := newService(repo, fakeCaller{}, fakeGuard{id: adminID()}, fraud, fakeCost{}, fakeQueues{})
+
+	resp, err := svc.ExportLabels(context.Background())
+	if err != nil {
+		t.Fatalf("ExportLabels: %v", err)
+	}
+	f := resp.Labels[0].Features
+	if f.CliqueCount != nil {
+		t.Errorf("clique_count = %d, want null: no commenter was ever analyzed", *f.CliqueCount)
+	}
+	if f.CliqueMembershipFraction != nil {
+		t.Errorf("clique_membership_fraction = %v, want null", *f.CliqueMembershipFraction)
+	}
+	if f.EngagementAnomaly != nil {
+		t.Errorf("engagement_anomaly = %v, want null: no benchmark was supplied", *f.EngagementAnomaly)
+	}
+	if f.RiskScore == nil || *f.RiskScore != 41 {
+		t.Errorf("risk_score = %v, want the observed 41 carried through", f.RiskScore)
 	}
 }
 

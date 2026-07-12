@@ -173,7 +173,10 @@ func TestRecordFeatureRowComputesVectorAndQuality(t *testing.T) {
 			Posts:     posts,
 			Metrics:   []connector.MetricPoint{{Name: "followers", At: capturedAt.AddDate(-1, 0, 0), Value: 14000}},
 		}},
-		Fraud:            contract.FraudSignal{Present: true, FakeFollowerRate: 0.04, ModelVersion: "lgbm-abc"},
+		// EXPECTATION CHANGED: FakeFollowerRate is gone (it was the composite risk score
+		// renamed). RiskScore is on a 0-100 scale, so 4.0 is the old 0.04 fraction —
+		// still comfortably under the quality filter's maxFraudRisk.
+		Fraud:            contract.FraudSignal{Present: true, RiskScore: risk(4), ModelVersion: "lgbm-abc"},
 		Niche:            "fitness",
 		Tier:             "mid",
 		VerificationTier: "verified",

@@ -99,8 +99,13 @@ func TestPercentileScoreBounds(t *testing.T) {
 	}
 }
 
-// TestReachSubscore checks the log-scale reach mapping at its anchors.
-func TestReachSubscore(t *testing.T) {
+// TestAudienceSizeSubscore checks the log-scale FOLLOWER-COUNT mapping at its
+// anchors. It was TestReachSubscore, asserting Confidence: 1 — the component was
+// named for a thing it never measured (reach) and carried full certainty on a
+// purchasable number, which made buying followers RAISE the audit score. The
+// confidence expectation below is now audienceSizeConfidence (0.5), deliberately
+// capped so the component cannot dominate the composite.
+func TestAudienceSizeSubscore(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
@@ -110,16 +115,16 @@ func TestReachSubscore(t *testing.T) {
 		wantConf  float64
 	}{
 		{"none", 0, 0, 0},
-		{"floor", 1_000, 0, 1},
-		{"ceil", 10_000_000, 100, 1},
-		{"above ceil clamps", 100_000_000, 100, 1},
-		{"geometric midpoint", 100_000, 50, 1}, // sqrt(1e3*1e7)=1e5
+		{"floor", 1_000, 0, audienceSizeConfidence},
+		{"ceil", 10_000_000, 100, audienceSizeConfidence},
+		{"above ceil clamps", 100_000_000, 100, audienceSizeConfidence},
+		{"geometric midpoint", 100_000, 50, audienceSizeConfidence}, // sqrt(1e3*1e7)=1e5
 	}
 	for _, tt := range tests {
 		tt := tt
 		t.Run(tt.name, func(t *testing.T) {
 			t.Parallel()
-			got := reachSubscore(tt.followers)
+			got := audienceSizeSubscore(tt.followers)
 			if !approx(got.Value, tt.wantVal) {
 				t.Fatalf("value = %v, want %v", got.Value, tt.wantVal)
 			}
@@ -130,7 +135,14 @@ func TestReachSubscore(t *testing.T) {
 	}
 }
 
-// TestAuthenticitySubscore covers the fraud blend and the absent-fraud neutral.
+// TestAuthenticitySubscore covers the fraud blend over the OBSERVED signals, the
+// absent-fraud neutral, and the champion override.
+//
+// The old table asserted a fabricated shape: a bare {Present: true} with no
+// measurements scored a fully-confident 100 ("clean"), and absent signals were
+// read as hard zeros at full weight. Both expectations are inverted below —
+// nothing observed is now {50, 0} (an unexamined account, not a clean one), and a
+// missing signal has its weight renormalized away rather than voting "clean".
 func TestAuthenticitySubscore(t *testing.T) {
 	t.Parallel()
 
@@ -141,26 +153,55 @@ func TestAuthenticitySubscore(t *testing.T) {
 		wantConf float64
 	}{
 		{"absent is neutral", contract.FraudInput{Present: false}, 50, 0},
-		{"clean", contract.FraudInput{Present: true, Confidence: 0.8}, 100, 0.8},
 		{
+			// CHANGED EXPECTATION: this used to be the "clean" case scoring {100, 0.8}.
+			// A fraud pass that ran but observed nothing certified the account. It is
+			// now indistinguishable from no pass at all: neutral, zero confidence.
+			"present but nothing observed is neutral, not clean",
+			contract.FraudInput{Present: true, Confidence: 0.8},
+			50, 0,
+		},
+		{
+			// Both signals observed and maximal: full presentWeight, so confidence is
+			// the input confidence unscaled.
 			"all fraud",
-			contract.FraudInput{Present: true, FakeFollowerRate: 1, BotCommentRate: 1, EngagementAnomaly: 1, Confidence: 0.5},
+			contract.FraudInput{Present: true, RiskScore: ptr(100.0), CliqueMembershipFraction: ptr(1.0), Confidence: 0.5},
 			0, 0.5,
 		},
 		{
-			"half fake followers only",
-			contract.FraudInput{Present: true, FakeFollowerRate: 0.5, Confidence: 1},
-			80, 1, // 1 - 0.4*0.5 = 0.8
+			// Both signals observed and clean. This is what a genuine 100 now requires:
+			// two measurements that came back clean, not two measurements we never took.
+			"both signals observed clean",
+			contract.FraudInput{Present: true, RiskScore: ptr(0.0), CliqueMembershipFraction: ptr(0.0), Confidence: 0.9},
+			100, 0.9,
 		},
 		{
-			"rates clamp above one",
-			contract.FraudInput{Present: true, FakeFollowerRate: 5, Confidence: 2},
-			60, 1, // fake clamps to 1 -> 1-0.4=0.6 ; conf clamps to 1
+			// The renormalization guarantee: with no comments to analyze there is no
+			// clique signal, so the risk score carries the blend at FULL weight.
+			// 0.65*0.8 renormalized over 0.65 = 0.8 fraud -> 20. Treating the absent
+			// clique as a clean 0 would have given 1 - 0.65*0.8 = 0.48 -> 48, dragging
+			// a badly fraudulent account halfway to respectable.
+			"risk only renormalizes rather than drifting clean",
+			contract.FraudInput{Present: true, RiskScore: ptr(80.0), Confidence: 1},
+			20, fraudWeightRisk, // conf scaled by the share of the vector we saw
+		},
+		{
+			// Symmetric: coordination alone carries the blend, at its own weight.
+			"coordination only renormalizes",
+			contract.FraudInput{Present: true, CliqueMembershipFraction: ptr(0.5), Confidence: 1},
+			50, fraudWeightCoordination,
+		},
+		{
+			// RiskScore is 0-100, the clique fraction 0-1; both clamp, and confidence
+			// clamps to 1 before being scaled by the observed weight.
+			"signals clamp above range",
+			contract.FraudInput{Present: true, RiskScore: ptr(500.0), Confidence: 2},
+			0, fraudWeightRisk, // risk clamps to 1 -> 1-1 = 0 ; conf clamps to 1, then *0.65
 		},
 		{
 			// A promoted champion refines the whole vector: its 0-100 score is the
-			// fraud aggregate, superseding the heuristic weighted sum. Here the
-			// heuristic rates alone would give a clean 100, but the champion says 75.
+			// fraud aggregate, superseding the heuristic blend, at unscaled confidence
+			// (it saw the full feature vector).
 			"refined score supersedes heuristic",
 			contract.FraudInput{Present: true, Confidence: 0.9, RefinedScore: ptr(75.0)},
 			25, 0.9, // 1 - 0.75 = 0.25 -> 25
@@ -168,7 +209,7 @@ func TestAuthenticitySubscore(t *testing.T) {
 		{
 			// The refined score clamps to [0,100] just like the heuristic path.
 			"refined score clamps above 100",
-			contract.FraudInput{Present: true, FakeFollowerRate: 1, Confidence: 1, RefinedScore: ptr(150.0)},
+			contract.FraudInput{Present: true, RiskScore: ptr(100.0), Confidence: 1, RefinedScore: ptr(150.0)},
 			0, 1, // clamps to 100 -> 1-1 = 0
 		},
 	}
@@ -216,8 +257,18 @@ func TestConfidenceRisesWithSamples(t *testing.T) {
 	}
 }
 
+// effective mirrors the engine's confidence shrink: a subscore only moves the
+// composite away from neutral in proportion to how much it is trusted. The tests
+// below expect EFFECTIVE values, not raw ones — the composite used to be a mean
+// of raw Values with confidence tracked in a parallel number that never touched
+// the score.
+func effective(s contract.Subscore) float64 {
+	return neutralScore + s.Confidence*(s.Value-neutralScore)
+}
+
 // TestComputeIsolatesEachWeight sets one weight to 1 and the rest to 0, so the
-// composite must equal that single subscore. This exercises every weight cell.
+// composite must equal that single subscore's EFFECTIVE (confidence-shrunk)
+// value. This exercises every weight cell.
 func TestComputeIsolatesEachWeight(t *testing.T) {
 	t.Parallel()
 
@@ -232,11 +283,11 @@ func TestComputeIsolatesEachWeight(t *testing.T) {
 		w    Weights
 		want float64
 	}{
-		{"reach only", Weights{Reach: 1}, base.Reach.Value},
-		{"engagement only", Weights{EngagementQuality: 1}, base.EngagementQuality.Value},
-		{"authenticity only", Weights{Authenticity: 1}, base.Authenticity.Value},
-		{"consistency only", Weights{Consistency: 1}, base.Consistency.Value},
-		{"content only", Weights{ContentQuality: 1}, base.ContentQuality.Value},
+		{"reach only", Weights{Reach: 1}, effective(base.Reach)},
+		{"engagement only", Weights{EngagementQuality: 1}, effective(base.EngagementQuality)},
+		{"authenticity only", Weights{Authenticity: 1}, effective(base.Authenticity)},
+		{"consistency only", Weights{Consistency: 1}, effective(base.Consistency)},
+		{"content only", Weights{ContentQuality: 1}, effective(base.ContentQuality)},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -282,6 +333,59 @@ func TestComputeRejectsZeroWeights(t *testing.T) {
 	in.Weights = Weights{}
 	if _, err := Compute(in); !errors.Is(err, ErrNoWeights) {
 		t.Fatalf("err = %v, want ErrNoWeights", err)
+	}
+}
+
+// TestComputeDropsZeroConfidenceSubscore is the no-invented-evidence guarantee: a
+// component we could not measure is DROPPED and its weight renormalized away. It
+// used to contribute its full weight at an invented value of 50, so a third of a
+// headline number could be fabricated neutrality while the customer read a
+// confident-looking score.
+//
+// The account here is a 10M-follower snapshot with no posts and no fraud pass:
+// only audience size is measured. Its raw 100 shrinks to 75 at confidence 0.5,
+// and 75 is the whole composite.
+func TestComputeDropsZeroConfidenceSubscore(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.Snapshots = []connector.Snapshot{{Platform: connector.PlatformYouTube, Followers: 10_000_000}}
+	in.Fraud = contract.FraudInput{} // no fraud pass ran -> authenticity is {50, 0}
+	in.Weights = Weights{Reach: 1, Authenticity: 0.5}
+
+	got, err := Compute(in)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	if got.Authenticity.Confidence != 0 {
+		t.Fatalf("authenticity confidence = %v, want 0 (unmeasured)", got.Authenticity.Confidence)
+	}
+
+	want := effective(got.Reach) // 50 + 0.5*(100-50) = 75
+	if !approx(got.Overall, want) {
+		t.Fatalf("overall = %v, want %v (audience size alone, weight renormalized)", got.Overall, want)
+	}
+	// The old behaviour: authenticity's 0.5 weight carrying an invented 50.
+	fabricated := (1*want + 0.5*neutralScore) / 1.5
+	if approx(got.Overall, fabricated) {
+		t.Fatalf("overall = %v: unmeasured authenticity still contributed an invented 50", got.Overall)
+	}
+}
+
+// TestComputeInsufficientEvidence asserts the engine REFUSES to publish a number
+// when too little of the composite's weight rests on things it actually measured.
+// A followers-only snapshot with no posts, no metrics and no fraud pass evidences
+// only reach (0.30 of 1.0), below minEvidencedWeight — previously this produced a
+// confident-looking mid-50s composite out of four invented neutrals.
+func TestComputeInsufficientEvidence(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	in.Snapshots = []connector.Snapshot{{Platform: connector.PlatformYouTube, Followers: 50_000}}
+	in.Fraud = contract.FraudInput{}
+
+	if _, err := Compute(in); !errors.Is(err, ErrInsufficientEvidence) {
+		t.Fatalf("err = %v, want ErrInsufficientEvidence", err)
 	}
 }
 
@@ -434,10 +538,15 @@ func baseInput() Input {
 		Metrics:   metrics,
 	}
 	return Input{
-		Niche:               "beauty",
-		Tier:                tierMicro,
-		Snapshots:           []connector.Snapshot{snap},
-		Fraud:               contract.FraudInput{Present: true, FakeFollowerRate: 0.05, BotCommentRate: 0.1, EngagementAnomaly: 0.15, Confidence: 0.7},
+		Niche:     "beauty",
+		Tier:      tierMicro,
+		Snapshots: []connector.Snapshot{snap},
+		// Both fraud signals observed: a low composite risk score (0-100) and a small
+		// coordinated-commenter fraction (0-1). The old fixture set a FakeFollowerRate
+		// (the risk score under a name nothing ever measured), a BotCommentRate (a
+		// bit-for-bit duplicate of the clique fraction) and an EngagementAnomaly (a
+		// structural constant already inside the risk score).
+		Fraud:               contract.FraudInput{Present: true, RiskScore: ptr(5.0), CliqueMembershipFraction: ptr(0.1), Confidence: 0.7},
 		Weights:             BootstrapWeights(),
 		EngagementBenchmark: benchForTier(tierMicro),
 	}

@@ -151,6 +151,12 @@ func (f *fakeStorage) ShareURL(key string, _ time.Duration) (string, error) {
 	return "https://s3.example/" + key + "?signed", nil
 }
 
+// f64p / intp are observed fraud measurements. Every fraud figure is a pointer:
+// nil means the signal was never observed, and the report must disclose that
+// rather than fold it into a 0.
+func f64p(v float64) *float64 { return &v }
+func intp(v int) *int         { return &v }
+
 func infID() uuid.UUID { return uuid.MustParse("11111111-1111-1111-1111-111111111111") }
 func audID() uuid.UUID { return uuid.MustParse("22222222-2222-2222-2222-222222222222") }
 
@@ -192,8 +198,11 @@ func TestAssembleFoldsAllSources(t *testing.T) {
 			Subscores: []port.Subscore{{Name: "reach", Value: 80, Confidence: 0.6}}}},
 		fakeNarrative{view: port.Narrative{Present: true, Summary: "s", GrowthTips: []string{"t"},
 			WeaknessFixPairs: []port.WeaknessFix{{Weakness: "w", Fix: "f"}}}},
-		fakeFraud{view: port.FraudView{Found: true, Present: true, CliqueCount: 7,
-			CliqueMembershipFraction: 0.42, Confidence: 0.6, ModelVersion: "clique-v1"}},
+		// EXPECTATION CHANGED: the fraud view carries RiskScore (the honest composite)
+		// instead of FakeFollowerRate/BotCommentRate, and its measurements are pointers.
+		fakeFraud{view: port.FraudView{Found: true, Present: true, RiskScore: f64p(63.5),
+			CliqueCount: intp(7), CliqueMembershipFraction: f64p(0.42), Confidence: 0.6,
+			ModelVersion: "clique-v1"}},
 		&fakePDF{},
 	)
 
@@ -207,11 +216,51 @@ func TestAssembleFoldsAllSources(t *testing.T) {
 	if !rep.NarrativeAvailable || rep.Narrative.Summary != "s" || len(rep.Narrative.WeaknessFixPairs) != 1 {
 		t.Errorf("narrative not folded in: %+v", rep.Narrative)
 	}
-	if !rep.Fraud.Available || rep.Fraud.CliqueCount != 7 || rep.Fraud.ModelVersion != "clique-v1" {
+	if !rep.Fraud.Available || rep.Fraud.ModelVersion != "clique-v1" {
 		t.Errorf("fraud headline not folded in: %+v", rep.Fraud)
+	}
+	if rep.Fraud.CliqueCount == nil || *rep.Fraud.CliqueCount != 7 {
+		t.Errorf("clique count not folded in: %v", rep.Fraud.CliqueCount)
+	}
+	if rep.Fraud.RiskScore == nil || *rep.Fraud.RiskScore != 63.5 {
+		t.Errorf("risk score not folded in: %v", rep.Fraud.RiskScore)
+	}
+	// A clique count was produced, so the commenter graph WAS built.
+	if !rep.Fraud.CoordinationAnalyzed {
+		t.Error("a stored clique count means coordination was analyzed")
 	}
 	if rep.InfluencerID != infID().String() || rep.Status != "succeeded" {
 		t.Errorf("audit fields not mapped: %+v", rep)
+	}
+}
+
+// The usual case: the ml pass produced a risk estimate but the snapshots carried
+// no comments, so no commenter graph could be built. The assembled report must
+// mark coordination as NOT analyzed and leave the clique figures nil — never fold
+// an unobserved signal into a 0 that reads as "no coordination found".
+func TestAssembleMarksCoordinationUnanalyzedWithoutComments(t *testing.T) {
+	svc := newSvc(
+		fakeAudit{view: fullView()},
+		fakeScore{view: port.ScoreView{Present: true, Overall: 82}},
+		fakeNarrative{view: port.Narrative{Present: true, Summary: "s"}},
+		fakeFraud{view: port.FraudView{Found: true, Present: true, RiskScore: f64p(41),
+			Confidence: 0.25, ModelVersion: "risk-v2"}},
+		&fakePDF{},
+	)
+
+	rep, err := svc.Assemble(context.Background(), audID().String())
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if !rep.Fraud.Available {
+		t.Fatal("a fraud pass that produced a risk score is still a fraud headline")
+	}
+	if rep.Fraud.CoordinationAnalyzed {
+		t.Error("no clique count was stored, so coordination cannot be reported as analyzed")
+	}
+	if rep.Fraud.CliqueCount != nil || rep.Fraud.CliqueMembershipFraction != nil {
+		t.Errorf("unobserved clique signals must stay nil, got %v / %v",
+			rep.Fraud.CliqueCount, rep.Fraud.CliqueMembershipFraction)
 	}
 }
 

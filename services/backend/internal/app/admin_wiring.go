@@ -58,8 +58,7 @@ func (r adminFraudReader) FraudResultOf(ctx context.Context, auditJobID uuid.UUI
 	}
 	return adminport.FraudView{
 		Present:                  fr.Present,
-		FakeFollowerRate:         fr.FakeFollowerRate,
-		BotCommentRate:           fr.BotCommentRate,
+		RiskScore:                fr.RiskScore,
 		EngagementAnomaly:        fr.EngagementAnomaly,
 		CliqueCount:              fr.CliqueCount,
 		CliqueMembershipFraction: fr.CliqueMembershipFraction,

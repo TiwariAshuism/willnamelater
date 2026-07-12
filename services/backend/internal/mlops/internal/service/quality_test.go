@@ -27,19 +27,52 @@ func cleanVector() model.FeatureVector {
 	return model.FeatureVector{PostCount: 12, AccountAgeDaysProxy: &age}
 }
 
+// risk is a measured fraud-risk estimate on the honest 0-100 scale. It is a
+// pointer because nil is a distinct state — "the signal was never observed" —
+// and the filter must treat the two differently.
+func risk(v float64) *float64 { return &v }
+
 func TestQualityAcceptsCleanRow(t *testing.T) {
-	fraud := contract.FraudSignal{Present: true, FakeFollowerRate: 0.04}
+	// EXPECTATION CHANGED: the signal is RiskScore (0-100 composite), not
+	// FakeFollowerRate (a "rate" nothing ever measured — it was this same score
+	// renamed). 4.0/100 = 0.04, the old fraction, so the verdict is unchanged.
+	fraud := contract.FraudSignal{Present: true, RiskScore: risk(4)}
 	reasons := evaluateQuality(fraud, cleanVector(), connector.Snapshot{})
 	if len(reasons) != 0 {
 		t.Fatalf("a clean row must have no reasons, got %v", reasons)
 	}
 }
 
-func TestQualityRejectsHighFakeFollowerRate(t *testing.T) {
-	fraud := contract.FraudSignal{Present: true, FakeFollowerRate: 0.30}
+// EXPECTATION CHANGED: renamed from TestQualityRejectsHighFakeFollowerRate. The
+// rule is unchanged in substance — only in candour: it reads the composite risk
+// estimate it always read, now under its true name. 30.0/100 = 0.30 = maxFraudRisk.
+func TestQualityRejectsHighFraudRisk(t *testing.T) {
+	fraud := contract.FraudSignal{Present: true, RiskScore: risk(30)}
 	reasons := evaluateQuality(fraud, cleanVector(), connector.Snapshot{})
-	if !contains(reasons, reasonFakeFollowerHigh) {
-		t.Fatalf("want %q for a 0.30 fake-follower estimate, got %v", reasonFakeFollowerHigh, reasons)
+	if !contains(reasons, reasonFraudRiskHigh) {
+		t.Fatalf("want %q for a 30/100 risk estimate, got %v", reasonFraudRiskHigh, reasons)
+	}
+}
+
+// Absence is not evidence. A nil risk score means the ml service never produced
+// one, which is not a reason to brand the account suspicious — the row is simply
+// unfiltered by this rule. Under the old plain-float64 field an unobserved signal
+// arrived as 0.0 and silently passed as "clean"; now it is nil and the rule does
+// not fire in either direction.
+func TestQualityDoesNotFlagAnUnobservedRiskScore(t *testing.T) {
+	fraud := contract.FraudSignal{Present: true, RiskScore: nil}
+	reasons := evaluateQuality(fraud, cleanVector(), connector.Snapshot{})
+	if contains(reasons, reasonFraudRiskHigh) {
+		t.Fatalf("a nil risk score must not be flagged %q: absence is not evidence, got %v", reasonFraudRiskHigh, reasons)
+	}
+}
+
+// A risk estimate just under the threshold is accepted: the boundary is >=.
+func TestQualityAcceptsRiskBelowThreshold(t *testing.T) {
+	fraud := contract.FraudSignal{Present: true, RiskScore: risk(29.9)}
+	reasons := evaluateQuality(fraud, cleanVector(), connector.Snapshot{})
+	if contains(reasons, reasonFraudRiskHigh) {
+		t.Fatalf("29.9/100 sits below maxFraudRisk (%v), got %v", maxFraudRisk, reasons)
 	}
 }
 

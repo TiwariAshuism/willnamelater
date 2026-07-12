@@ -143,14 +143,24 @@ class FraudScoreResponse(BaseModel):
 
     ``score`` runs 0-100 where higher means *more likely inauthentic*. It is an
     estimate, never a measured fake-follower percentage.
+
+    ``score`` is **null** and ``observed`` false when not one signal could be
+    computed. That is not a clean account — it is an account we could not examine,
+    and the two must never be rendered the same way.
+
+    Each :class:`SignalContribution`'s ``weight`` is RENORMALIZED over the signals
+    actually observed, so the weights of a partial vector still sum to 1 and the
+    score is not silently dragged toward zero by the ones we could not measure.
     """
 
     model_config = ConfigDict(extra="forbid")
 
-    score: float = Field(ge=0.0, le=100.0)
+    score: float | None = Field(default=None, ge=0.0, le=100.0)
     confidence: float = Field(ge=0.0, le=1.0)
     model_version: str
     estimate: bool = True
+    #: False when no signal was observable; ``score`` is then null.
+    observed: bool = True
     signals: list[SignalContribution]
     flags: list[str]
     generated_at: datetime
@@ -167,8 +177,8 @@ class FraudRefineRequest(_StrictRequest):
     serves a promoted champion, so an all-null vector still costs nothing there.
     """
 
-    fake_follower_rate: float | None = Field(default=None, ge=0.0, le=1.0)
-    bot_comment_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: The per-account composite risk estimate (0-100). NOT a fake-follower rate.
+    risk_score: float | None = Field(default=None, ge=0.0, le=100.0)
     engagement_anomaly: float | None = Field(default=None, ge=0.0, le=1.0)
     clique_count: int | None = Field(default=None, ge=0)
     clique_membership_fraction: float | None = Field(default=None, ge=0.0, le=1.0)

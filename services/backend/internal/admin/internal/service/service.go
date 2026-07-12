@@ -259,8 +259,7 @@ func (s *Service) ExportLabels(ctx context.Context) (model.LabelExportResponse, 
 			label.HasFeatures = true
 			label.Features = model.FraudFeatures{
 				Present:                  view.Present,
-				FakeFollowerRate:         view.FakeFollowerRate,
-				BotCommentRate:           view.BotCommentRate,
+				RiskScore:                view.RiskScore,
 				EngagementAnomaly:        view.EngagementAnomaly,
 				CliqueCount:              view.CliqueCount,
 				CliqueMembershipFraction: view.CliqueMembershipFraction,

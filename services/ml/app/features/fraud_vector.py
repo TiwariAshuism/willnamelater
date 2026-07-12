@@ -40,8 +40,10 @@ def build_fraud_vector(result: FraudResult) -> dict[str, float | None]:
     (native-missing downstream), never 0.
     """
     observed: dict[str, float | None] = dict.fromkeys(FEATURE_ORDER)
-    # The one key this endpoint genuinely produces: the account-level fraud
-    # confidence. In cold start this is exactly what fraud_result.confidence
-    # stored, so filling it keeps train/serve semantics aligned for this key.
+    # The two keys this endpoint genuinely produces: its own composite risk score
+    # and the confidence behind it. The coordination keys come from a different
+    # model (/v1/pods/detect) and the engagement anomaly needs a sourced benchmark
+    # this endpoint is not given — all stay None (native-missing), never zero.
+    observed["risk_score"] = result.score
     observed["confidence"] = result.confidence
     return observed

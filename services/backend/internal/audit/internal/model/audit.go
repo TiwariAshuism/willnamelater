@@ -98,13 +98,20 @@ type PlatformResult struct {
 // false when a fraud pass ran but produced no signal; a job that never reached
 // the fraud step has no row at all, which the read path distinguishes with a
 // found flag. CliqueCount is the primary coordination signal.
+// Each measurement is a pointer and persists as SQL NULL when absent. NULL means
+// "we could not measure this"; 0 means "we measured it and it was zero". The two
+// were conflated, which both misled brands and poisoned the training feature
+// store with unobserved zeros presented as real observations.
 type FraudResult struct {
-	Present                  bool
-	FakeFollowerRate         float64
-	BotCommentRate           float64
-	EngagementAnomaly        float64
-	CliqueCount              int
-	CliqueMembershipFraction float64
+	Present bool
+	// RiskScore is the composite per-account risk estimate (0-100), NOT a
+	// fake-follower rate. The columns fake_follower_rate and bot_comment_rate are
+	// gone: the first was this score renamed, the second a duplicate of
+	// clique_membership_fraction.
+	RiskScore                *float64
+	EngagementAnomaly        *float64
+	CliqueCount              *int
+	CliqueMembershipFraction *float64
 	Confidence               float64
 	ModelVersion             string
 }

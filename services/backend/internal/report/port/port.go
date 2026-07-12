@@ -124,14 +124,17 @@ type NarrativeReader interface {
 // all; Present is false when a pass ran but produced no signal. The report shows
 // the headline only when both are true, and never treats a zero as a clean
 // result it cannot vouch for. CliqueCount is the primary coordination figure.
+// Each measurement is a pointer; nil means it could not be measured. The report
+// renders an absent signal as "not assessed", never as 0%.
 type FraudView struct {
-	Found                    bool
-	Present                  bool
-	FakeFollowerRate         float64
-	BotCommentRate           float64
-	EngagementAnomaly        float64
-	CliqueCount              int
-	CliqueMembershipFraction float64
+	Found   bool
+	Present bool
+	// RiskScore is the composite per-account risk estimate (0-100). It is NOT a
+	// fake-follower rate and must never be labelled as one.
+	RiskScore                *float64
+	EngagementAnomaly        *float64
+	CliqueCount              *int
+	CliqueMembershipFraction *float64
 	Confidence               float64
 	ModelVersion             string
 }

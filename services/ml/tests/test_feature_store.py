@@ -16,7 +16,10 @@ from training.features import FEATURE_ORDER
 
 def _row(**over):
     feats = {
-        "fake_follower_rate": 0.1, "bot_comment_rate": 0.1, "engagement_anomaly": 0.1,
+        # FEATURE_ORDER v2 keys: the renamed-composite `fake_follower_rate` and the
+        # duplicate `bot_comment_rate` are gone; `risk_score` (0-100) is the real
+        # composite estimate. A stale key here would leave risk_score unobserved.
+        "risk_score": 10.0, "engagement_anomaly": 0.1,
         "clique_count": 0, "clique_membership_fraction": 0.0, "confidence": 0.5,
         "follower_count": 1000, "following_count": None,
         "follower_following_ratio": None, "engagement_rate": 0.03,

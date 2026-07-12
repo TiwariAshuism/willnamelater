@@ -7,13 +7,26 @@ from __future__ import annotations
 # must never be reordered: a persisted model's inputs are positional, so a
 # reorder would silently feed the model the wrong columns.
 FEATURE_ORDER = (
-    "fake_follower_rate",
-    "bot_comment_rate",
+    "risk_score",
     "engagement_anomaly",
     "clique_count",
     "clique_membership_fraction",
     "confidence",
 )
+
+#: Bump this whenever FEATURE_ORDER changes. Positional model inputs mean a stored
+#: model is only valid for the exact vector it trained on, and a silent reorder
+#: feeds a model the wrong columns.
+#:
+#: v2 removed two fabricated columns that were never measurements at all:
+#:   * ``fake_follower_rate`` was the composite risk score renamed (nothing in the
+#:     pipeline has ever seen a follower list), and
+#:   * ``bot_comment_rate`` was a bit-for-bit DUPLICATE of
+#:     ``clique_membership_fraction`` (no comment text was ever classified), so the
+#:     6-column vector carried only 5 distinct values and handed any model trained
+#:     on it a perfectly collinear pair presented as independent evidence.
+#: Rows captured under v1 are not comparable and must not be trained on.
+FEATURE_ORDER_VERSION = 2
 
 
 def to_dataset(labels):

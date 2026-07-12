@@ -5,6 +5,12 @@ import (
 	"testing"
 )
 
+// f64p / intp are observed measurements. Every fraud figure is a pointer now:
+// nil is "we could not look", and the deliverable must say so in words instead of
+// printing a 0% that a brand reads as a clean bill of health.
+func f64p(v float64) *float64 { return &v }
+func intp(v int) *int         { return &v }
+
 func fullReport() Report {
 	return Report{
 		AuditID:      "aud-1",
@@ -23,13 +29,16 @@ func fullReport() Report {
 				{Name: "authenticity", Value: 74.1, Confidence: 0.5},
 			},
 		},
+		// EXPECTATION CHANGED: FakeFollowerRate, BotCommentRate and EngagementAnomaly
+		// are gone from the block — none of the three was ever measured. What remains
+		// is the honest composite RiskScore plus the clique signals, and those only
+		// when CoordinationAnalyzed says the commenter graph was actually built.
 		Fraud: FraudBlock{
 			Available:                true,
-			CliqueCount:              7,
-			CliqueMembershipFraction: 0.42,
-			FakeFollowerRate:         0.11,
-			BotCommentRate:           0.42,
-			EngagementAnomaly:        0.2,
+			RiskScore:                f64p(63.5),
+			CoordinationAnalyzed:     true,
+			CliqueCount:              intp(7),
+			CliqueMembershipFraction: f64p(0.42),
 			Confidence:               0.6,
 			ModelVersion:             "clique-v1",
 		},
@@ -57,7 +66,8 @@ func TestHTMLRendersScoreAndNarrative(t *testing.T) {
 		"industry-bootstrap v1",           // benchmark provenance disclosed
 		"estimates, not measured",         // fraud-is-an-estimate labelling
 		"Authenticity &amp; coordination", // fraud headline section
-		"Coordinated commenter cliques",   // clique-count row
+		"Coordinated commenter cliques",   // clique-count row (coordination WAS analyzed)
+		"Authenticity risk score",         // the honest composite, labelled a score not a rate
 		"clique-v1",                       // fraud model provenance
 		"Low comments",                    // weakness
 		"Ask questions in captions",
@@ -66,6 +76,75 @@ func TestHTMLRendersScoreAndNarrative(t *testing.T) {
 	} {
 		if !strings.Contains(html, want) {
 			t.Errorf("rendered report missing %q", want)
+		}
+	}
+	// Coordination WAS analyzed here, so the not-assessed disclosure must be absent.
+	if strings.Contains(html, "not assessed") {
+		t.Error("an analyzed report must not carry the not-assessed disclosure")
+	}
+}
+
+// THE guarantee. Almost every audit analyzes no commenters at all — Instagram and
+// CSV audits pull no comment events — so the clique model never runs. The report
+// used to print "0" cliques and "0.0%" membership for those audits, which a brand
+// reads as "we checked and found no coordination". It must instead say, in words,
+// that it could not look.
+func TestHTMLDisclosesUnassessedCoordination(t *testing.T) {
+	r := fullReport()
+	r.Fraud = FraudBlock{
+		Available:            true,
+		RiskScore:            f64p(41),
+		CoordinationAnalyzed: false, // no comment data reached the clique model
+		Confidence:           0.25,
+		ModelVersion:         "risk-v2",
+	}
+
+	out, err := HTML(r)
+	if err != nil {
+		t.Fatalf("HTML: %v", err)
+	}
+	html := string(out)
+
+	// The disclosure, in the brand's language, not a silent omission.
+	for _, want := range []string{"not assessed", "could not look"} {
+		if !strings.Contains(html, want) {
+			t.Errorf("unassessed coordination must be disclosed; missing %q", want)
+		}
+	}
+	// And NOT a zero anywhere. A "0%" here is the exact lie the disclosure replaces.
+	// The block's confidence is deliberately 0.25 ("25.0%") so that these checks
+	// cannot be tripped by an unrelated figure: every percentage the template prints
+	// carries one decimal, so a bare "0%" substring would also match "25.0%".
+	if strings.Contains(html, "0.0%") {
+		t.Error(`rendered "0.0%" for coordination that was never assessed: absence is not a measured zero`)
+	}
+	if strings.Contains(html, "<td>0</td>") {
+		t.Error("rendered a 0 clique count for a commenter graph that was never built")
+	}
+	// The rows are omitted outright, not printed empty.
+	for _, gone := range []string{"Coordinated commenter cliques", "Commenters inside a coordinated clique"} {
+		if strings.Contains(html, gone) {
+			t.Errorf("row %q must be omitted entirely when no commenter graph was built", gone)
+		}
+	}
+}
+
+// The two removed figures were never measurements: fake_follower_rate was the
+// composite risk score renamed (no follower list is ever fetched) and
+// bot_comment_rate was a verbatim duplicate of clique_membership_fraction (no
+// comment's text is ever classified). Neither word may appear anywhere in a
+// document a brand pays for.
+func TestHTMLNeverClaimsFakeFollowersOrBotComments(t *testing.T) {
+	for _, r := range []Report{fullReport(), {AuditID: "aud-3", Status: "failed"}} {
+		out, err := HTML(r)
+		if err != nil {
+			t.Fatalf("HTML: %v", err)
+		}
+		html := strings.ToLower(string(out))
+		for _, banned := range []string{"fake-follower", "fake follower", "fake_follower", "bot-comment", "bot comment", "bot_comment"} {
+			if strings.Contains(html, banned) {
+				t.Errorf("rendered report claims %q — nothing in this system ever measured it", banned)
+			}
 		}
 	}
 }

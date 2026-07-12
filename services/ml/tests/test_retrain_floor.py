@@ -24,7 +24,7 @@ def _fraud_rows(n):
     return [
         {
             "audit_job_id": f"a{i}", "features": {
-                "fake_follower_rate": 0.1, "bot_comment_rate": 0.1,
+                "risk_score": 10.0,
                 "engagement_anomaly": 0.1, "clique_count": 0,
                 "clique_membership_fraction": 0.0, "confidence": 0.5,
                 "niche": "x", "tier": "micro",

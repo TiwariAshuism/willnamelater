@@ -35,19 +35,34 @@ const (
 // service's response onto this shape before calling. Present is false when no
 // fraud pass ran (e.g. every platform degraded), which makes the authenticity
 // subscore neutral and zero-confidence rather than falsely clean.
+// Each measurement is a POINTER: nil means the signal could not be observed, and
+// it is then excluded from the aggregate with its weight renormalized away. Nil is
+// never treated as 0 — a zero would assert a clean measurement we never took.
 type FraudInput struct {
-	Present           bool
-	FakeFollowerRate  float64
-	BotCommentRate    float64
-	EngagementAnomaly float64
-	Confidence        float64
-	ModelVersion      string
+	// Present is false when no fraud pass produced anything at all.
+	Present bool
+
+	// RiskScore is the ml service's composite per-account fraud estimate (0-100,
+	// higher = more likely inauthentic), itself already renormalized over the
+	// signals it could observe (growth spike, engagement deviation, like/comment
+	// ratio, UnDBot). It is NOT a fake-follower rate.
+	RiskScore *float64
+
+	// CliqueMembershipFraction is the share of analyzed commenters sitting inside a
+	// coordinated co-commenter clique — an INDEPENDENT measurement from a different
+	// model, which is why it is blended with RiskScore rather than folded into it.
+	// Nil when no comments were available to analyze (most Instagram/CSV audits).
+	CliqueMembershipFraction *float64
+
+	Confidence   float64
+	ModelVersion string
+
 	// RefinedScore is the fraud champion's estimate over the FULL assembled
 	// feature vector (0-100, higher = more inauthentic), set only once a champion
 	// is promoted and serves. When non-nil it is the authenticity subscore's fraud
 	// aggregate — the champion trained to predict the fraud label from these
-	// signals, so its output supersedes the heuristic weighted sum. Nil in cold
-	// start, where the heuristic aggregate stands unchanged.
+	// signals, so its output supersedes the heuristic blend. Nil in cold start,
+	// where the heuristic aggregate stands.
 	RefinedScore *float64
 }
 

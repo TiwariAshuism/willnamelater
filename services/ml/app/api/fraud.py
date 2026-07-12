@@ -49,6 +49,20 @@ def score(request: FraudScoreRequest, background_tasks: BackgroundTasks):
     # The unsupervised result is always computed: it is the cold-start score, and
     # it supplies the explainable per-signal breakdown + confidence in every era.
     heuristic = score_fraud(request)
+
+    # Not one signal was observable. There is nothing to score and nothing to
+    # refine — return the honest absence rather than a 0 that reads as "clean".
+    if not heuristic.observed:
+        return FraudScoreResponse(
+            score=None,
+            observed=False,
+            confidence=0.0,
+            model_version=registry.active_version(),
+            signals=[],
+            flags=[],
+            generated_at=datetime.now(UTC),
+        )
+
     features = build_fraud_vector(heuristic)
 
     # Default to the honest cold-start score; a champion overrides it only if it

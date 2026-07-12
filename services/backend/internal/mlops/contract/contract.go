@@ -24,13 +24,18 @@ import (
 // false when a fraud pass ran but produced no signal (for example the ml service
 // was unavailable); the quality filter rejects such a row from training because
 // it cannot be quality-checked without the current model's read.
+// Each measurement is a pointer; nil means it was not observed and freezes into
+// the feature vector as JSON null (native-missing to LightGBM), never as a zero
+// that a model would read as a confident clean measurement.
 type FraudSignal struct {
-	Present                  bool
-	FakeFollowerRate         float64
-	BotCommentRate           float64
-	EngagementAnomaly        float64
-	CliqueCount              int
-	CliqueMembershipFraction float64
+	Present bool
+	// RiskScore is the composite per-account risk estimate (0-100). NOT a
+	// fake-follower rate: the fake_follower_rate and bot_comment_rate keys are gone
+	// because neither was ever measured (see FEATURE_ORDER v2).
+	RiskScore                *float64
+	EngagementAnomaly        *float64
+	CliqueCount              *int
+	CliqueMembershipFraction *float64
 	Confidence               float64
 	ModelVersion             string
 }

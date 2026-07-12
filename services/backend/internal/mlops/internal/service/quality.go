@@ -14,10 +14,10 @@ import (
 // completed audit teaches the model anything. The audit's own result is never
 // affected — only the training fold is.
 const (
-	// maxFakeFollowerRate rejects a row whose current-champion fake-follower
+	// maxFraudRisk rejects a row whose current-champion fraud-risk
 	// estimate is this high: a gamed account must not teach the model that fraud
 	// looks normal (feedback-poisoning guard).
-	maxFakeFollowerRate = 0.30
+	maxFraudRisk = 0.30
 	// minAccountAgeDays rejects brand-new accounts, whose metrics are volatile and
 	// easily gamed.
 	minAccountAgeDays = 90.0
@@ -36,7 +36,7 @@ const (
 // (quality_ok) only when no code fired. Rejected rows are still stored with their
 // reasons for admin review and excluded from the training export by default.
 const (
-	reasonFakeFollowerHigh = "fake_follower_estimate_high"
+	reasonFraudRiskHigh    = "fraud_risk_estimate_high"
 	reasonAccountTooNew    = "account_too_new"
 	reasonFollowerSpike    = "follower_spike"
 	reasonInsufficientPost = "insufficient_posts"
@@ -57,8 +57,13 @@ func evaluateQuality(fraud contract.FraudSignal, vec model.FeatureVector, primar
 	if !fraud.Present {
 		reasons = append(reasons, reasonNoFraudEstimate)
 	}
-	if fraud.FakeFollowerRate >= maxFakeFollowerRate {
-		reasons = append(reasons, reasonFakeFollowerHigh)
+	// The anti-gaming filter now reads the honest composite risk score (0-100). It
+	// used to read fake_follower_rate, which was that same score renamed — so the
+	// check is unchanged in substance, only in candour. A nil score means the signal
+	// was never observed, and an unobserved account is not filtered as suspicious:
+	// absence is not evidence.
+	if fraud.RiskScore != nil && *fraud.RiskScore/100 >= maxFraudRisk {
+		reasons = append(reasons, reasonFraudRiskHigh)
 	}
 	if vec.AccountAgeDaysProxy != nil && *vec.AccountAgeDaysProxy < minAccountAgeDays {
 		reasons = append(reasons, reasonAccountTooNew)

@@ -21,8 +21,7 @@ def _dataset():
                 "has_features": True,
                 "features": {
                     "present": True,
-                    "fake_follower_rate": 0.8,
-                    "bot_comment_rate": 0.7,
+                    "risk_score": 80.0,
                     "engagement_anomaly": 0.6,
                     "clique_count": 9,
                     "clique_membership_fraction": 0.5,
@@ -37,8 +36,7 @@ def _dataset():
                 "has_features": True,
                 "features": {
                     "present": True,
-                    "fake_follower_rate": 0.05,
-                    "bot_comment_rate": 0.05,
+                    "risk_score": 5.0,
                     "engagement_anomaly": 0.05,
                     "clique_count": 0,
                     "clique_membership_fraction": 0.0,

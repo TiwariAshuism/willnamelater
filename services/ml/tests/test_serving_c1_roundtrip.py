@@ -17,8 +17,13 @@ from training.features import FEATURE_ORDER  # noqa: E402
 def test_default_loader_serves_a_trained_fraud_ensemble(tmp_path):
     # A tiny, cleanly-separable slice — fixtures exercise the load/predict
     # mechanics, not any claim about a specific account's fraud verdict.
-    fraudulent = [[0.8, 0.7, 0.6, 9.0, 0.5, 0.6]] * 20
-    legitimate = [[0.05, 0.05, 0.05, 0.0, 0.0, 0.55]] * 20
+    # EXPECTATION CHANGED: rows are FIVE-wide now (FEATURE_ORDER v2 dropped the
+    # renamed-composite `fake_follower_rate` and the duplicate `bot_comment_rate`),
+    # laid out as (risk_score, engagement_anomaly, clique_count,
+    # clique_membership_fraction, confidence) — risk_score on the 0-100 scale.
+    fraudulent = [[80.0, 0.6, 9.0, 0.5, 0.6]] * 20
+    legitimate = [[5.0, 0.05, 0.0, 0.0, 0.55]] * 20
+    assert len(fraudulent[0]) == len(FEATURE_ORDER)
     features = fraudulent + legitimate
     targets = [1] * 20 + [0] * 20
 

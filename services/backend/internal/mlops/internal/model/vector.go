@@ -16,13 +16,24 @@ import "encoding/json"
 // the no-zero-fill rule forbids inventing them.
 type FeatureVector struct {
 	// Fraud sub-vector — copied verbatim from the audit's fraud_result. Keys equal
-	// the trainer's FEATURE_ORDER; always present.
-	FakeFollowerRate         float64 `json:"fake_follower_rate"`
-	BotCommentRate           float64 `json:"bot_comment_rate"`
-	EngagementAnomaly        float64 `json:"engagement_anomaly"`
-	CliqueCount              int     `json:"clique_count"`
-	CliqueMembershipFraction float64 `json:"clique_membership_fraction"`
-	Confidence               float64 `json:"confidence"`
+	// the trainer's FEATURE_ORDER (v2).
+	//
+	// Every one is a POINTER: an unobserved signal marshals to JSON null and reaches
+	// LightGBM as native-missing, which is what it is. They used to be plain
+	// float64s, so an audit that never analyzed a commenter froze clique_count = 0
+	// into the training set as a real observation — teaching the model that "we
+	// didn't look" is a specific, confident point in feature space.
+	//
+	// Two former keys are gone because they were never measurements:
+	// fake_follower_rate (the risk score renamed) and bot_comment_rate (a duplicate
+	// of clique_membership_fraction). The v1 vector therefore carried six positions
+	// holding five distinct values, handing any model a perfectly collinear pair
+	// dressed up as independent evidence.
+	RiskScore                *float64 `json:"risk_score"`
+	EngagementAnomaly        *float64 `json:"engagement_anomaly"`
+	CliqueCount              *int     `json:"clique_count"`
+	CliqueMembershipFraction *float64 `json:"clique_membership_fraction"`
+	Confidence               float64  `json:"confidence"`
 
 	// Descriptive / reach sub-vector — computed at capture from the snapshot.
 	FollowerCount          int64    `json:"follower_count"`

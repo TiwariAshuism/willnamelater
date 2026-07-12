@@ -98,31 +98,32 @@ components:
       type: object
     admin.FraudFeatures:
       properties:
-        bot_comment_rate:
-          type: number
         clique_count:
+          nullable: true
           type: integer
         clique_membership_fraction:
+          nullable: true
           type: number
         confidence:
           type: number
         engagement_anomaly:
-          type: number
-        fake_follower_rate:
+          nullable: true
           type: number
         model_version:
           type: string
         present:
           type: boolean
+        risk_score:
+          nullable: true
+          type: number
       required:
-      - bot_comment_rate
       - clique_count
       - clique_membership_fraction
       - confidence
       - engagement_anomaly
-      - fake_follower_rate
       - model_version
       - present
+      - risk_score
       type: object
     admin.LabelExportResponse:
       properties:
@@ -1221,28 +1222,25 @@ components:
       properties:
         available:
           type: boolean
-        bot_comment_rate:
-          type: number
         clique_count:
+          nullable: true
           type: integer
         clique_membership_fraction:
+          nullable: true
           type: number
         confidence:
           type: number
-        engagement_anomaly:
-          type: number
-        fake_follower_rate:
-          type: number
+        coordination_analyzed:
+          type: boolean
         model_version:
           type: string
+        risk_score:
+          nullable: true
+          type: number
       required:
       - available
-      - bot_comment_rate
-      - clique_count
-      - clique_membership_fraction
       - confidence
-      - engagement_anomaly
-      - fake_follower_rate
+      - coordination_analyzed
       - model_version
       type: object
     report.Narrative:

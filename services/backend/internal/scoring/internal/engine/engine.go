@@ -15,14 +15,49 @@ import (
 // bad audit.
 var ErrNoWeights = errors.New("scoring: weight set sums to zero")
 
-// Reach saturation bounds. Reach maps follower count onto [0,1] on a log10 scale
-// between these edges: a ~1K-follower account sits at the floor, a 10M+ account
-// saturates the ceiling. The scale is logarithmic because audience reach spans
-// orders of magnitude and its marginal influence diminishes with size.
+// ErrInsufficientEvidence is returned when too little of the composite's weight
+// rests on components we actually measured. The engine refuses to invent a number
+// out of absent data: the caller must disclose that the account could not be
+// scored, which is the honest outcome and the one a trust product must be able to
+// give.
+var ErrInsufficientEvidence = errors.New("scoring: too few measured components to score")
+
+// Audience-size saturation bounds. The component maps FOLLOWER COUNT onto [0,1]
+// on a log10 scale between these edges: a ~1K-follower account sits at the floor,
+// a 10M+ account saturates the ceiling. The scale is logarithmic because audience
+// size spans orders of magnitude and its marginal influence diminishes with size.
+//
+// This component was once called "reach", which was a lie with a dangerous edge:
+// it is computed ENTIRELY from follower count — the exact quantity purchased
+// followers inflate — so a creator who buys 100K followers scored HIGHER on the
+// dimension the product exists to police. It is now named for what it measures,
+// and its confidence reflects that a follower count is a weak proxy for the reach
+// it was pretending to be. Real reach is only knowable from first-party Insights
+// (Flow A), and when we have it, it belongs in a separate, honest component.
 const (
-	reachFloor = 1_000.0
-	reachCeil  = 10_000_000.0
+	audienceFloor = 1_000.0
+	audienceCeil  = 10_000_000.0
 )
+
+// audienceSizeConfidence is the confidence of the audience-size component when a
+// follower count IS known. It is deliberately not 1.0: follower count is a
+// self-reported, purchasable number and a weak proxy for actual reach, so the
+// component must not be able to dominate the composite at full certainty.
+const audienceSizeConfidence = 0.5
+
+// neutralScore is the midpoint a subscore is shrunk toward in proportion to how
+// little we trust it. Shrinking to the midpoint (rather than to 0 or 100) is the
+// only choice that does not smuggle in a verdict: low confidence must mean "we
+// don't know", not "we suspect the worst" or "we assume the best".
+const neutralScore = 50.0
+
+// minEvidencedWeight is the share of the composite's weight that must rest on
+// ACTUALLY MEASURED components before a number may be published at all. Below it,
+// too much of the score would be inference over absence, so the engine refuses to
+// produce a composite and the deliverable discloses that it could not score the
+// account. An audit that measured almost nothing must say so, not emit a
+// confident-looking 50-something.
+const minEvidencedWeight = 0.5
 
 // engagementDepthSpan is the (comments + shares) / (likes + 1) ratio at which
 // the content-quality signal saturates. Deeper interactions than a passive like
@@ -35,13 +70,25 @@ const engagementDepthSpan = 0.15
 // between consecutive readings read as erratic.
 const growthSpan = 0.5
 
-// Fraud sub-signal weights inside the authenticity subscore. Fake followers
-// weigh most (they inflate the reach the whole score rewards), then bot comments
-// and the engagement anomaly. They sum to one.
+// Fraud sub-signal weights inside the authenticity subscore. Two INDEPENDENT
+// measurements are blended:
+//
+//   - RiskScore, the ml service's per-account composite (growth spike, engagement
+//     deviation, like/comment ratio, UnDBot), already renormalized over whatever
+//     it could observe; and
+//   - CliqueMembershipFraction, the co-commenter coordination signal from a
+//     different model entirely.
+//
+// The engagement anomaly is NOT a third term: it is already inside RiskScore, and
+// blending it again would double-count it.
+//
+// The weights are renormalized over whichever terms are actually present, so an
+// audit with no comments (no clique signal) is scored on the risk score alone at
+// full weight — not dragged toward "clean" by a coordination signal we never
+// measured.
 const (
-	fraudWeightFakeFollowers = 0.40
-	fraudWeightBotComments   = 0.30
-	fraudWeightAnomaly       = 0.30
+	fraudWeightRisk         = 0.65
+	fraudWeightCoordination = 0.35
 )
 
 // Input is everything Compute needs, all of it already in memory: the resolved
@@ -76,25 +123,61 @@ func Compute(in Input) (contract.Score, error) {
 	platforms := contributingPlatforms(in.Snapshots)
 	followers := representativeFollowers(in.Snapshots)
 
-	reach := reachSubscore(followers)
+	reach := audienceSizeSubscore(followers)
 	engagement := engagementSubscore(in.Snapshots, followers, in.EngagementBenchmark)
 	authenticity := authenticitySubscore(in.Fraud)
 	consistency := consistencySubscore(in.Snapshots)
 	content := contentSubscore(in.Snapshots)
 
+	// The composite is a weighted mean over the components we ACTUALLY MEASURED.
+	//
+	// It used to be a weighted mean of every component's Value, with Confidence
+	// tracked as a separate, parallel number that never touched the score. A
+	// component with zero confidence — engagement with no posts, say, which returns
+	// a neutral {Value: 50, Confidence: 0} — still contributed its full weight×50 to
+	// the headline. A third of the composite could be invented 50s while the
+	// customer read a confident-looking number.
+	//
+	// Now a zero-confidence component is DROPPED and its weight renormalized away,
+	// and a surviving component is shrunk toward neutral in proportion to how little
+	// we trust it. An audit that measured almost nothing yields no number at all.
 	w := in.Weights
-	total := w.sum()
-	overall01 := (w.Reach*reach.Value +
-		w.EngagementQuality*engagement.Value +
-		w.Authenticity*authenticity.Value +
-		w.Consistency*consistency.Value +
-		w.ContentQuality*content.Value) / (total * 100)
+	components := []struct {
+		weight float64
+		sub    contract.Subscore
+	}{
+		{w.Reach, reach},
+		{w.EngagementQuality, engagement},
+		{w.Authenticity, authenticity},
+		{w.Consistency, consistency},
+		{w.ContentQuality, content},
+	}
 
-	overallConf := (w.Reach*reach.Confidence +
-		w.EngagementQuality*engagement.Confidence +
-		w.Authenticity*authenticity.Confidence +
-		w.Consistency*consistency.Confidence +
-		w.ContentQuality*content.Confidence) / total
+	var weightedValue, weightedConf, evidencedWeight float64
+	for _, c := range components {
+		if c.sub.Confidence <= 0 {
+			// Not measured. It contributes nothing and forfeits its weight.
+			continue
+		}
+		// Shrink toward neutral by confidence: a half-trusted 90 should not move the
+		// composite as far as a fully-trusted 90.
+		effective := neutralScore + c.sub.Confidence*(c.sub.Value-neutralScore)
+		weightedValue += c.weight * effective
+		weightedConf += c.weight * c.sub.Confidence
+		evidencedWeight += c.weight
+	}
+
+	total := w.sum()
+
+	// Too little of the score rests on real evidence to publish a number. Returning
+	// a composite here would be an invention dressed as a measurement, so the score
+	// is withheld and the caller must disclose the absence.
+	if evidencedWeight/total < minEvidencedWeight {
+		return contract.Score{}, ErrInsufficientEvidence
+	}
+
+	overall01 := weightedValue / (evidencedWeight * 100)
+	overallConf := weightedConf / total
 
 	return contract.Score{
 		Niche:                 in.Niche,
@@ -140,16 +223,25 @@ func representativeFollowers(snaps []connector.Snapshot) int64 {
 	return largest
 }
 
-// reachSubscore maps follower count onto [0,1] on a log scale between reachFloor
-// and reachCeil. Confidence is full when a follower count is known and zero when
-// it is not, since reach is otherwise undetermined.
-func reachSubscore(followers int64) contract.Subscore {
+// audienceSizeSubscore maps FOLLOWER COUNT onto [0,1] on a log scale between
+// audienceFloor and audienceCeil.
+//
+// It measures audience SIZE, not reach. Follower count is self-reported and
+// purchasable — it is the very number a fraudulent account inflates — so this
+// component is capped at audienceSizeConfidence rather than the full certainty it
+// once claimed. At Confidence: 1 and weight 0.30 it was the heaviest term in the
+// composite, which meant buying followers RAISED an account's audit score. It no
+// longer can dominate, and it is no longer named for a thing it does not measure.
+//
+// Confidence is zero when no follower count is known: the size is then absent, not
+// zero, and a zero-confidence component is dropped from the composite entirely.
+func audienceSizeSubscore(followers int64) contract.Subscore {
 	if followers <= 0 {
 		return contract.Subscore{Value: 0, Confidence: 0}
 	}
-	num := math.Log10(float64(followers)) - math.Log10(reachFloor)
-	den := math.Log10(reachCeil) - math.Log10(reachFloor)
-	return contract.Subscore{Value: clamp01(num/den) * 100, Confidence: 1}
+	num := math.Log10(float64(followers)) - math.Log10(audienceFloor)
+	den := math.Log10(audienceCeil) - math.Log10(audienceFloor)
+	return contract.Subscore{Value: clamp01(num/den) * 100, Confidence: audienceSizeConfidence}
 }
 
 // ObservedEngagementRate is the mean per-post engagement rate across snapshots
@@ -232,19 +324,43 @@ func authenticitySubscore(f contract.FraudInput) contract.Subscore {
 	if !f.Present {
 		return contract.Subscore{Value: 50, Confidence: 0}
 	}
+
 	// A promoted champion refines the whole vector: its score IS the calibrated
 	// fraud probability (0-100, higher = more fraud), trained on the fraud label,
-	// so it supersedes the heuristic weighted sum. Cold start (RefinedScore nil)
-	// keeps the explainable heuristic blend below.
-	var fraud float64
+	// so it supersedes the heuristic blend. Cold start (RefinedScore nil) uses the
+	// explainable blend below.
 	if f.RefinedScore != nil {
-		fraud = clamp01(*f.RefinedScore / 100)
-	} else {
-		fraud = clamp01(fraudWeightFakeFollowers*clamp01(f.FakeFollowerRate) +
-			fraudWeightBotComments*clamp01(f.BotCommentRate) +
-			fraudWeightAnomaly*clamp01(f.EngagementAnomaly))
+		fraud := clamp01(*f.RefinedScore / 100)
+		return contract.Subscore{Value: (1 - fraud) * 100, Confidence: clamp01(f.Confidence)}
 	}
-	return contract.Subscore{Value: (1 - fraud) * 100, Confidence: clamp01(f.Confidence)}
+
+	// Blend only the signals actually OBSERVED, renormalizing their weights. An
+	// absent signal contributes nothing and takes its weight with it — it is never
+	// clamped to zero, which would be a full-weight vote for "clean" on a
+	// measurement we never made.
+	var weighted, presentWeight float64
+	if f.RiskScore != nil {
+		weighted += fraudWeightRisk * clamp01(*f.RiskScore/100)
+		presentWeight += fraudWeightRisk
+	}
+	if f.CliqueMembershipFraction != nil {
+		weighted += fraudWeightCoordination * clamp01(*f.CliqueMembershipFraction)
+		presentWeight += fraudWeightCoordination
+	}
+
+	// A fraud pass ran but produced no usable signal. That is not a clean account —
+	// it is an unexamined one. Return neutral at zero confidence, exactly as if no
+	// pass had run, so it cannot certify anything.
+	if presentWeight == 0 {
+		return contract.Subscore{Value: 50, Confidence: 0}
+	}
+
+	fraud := clamp01(weighted / presentWeight)
+	// Scale confidence by the share of the signal vector we actually saw: an
+	// authenticity verdict resting on one of two signals is not as trustworthy as
+	// one resting on both, and the number must say so.
+	conf := clamp01(f.Confidence) * presentWeight
+	return contract.Subscore{Value: (1 - fraud) * 100, Confidence: clamp01(conf)}
 }
 
 // consistencySubscore blends growth smoothness (steady rather than spiky

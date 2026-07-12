@@ -57,33 +57,43 @@ def engagement_deviation_signal(
     posts: list[PostMetrics],
     follower_count: int,
     benchmark: EngagementBenchmark | None,
-) -> float:
+) -> float | None:
     """How far observed engagement sits from the sourced benchmark, in [0, 1].
 
     Two-sided: both suspiciously low engagement (inflated follower base) and
     suspiciously high engagement (bought likes or pod activity) raise it.
-    Returns 0.0 when no benchmark is supplied — the signal is *skipped*, never
-    anchored to a fabricated curve.
+
+    Returns **None** — not 0.0 — when the signal cannot be computed (no sourced
+    benchmark, or no posts to observe). This is the difference between "we looked
+    and found nothing suspicious" and "we could not look". Returning 0.0 into a
+    weighted composite is not *skipping* the signal: it is casting a full-weight
+    vote for "perfectly clean", which silently biases every score toward
+    innocence and caps the achievable fraud score at the surviving weight mass.
+    The caller must renormalize over the signals that were actually observed.
     """
     if benchmark is None:
-        return 0.0
+        return None
     observed = observed_engagement_rate(posts, follower_count)
     if observed is None:
-        return 0.0
+        return None
     expected = expected_engagement_rate(follower_count, benchmark)
     deviation = abs(observed - expected)
     return min(deviation / _ENGAGEMENT_DEV_SPAN, 1.0)
 
 
-def like_comment_ratio_signal(posts: list[PostMetrics]) -> float:
+def like_comment_ratio_signal(posts: list[PostMetrics]) -> float | None:
     """Suspicion from an abnormally high likes-to-comments ratio, in [0, 1].
 
     Uses the median across posts so a single viral post does not dominate.
     Posts with zero comments contribute the post's like count against a floor
     of one comment, which is the realistic worst case for bought engagement.
+
+    Returns **None** with no posts: with nothing to measure the ratio over, the
+    signal is absent, not zero. A 0.0 would be a full-weight vote for "clean"
+    cast over an empty feed.
     """
     if not posts:
-        return 0.0
+        return None
     ratios = np.array(
         [p.likes / max(p.comments, 1) for p in posts], dtype=float
     )

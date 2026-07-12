@@ -43,6 +43,11 @@ var _ repository.Repository = (*fakeRepo)(nil)
 
 func key(niche, tier string) string { return niche + "|" + tier }
 
+// ptr builds a pointer to a fraud measurement. Every contract.FraudInput signal is
+// a pointer so an unobserved one is nil, never a zero that would assert a clean
+// measurement we never took.
+func ptr[T any](v T) *T { return &v }
+
 func (f *fakeRepo) ActiveWeights(_ context.Context, niche, tier string) (engine.Weights, bool, error) {
 	w, ok := f.weights[key(niche, tier)]
 	return w, ok, nil
@@ -144,8 +149,10 @@ func TestScorePersistsAndStamps(t *testing.T) {
 	svc := New(repo, fakeProfiles{niche: "beauty"})
 	auditID, infID := uuid.New(), uuid.New()
 
+	// A low composite risk score (0-100) with no clique signal — the ordinary
+	// Instagram/CSV shape, where no comments were available to analyze.
 	score, err := svc.Score(context.Background(), auditID, infID, sampleSnapshots(),
-		contract.FraudInput{Present: true, FakeFollowerRate: 0.02, Confidence: 0.6})
+		contract.FraudInput{Present: true, RiskScore: ptr(2.0), Confidence: 0.6})
 	if err != nil {
 		t.Fatalf("score: %v", err)
 	}

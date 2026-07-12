@@ -130,12 +130,14 @@ func (m *Module) AuditView(ctx context.Context, auditID string) (View, error) {
 // found no signal; the found return of FraudResultOf distinguishes that from a
 // job that never reached the fraud step and has no stored row.
 type FraudView struct {
-	Present                  bool
-	FakeFollowerRate         float64
-	BotCommentRate           float64
-	EngagementAnomaly        float64
-	CliqueCount              int
-	CliqueMembershipFraction float64
+	Present bool
+	// RiskScore is the composite per-account risk estimate (0-100). NOT a
+	// fake-follower rate. Pointers are nil when the signal was not observed —
+	// never a fabricated zero.
+	RiskScore                *float64
+	EngagementAnomaly        *float64
+	CliqueCount              *int
+	CliqueMembershipFraction *float64
 	Confidence               float64
 	ModelVersion             string
 }
@@ -151,8 +153,7 @@ func (m *Module) FraudResultOf(ctx context.Context, auditJobID uuid.UUID) (Fraud
 	}
 	return FraudView{
 		Present:                  fr.Present,
-		FakeFollowerRate:         fr.FakeFollowerRate,
-		BotCommentRate:           fr.BotCommentRate,
+		RiskScore:                fr.RiskScore,
 		EngagementAnomaly:        fr.EngagementAnomaly,
 		CliqueCount:              fr.CliqueCount,
 		CliqueMembershipFraction: fr.CliqueMembershipFraction,

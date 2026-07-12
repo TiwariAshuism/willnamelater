@@ -84,7 +84,8 @@ func TestScoreFraudEncodesRequest(t *testing.T) {
 
 	doer := &fakeDoer{status: http.StatusOK, body: `{
 		"score": 12.5, "confidence": 0.3, "model_version": "heuristics-0.1",
-		"estimate": true, "signals": [], "flags": [], "generated_at": "2026-07-01T12:00:00Z"
+		"estimate": true, "observed": true, "signals": [], "flags": [],
+		"generated_at": "2026-07-01T12:00:00Z"
 	}`}
 	client := New("http://ml.internal/", doer)
 
@@ -105,8 +106,41 @@ func TestScoreFraudEncodesRequest(t *testing.T) {
 	if !bytes.Equal(doer.gotBody, wantBody) {
 		t.Errorf("request body mismatch\n got: %s\nwant: %s", doer.gotBody, wantBody)
 	}
-	if resp.Score != 12.5 || resp.ModelVersion != "heuristics-0.1" || !resp.Estimate {
-		t.Errorf("decoded response = %+v, want score 12.5 / heuristics-0.1 / estimate", resp)
+	// Score is a POINTER now: a number the service could compute decodes to a
+	// non-nil 12.5 with Observed true. (It was a bare float64, which made an
+	// unobservable account and a genuinely clean one decode identically as 0.)
+	if resp.Score == nil || *resp.Score != 12.5 {
+		t.Errorf("score = %v, want 12.5", resp.Score)
+	}
+	if !resp.Observed {
+		t.Error("observed = false, want true when the service returned a score")
+	}
+	if resp.ModelVersion != "heuristics-0.1" || !resp.Estimate {
+		t.Errorf("decoded response = %+v, want heuristics-0.1 / estimate", resp)
+	}
+}
+
+// TestScoreFraudNullScoreIsNotZero is the honest-absence guarantee on the wire: an
+// account for which NOT ONE signal could be computed comes back with a null score
+// and observed=false. It must decode to a nil Score, never a 0 — a 0 on a 0-100
+// risk scale is a perfectly clean account, the exact opposite of an unexamined one.
+func TestScoreFraudNullScoreIsNotZero(t *testing.T) {
+	doer := &fakeDoer{status: http.StatusOK, body: `{
+		"score": null, "confidence": 0.0, "model_version": "heuristics-0.1",
+		"estimate": true, "observed": false, "signals": [], "flags": [],
+		"generated_at": "2026-07-01T12:00:00Z"
+	}`}
+	client := New("http://ml.internal", doer)
+
+	resp, err := client.ScoreFraud(context.Background(), BuildFraudRequest(sampleSnapshot()))
+	if err != nil {
+		t.Fatalf("ScoreFraud: %v", err)
+	}
+	if resp.Score != nil {
+		t.Errorf("score = %v, want nil for an unobservable account", *resp.Score)
+	}
+	if resp.Observed {
+		t.Error("observed = true, want false when no signal could be computed")
 	}
 }
 

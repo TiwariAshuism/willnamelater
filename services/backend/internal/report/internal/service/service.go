@@ -207,12 +207,14 @@ func (s *Service) Assemble(ctx context.Context, auditID string) (render.Report, 
 	}
 	if fr.Found && fr.Present {
 		report.Fraud = render.FraudBlock{
-			Available:                true,
+			Available: true,
+			RiskScore: fr.RiskScore,
+			// Coordination was only assessed if the clique model actually ran, which
+			// requires comments. Absent, the report says "not assessed" rather than
+			// printing a 0 that reads as "no coordination found".
+			CoordinationAnalyzed:     fr.CliqueCount != nil,
 			CliqueCount:              fr.CliqueCount,
 			CliqueMembershipFraction: fr.CliqueMembershipFraction,
-			FakeFollowerRate:         fr.FakeFollowerRate,
-			BotCommentRate:           fr.BotCommentRate,
-			EngagementAnomaly:        fr.EngagementAnomaly,
 			Confidence:               fr.Confidence,
 			ModelVersion:             fr.ModelVersion,
 		}

@@ -104,8 +104,7 @@ func (r mlopsFeatureRecorder) RecordFeatures(ctx context.Context, rec auditport.
 		Snapshots:    rec.Snapshots,
 		Fraud: mlops.FraudSignal{
 			Present:                  rec.Fraud.Present,
-			FakeFollowerRate:         rec.Fraud.FakeFollowerRate,
-			BotCommentRate:           rec.Fraud.BotCommentRate,
+			RiskScore:                rec.Fraud.RiskScore,
 			EngagementAnomaly:        rec.Fraud.EngagementAnomaly,
 			CliqueCount:              rec.Fraud.CliqueCount,
 			CliqueMembershipFraction: rec.Fraud.CliqueMembershipFraction,

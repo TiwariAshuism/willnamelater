@@ -70,15 +70,24 @@ def _loader(ref):
 def _vector() -> dict:
     # A full assembled vector — every FEATURE_ORDER key populated with a distinct
     # value so column order is observable in the captured row.
+    #
+    # EXPECTATION CHANGED: the vector is FIVE columns now, keyed on `risk_score`
+    # (the 0-100 composite estimate) instead of the removed `fake_follower_rate`
+    # (which was that same composite renamed — nothing ever fetched a follower
+    # list) and `bot_comment_rate` (a bit-for-bit duplicate of
+    # clique_membership_fraction — no comment text was ever classified).
     return {
-        "fake_follower_rate": 0.4,
-        "bot_comment_rate": 0.3,
+        "risk_score": 40.0,
         "engagement_anomaly": 0.2,
         "clique_count": 7,
         "clique_membership_fraction": 0.5,
         "confidence": 0.6,
         "audit_ref": "audit-xyz",
     }
+
+
+#: The row `_vector()` must produce, in the frozen FEATURE_ORDER column order.
+_EXPECTED_ROW = [40.0, 0.2, 7.0, 0.5, 0.6]
 
 
 @pytest.fixture(autouse=True)
@@ -124,7 +133,7 @@ def test_champion_refines_full_vector(monkeypatch, tmp_path, emitted) -> None:
 
     # The FULL vector reached the model, in the frozen column order — not a
     # confidence-only row (the /score skew this endpoint exists to close).
-    assert _champion.rows == [[0.4, 0.3, 0.2, 7.0, 0.5, 0.6]]
+    assert _champion.rows == [_EXPECTED_ROW]
 
 
 def test_shadow_logs_challenger_without_changing_result(
@@ -148,7 +157,7 @@ def test_shadow_logs_challenger_without_changing_result(
     assert record.challenger_version == "lgbm-challenger1"
     assert record.challenger_score == 10.0
     assert record.audit_job_id == "audit-xyz"
-    assert _challenger.rows == [[0.4, 0.3, 0.2, 7.0, 0.5, 0.6]]
+    assert _challenger.rows == [_EXPECTED_ROW]
 
 
 def test_missing_signals_are_native_missing_not_zero(

@@ -41,12 +41,14 @@ type AdminGuard interface {
 // Present is false when a fraud pass ran but produced no signal; the found
 // return of FraudResultOf is false when no fraud row exists for the audit at all.
 type FraudView struct {
-	Present                  bool
-	FakeFollowerRate         float64
-	BotCommentRate           float64
-	EngagementAnomaly        float64
-	CliqueCount              int
-	CliqueMembershipFraction float64
+	Present bool
+	// RiskScore is the composite per-account risk estimate (0-100). NOT a
+	// fake-follower rate. Pointers are nil when the signal was not observed —
+	// never a fabricated zero.
+	RiskScore                *float64
+	EngagementAnomaly        *float64
+	CliqueCount              *int
+	CliqueMembershipFraction *float64
 	Confidence               float64
 	ModelVersion             string
 }

@@ -47,23 +47,46 @@ type Ingester interface {
 // from the fraud client. The ml module's wire request and response never appear
 // here; app's adapter builds the request from the snapshots and collapses the
 // response onto this shape.
+// Every measurement below is a POINTER, and nil means ABSENT — "we could not
+// look" — never zero. Zero is a measurement ("we looked; it is clean"), and
+// conflating the two is how an account nobody examined gets presented to a brand
+// as authentic. A nil signal is excluded from the composite and its weight is
+// renormalized away; it is never clamped to 0 and never rendered as "0%".
 type FraudSummary struct {
-	// Present is false when no fraud signal could be produced (for example the
-	// ml service was unavailable), in which case the scores below are ignored.
-	Present           bool
-	FakeFollowerRate  float64
-	BotCommentRate    float64
-	EngagementAnomaly float64
+	// Present is false when no fraud signal could be produced at all (for example
+	// the ml service was unavailable), in which case every field below is nil.
+	Present bool
+
+	// RiskScore is the ml service's composite per-account fraud estimate, 0-100,
+	// higher = more likely inauthentic. It is NOT a fake-follower percentage and
+	// must never be labelled as one: it is a weighted blend of growth-spike,
+	// engagement-deviation, like/comment-ratio and UnDBot signals, renormalized
+	// over whichever of those could actually be observed.
+	RiskScore *float64
+
+	// EngagementAnomaly is how far observed engagement sits from a SOURCED
+	// benchmark. It is nil whenever no benchmark was supplied — which, until the
+	// scoring layer passes one down, is always. It is nil, not 0: an unmeasured
+	// anomaly is not an absent anomaly.
+	EngagementAnomaly *float64
+
 	// CliqueCount is the primary coordination signal: the number of maximal
 	// co-commenter cliques of the model's minimum size. CliqueMembershipFraction
-	// is the secondary signal, the share of analyzed commenters sitting inside
-	// one. Both are surfaced on the deliverable's coordination headline and
-	// persisted per audit; they are not inputs to the composite score, which
-	// consumes only the rates above.
-	CliqueCount              int
-	CliqueMembershipFraction float64
-	Confidence               float64
-	ModelVersion             string
+	// is the secondary signal, the share of analyzed commenters sitting inside one.
+	//
+	// Both are nil when the snapshots carried NO comments — the overwhelmingly
+	// common case for Instagram and CSV audits, which pull no comment events at
+	// all. A zero here would assert "we analyzed the commenters and found no
+	// coordination", which we did not do.
+	CliqueCount              *int
+	CliqueMembershipFraction *float64
+
+	// Confidence is scaled by how much of the signal vector was actually observed,
+	// so a score resting on one signal is not presented as firmly as one resting on
+	// four.
+	Confidence   float64
+	ModelVersion string
+
 	// RefinedScore is the fraud champion's estimate over the full assembled vector
 	// (0-100, higher = more inauthentic), set by the adapter only when a champion
 	// is promoted and serving. Nil in cold start. It is threaded into scoring's
@@ -82,13 +105,18 @@ type FraudClient interface {
 // FraudInput is the fraud contribution the scoring engine consumes. It is
 // shaped identically to scoring.FraudInput; app adapts a FraudSummary onto the
 // scoring module's own type.
+// Nil means the signal was not observed; the scoring engine excludes it and
+// renormalizes, never treating it as a clean zero.
 type FraudInput struct {
-	Present           bool
-	FakeFollowerRate  float64
-	BotCommentRate    float64
-	EngagementAnomaly float64
-	Confidence        float64
-	ModelVersion      string
+	Present bool
+	// RiskScore is the ml composite per-account risk estimate (0-100). NOT a
+	// fake-follower rate.
+	RiskScore *float64
+	// CliqueMembershipFraction is the independent coordination measurement, blended
+	// with RiskScore. Nil when no comments were analyzable.
+	CliqueMembershipFraction *float64
+	Confidence               float64
+	ModelVersion             string
 	// RefinedScore, when non-nil, is the champion's score over the full assembled
 	// vector; scoring uses it as the fraud aggregate. Nil in cold start.
 	RefinedScore *float64

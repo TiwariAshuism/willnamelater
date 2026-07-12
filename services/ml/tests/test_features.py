@@ -78,21 +78,36 @@ def test_growth_spike_signal_is_monotone_in_spike_size() -> None:
         counts = _spiked_counts(100, 20, spike_day=10, extra=extra)
         feats = extract_follower_features(_series(counts), counts[-1], 300)
         signal = growth_spike_signal(feats)
+        assert signal is not None  # 19 positive deltas: a measurable baseline
         assert 0.0 <= signal <= 1.0
         assert signal >= prev  # sharper spike never lowers the signal
         prev = signal
     assert prev > 0.0  # a large spike must actually register
 
 
-def test_growth_spike_signal_flat_series_is_zero() -> None:
+def test_growth_spike_signal_flat_series_is_measured_zero() -> None:
+    # A measured 0.0 is a real OBSERVATION ("we looked, growth is flat"), and must
+    # stay distinct from the None the signal now returns when it could not look at
+    # all. A present-but-flat series has a baseline, so it is measured, not absent.
     counts = list(range(10_000, 10_000 + 20 * 100, 100))
     feats = extract_follower_features(_series(counts), counts[-1], 300)
-    assert growth_spike_signal(feats) == 0.0
+    signal = growth_spike_signal(feats)
+    assert signal is not None
+    assert signal == 0.0
 
 
-def test_growth_spike_signal_short_series_is_zero() -> None:
+def test_growth_spike_signal_short_series_is_absent_not_zero() -> None:
+    # EXPECTATION CHANGED (was test_growth_spike_signal_short_series_is_zero,
+    # asserting 0.0). Two follower points give a single delta — not enough to
+    # establish a baseline, so the spike is UNMEASURABLE. The old 0.0 was a
+    # full-weight vote for "no suspicious growth" cast over growth nobody ever
+    # saw; the signal now says None ("we could not look") and score_fraud
+    # renormalizes it away instead of counting it as evidence of innocence.
     feats = extract_follower_features(_series([10_000, 10_100]), 10_100, 300)
-    assert growth_spike_signal(feats) == 0.0
+    assert growth_spike_signal(feats) is None
+
+    # An empty series is likewise absent, never a clean zero.
+    assert growth_spike_signal(extract_follower_features([], 10_100, 300)) is None
 
 
 def test_follower_following_signal_bounds_and_band() -> None:
@@ -103,14 +118,22 @@ def test_follower_following_signal_bounds_and_band() -> None:
     assert 0.0 < extreme <= 1.0
 
 
-def test_engagement_deviation_bounds_and_requires_benchmark() -> None:
+def test_engagement_deviation_bounds_and_is_absent_without_inputs() -> None:
+    # EXPECTATION CHANGED (was test_engagement_deviation_bounds_and_requires_
+    # benchmark, asserting 0.0 for both unmeasurable cases). An uncomputable
+    # deviation is now None — ABSENT — not 0.0. Feeding 0.0 into the weighted
+    # composite does not "skip" the signal: it votes "engagement perfectly normal"
+    # at full weight for an account whose engagement was never compared to
+    # anything, which is how an unexamined account gets certified clean.
     posts = [_post(likes=50, comments=5)]
     signal = engagement_deviation_signal(posts, 100_000, _BENCHMARK)
+    assert signal is not None
     assert 0.0 <= signal <= 1.0
-    # No posts -> nothing to compare.
-    assert engagement_deviation_signal([], 100_000, _BENCHMARK) == 0.0
-    # No sourced benchmark -> signal is skipped, never a guessed curve.
-    assert engagement_deviation_signal(posts, 100_000, None) == 0.0
+    # No posts -> nothing to compare -> absent.
+    assert engagement_deviation_signal([], 100_000, _BENCHMARK) is None
+    # No sourced benchmark -> nothing to compare AGAINST; never a guessed curve,
+    # and never a fabricated "clean" 0.
+    assert engagement_deviation_signal(posts, 100_000, None) is None
 
 
 def test_expected_engagement_curve_declines() -> None:
@@ -124,9 +147,17 @@ def test_expected_engagement_curve_declines() -> None:
 def test_like_comment_ratio_signal_bounds() -> None:
     organic = [_post(likes=200, comments=20)]
     inflated = [_post(likes=50_000, comments=3)]
+    # A measured 0.0: posts exist and their ratio sits inside the organic band.
     assert like_comment_ratio_signal(organic) == 0.0
     signal = like_comment_ratio_signal(inflated)
+    assert signal is not None
     assert 0.0 < signal <= 1.0
+
+
+def test_like_comment_ratio_signal_is_absent_without_posts() -> None:
+    # An empty feed is not a clean feed: with no posts the ratio is unmeasurable,
+    # so the signal is None and must not be counted as evidence of innocence.
+    assert like_comment_ratio_signal([]) is None
 
 
 def test_undbot_signal_is_bounded_and_deterministic() -> None:

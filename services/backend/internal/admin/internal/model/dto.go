@@ -85,15 +85,18 @@ type QueueMonitorResponse struct {
 // FraudFeatures is a disputed audit's stored fraud estimate, projected as the
 // feature vector services/ml/training consumes. It mirrors the fraud_result
 // columns; it is a copy of what the audit run recorded, never a recomputation.
+// Pointers are null when the signal was not observed — never a fabricated zero.
 type FraudFeatures struct {
-	Present                  bool    `json:"present"`
-	FakeFollowerRate         float64 `json:"fake_follower_rate"`
-	BotCommentRate           float64 `json:"bot_comment_rate"`
-	EngagementAnomaly        float64 `json:"engagement_anomaly"`
-	CliqueCount              int     `json:"clique_count"`
-	CliqueMembershipFraction float64 `json:"clique_membership_fraction"`
-	Confidence               float64 `json:"confidence"`
-	ModelVersion             string  `json:"model_version"`
+	Present bool `json:"present"`
+	// RiskScore is the composite per-account risk estimate (0-100). NOT a
+	// fake-follower rate; the fake_follower_rate and bot_comment_rate keys are gone
+	// because neither was ever measured.
+	RiskScore                *float64 `json:"risk_score"`
+	EngagementAnomaly        *float64 `json:"engagement_anomaly"`
+	CliqueCount              *int     `json:"clique_count"`
+	CliqueMembershipFraction *float64 `json:"clique_membership_fraction"`
+	Confidence               float64  `json:"confidence"`
+	ModelVersion             string   `json:"model_version"`
 }
 
 // TrainingLabel is one labelled example the dispute-review loop produces for the

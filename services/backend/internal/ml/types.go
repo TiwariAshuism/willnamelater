@@ -97,11 +97,15 @@ type FraudScoreRequest struct {
 // FraudScoreResponse mirrors app.schemas.FraudScoreResponse: an authenticity
 // risk estimate for one account. Score runs 0-100 where higher means more
 // likely inauthentic; it is an estimate, never a measured fake-follower rate.
+// Score is nil and Observed false when NOT ONE signal could be computed. That is
+// not a clean account — it is an unexamined one, and the caller must not render
+// the two the same way.
 type FraudScoreResponse struct {
-	Score        float64              `json:"score"`
+	Score        *float64             `json:"score"`
 	Confidence   float64              `json:"confidence"`
 	ModelVersion string               `json:"model_version"`
 	Estimate     bool                 `json:"estimate"`
+	Observed     bool                 `json:"observed"`
 	Signals      []SignalContribution `json:"signals"`
 	Flags        []string             `json:"flags"`
 	GeneratedAt  time.Time            `json:"generated_at"`
@@ -112,8 +116,7 @@ type FraudScoreResponse struct {
 // trained on. Every field is a pointer so a signal the audit could not observe
 // marshals to null (native-missing at score time), never a misleading zero.
 type FraudRefineRequest struct {
-	FakeFollowerRate         *float64 `json:"fake_follower_rate"`
-	BotCommentRate           *float64 `json:"bot_comment_rate"`
+	RiskScore                *float64 `json:"risk_score"`
 	EngagementAnomaly        *float64 `json:"engagement_anomaly"`
 	CliqueCount              *int     `json:"clique_count"`
 	CliqueMembershipFraction *float64 `json:"clique_membership_fraction"`
