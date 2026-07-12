@@ -70,22 +70,53 @@ export function ReportView({ report }: { report: Report }) {
         )}
       </Card>
 
-      {/* Fraud — explicitly labelled an estimate */}
+      {/* Fraud — explicitly labelled an estimate.
+          "Fake follower rate" and "Bot comment rate" used to be rendered here.
+          Neither was ever measured: the first was the composite risk score
+          renamed (no follower list is ever fetched), and the second was a
+          bit-for-bit duplicate of the clique fraction (no comment text is ever
+          classified) — so the two tiles printed the same number twice under
+          different names. Both are gone. An unmeasured signal now says so
+          instead of rendering a 0% that reads as a clean result. */}
       <Card className="flex flex-col gap-4">
         <CardTitle>Fraud signals (estimate)</CardTitle>
         {fraud.available ? (
           <>
             <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
               <Metric
-                label="Fake follower rate"
-                value={`${Math.round(fraud.fake_follower_rate * 100)}%`}
+                label="Authenticity risk"
+                value={
+                  fraud.risk_score != null
+                    ? `${Math.round(fraud.risk_score)}/100`
+                    : "Not measured"
+                }
               />
               <Metric
-                label="Bot comment rate"
-                value={`${Math.round(fraud.bot_comment_rate * 100)}%`}
+                label="Coordinated cliques"
+                value={
+                  fraud.coordination_analyzed && fraud.clique_count != null
+                    ? String(fraud.clique_count)
+                    : "Not assessed"
+                }
               />
-              <Metric label="Coordinated cliques" value={String(fraud.clique_count)} />
+              <Metric
+                label="Commenters in a clique"
+                value={
+                  fraud.coordination_analyzed &&
+                  fraud.clique_membership_fraction != null
+                    ? `${Math.round(fraud.clique_membership_fraction * 100)}%`
+                    : "Not assessed"
+                }
+              />
             </div>
+            {!fraud.coordination_analyzed && (
+              <p className="text-xs text-[var(--muted)]">
+                Coordination was <strong>not assessed</strong>: this platform
+                returned no comment data, so no commenter graph could be built.
+                This is not a finding of &ldquo;no coordination&rdquo; — it means
+                we could not look.
+              </p>
+            )}
             <p className="text-xs text-[var(--muted)]">
               This is a statistical estimate (confidence{" "}
               {Math.round(fraud.confidence * 100)}%, model {fraud.model_version}),

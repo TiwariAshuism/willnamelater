@@ -52,6 +52,70 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/mlops/canaries": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["ListCanaries"];
+        put?: never;
+        post: operations["CreateCanary"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/mlops/feature-rows": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["ExportFeatureRows"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/mlops/models": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["RegisterModel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/mlops/models/{version}/promote": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["PromoteModel"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/queues": {
         parameters: {
             query?: never;
@@ -206,6 +270,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["PublishReport"];
+        delete: operations["RevokeReport"];
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/audits/{id}/report/share": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["ShareReport"];
         delete?: never;
         options?: never;
         head?: never;
@@ -564,6 +644,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/ml/predictions": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["IngestPrediction"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/oauth/connections": {
         parameters: {
             query?: never;
@@ -574,6 +670,38 @@ export interface paths {
         get: operations["Connections"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/meta/data-deletion": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["MetaDataDeletion"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/meta/deauthorize": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["MetaDeauthorize"];
         delete?: never;
         options?: never;
         head?: never;
@@ -702,14 +830,13 @@ export interface components {
             reason: string;
         };
         "admin.FraudFeatures": {
-            bot_comment_rate: number;
-            clique_count: number;
-            clique_membership_fraction: number;
+            clique_count: number | null;
+            clique_membership_fraction: number | null;
             confidence: number;
-            engagement_anomaly: number;
-            fake_follower_rate: number;
+            engagement_anomaly: number | null;
             model_version: string;
             present: boolean;
+            risk_score: number | null;
         };
         "admin.LabelExportResponse": {
             count: number;
@@ -984,6 +1111,128 @@ export interface components {
             share_count?: number | null;
             view_count?: number | null;
         };
+        "mlops.CanaryItem": {
+            active: boolean;
+            /** Format: date-time */
+            created_at: string;
+            expected_label?: boolean | null;
+            expected_reach_max?: number | null;
+            expected_reach_min?: number | null;
+            /** Format: byte */
+            features: string;
+            id: string;
+            label: string;
+            model_name: string;
+            source: string;
+        };
+        "mlops.CanaryListResponse": {
+            canaries: components["schemas"]["mlops.CanaryItem"][];
+            count: number;
+        };
+        "mlops.CanaryQuery": {
+            Active: boolean;
+            HasActive: boolean;
+            ModelName: string;
+        };
+        "mlops.CanaryResponse": {
+            canary: components["schemas"]["mlops.CanaryItem"];
+        };
+        "mlops.CreateCanaryRequest": {
+            expected_label: boolean | null;
+            expected_reach_max: number | null;
+            expected_reach_min: number | null;
+            /** Format: byte */
+            features: string;
+            label: string;
+            model_name: string;
+            source: string;
+        };
+        "mlops.FeatureRowExportResponse": {
+            count: number;
+            rows: components["schemas"]["mlops.FeatureRowItem"][];
+        };
+        "mlops.FeatureRowItem": {
+            audit_job_id: string;
+            /** Format: date-time */
+            captured_at: string;
+            /** Format: byte */
+            features: string;
+            fraud_label: boolean | null;
+            fraud_label_source?: string;
+            influencer_id: string;
+            model_version_at_capture: string;
+            platform: string;
+            quality_ok: boolean;
+            quality_reasons: string[];
+            reach_label: number | null;
+            reach_label_source?: string;
+            verification_tier: string;
+        };
+        "mlops.FeatureRowQuery": {
+            Limit: number;
+            Quality: string;
+            /** Format: date-time */
+            Since: string;
+        };
+        "mlops.FeatureSnapshotRef": {
+            content_hash: string;
+            /** Format: date-time */
+            max_captured_at: string;
+            row_count: number;
+        };
+        "mlops.PredictionLogRequest": {
+            audit_job_id: string | null;
+            challenger_score: number | null;
+            challenger_version: string | null;
+            champion_score: number;
+            champion_version: string;
+            features_hash: string;
+            model_name: string;
+            /** Format: date-time */
+            scored_at: string | null;
+        };
+        "mlops.PredictionLogResponse": {
+            accepted: boolean;
+        };
+        "mlops.PromoteModelRequest": {
+            model_name: string;
+            override_shadow: boolean;
+            reason: string;
+        };
+        "mlops.PromoteModelResponse": {
+            champion_version: string;
+            /** Format: byte */
+            manifest: string;
+            model_name: string;
+            previous_champion_version?: string;
+            /** Format: date-time */
+            promoted_at: string;
+            s3_key: string;
+        };
+        "mlops.RegisterModelRequest": {
+            /** Format: byte */
+            data_floor_counts: string;
+            feature_snapshot: components["schemas"]["mlops.FeatureSnapshotRef"];
+            /** Format: byte */
+            manifest: string;
+            /** Format: byte */
+            metrics: string;
+            model_file_b64: string;
+            model_file_name: string;
+            model_name: string;
+            /** Format: byte */
+            validation_report: string;
+            version: string;
+        };
+        "mlops.RegisterModelResponse": {
+            /** Format: date-time */
+            created_at: string;
+            id: string;
+            model_name: string;
+            role: string;
+            s3_key: string;
+            version: string;
+        };
         "oauth.AuthorizeResponse": {
             authorization_url: string;
             state: string;
@@ -998,15 +1247,21 @@ export interface components {
             provider_account_id: string;
             scopes: string[];
         };
+        "oauth.DataDeletionResponse": {
+            confirmation_code: string;
+            url: string;
+        };
+        "oauth.SignedRequest": {
+            signed_request: string;
+        };
         "report.FraudBlock": {
             available: boolean;
-            bot_comment_rate: number;
-            clique_count: number;
-            clique_membership_fraction: number;
+            clique_count?: number | null;
+            clique_membership_fraction?: number | null;
             confidence: number;
-            engagement_anomaly: number;
-            fake_follower_rate: number;
+            coordination_analyzed: boolean;
             model_version: string;
+            risk_score?: number | null;
         };
         "report.Narrative": {
             brand_fit: string;
@@ -1051,6 +1306,16 @@ export interface components {
             subscores: components["schemas"]["report.Subscore"][];
             tier?: string;
             verification_tier?: string;
+        };
+        "report.ShareRequest": {
+            purpose: string;
+            recipient: string;
+        };
+        "report.ShareResult": {
+            expires_at: string;
+            grant_id: string;
+            purpose: string;
+            recipient: string;
         };
         "report.Subscore": {
             confidence: number;
@@ -1179,6 +1444,128 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["admin.DisputeResponse"];
+                };
+            };
+        };
+    };
+    ListCanaries: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["mlops.CanaryQuery"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["mlops.CanaryListResponse"];
+                };
+            };
+        };
+    };
+    CreateCanary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["mlops.CreateCanaryRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["mlops.CanaryResponse"];
+                };
+            };
+        };
+    };
+    ExportFeatureRows: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["mlops.FeatureRowQuery"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["mlops.FeatureRowExportResponse"];
+                };
+            };
+        };
+    };
+    RegisterModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["mlops.RegisterModelRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["mlops.RegisterModelResponse"];
+                };
+            };
+        };
+    };
+    PromoteModel: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                version: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["mlops.PromoteModelRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["mlops.PromoteModelResponse"];
                 };
             };
         };
@@ -1441,6 +1828,52 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["report.PublishResult"];
+                };
+            };
+        };
+    };
+    RevokeReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    ShareReport: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["report.ShareRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["report.ShareResult"];
                 };
             };
         };
@@ -2040,6 +2473,30 @@ export interface operations {
             };
         };
     };
+    IngestPrediction: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["mlops.PredictionLogRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["mlops.PredictionLogResponse"];
+                };
+            };
+        };
+    };
     Connections: {
         parameters: {
             query?: never;
@@ -2057,6 +2514,52 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["oauth.ConnectionResponse"][];
                 };
+            };
+        };
+    };
+    MetaDataDeletion: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["oauth.SignedRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["oauth.DataDeletionResponse"];
+                };
+            };
+        };
+    };
+    MetaDeauthorize: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["oauth.SignedRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

@@ -1,30 +1,31 @@
 """Assemble the frozen fraud feature vector for supervised scoring.
 
 The supervised model's positional inputs are ``training.features.FEATURE_ORDER``
-(the six fraud signals captured verbatim into ``fraud_result`` — no train/serve
-skew in *feature computation* because train and serve read the same keys). This
-builder maps what the ``/v1/fraud/score`` request can honestly observe onto those
-keys and marks everything else **native-missing** (never zero-filled).
+(five signals, v2). This builder maps what the ``/v1/fraud/score`` request can
+honestly observe onto those keys and marks everything else **native-missing**
+(never zero-filled).
 
 Assembly gap — flagged, not fabricated
 --------------------------------------
-Five of the six fraud features are *cross-endpoint* outputs the Go ``scoring``
-layer assembles from several ML responses, not signals this per-account endpoint
-can see from a :class:`FraudScoreRequest` alone:
+Three of the five features are *cross-endpoint* outputs the Go ``scoring`` layer
+assembles from several ML responses, not signals this per-account endpoint can see
+from a :class:`FraudScoreRequest` alone:
 
 * ``clique_count`` / ``clique_membership_fraction`` come from ``/v1/pods/detect``
   (needs comment events, absent here);
-* ``bot_comment_rate`` comes from ``/v1/comments/classify`` (needs comment text);
-* ``fake_follower_rate`` / ``engagement_anomaly`` are ``fraud_result`` outputs of
-  the assembled pipeline.
+* ``engagement_anomaly`` needs a sourced engagement benchmark, which the scoring
+  layer owns and does not pass to this endpoint.
 
-Only ``confidence`` — the per-account fraud confidence this endpoint itself
-produces — is filled. The remaining keys are left missing (NaN at score time).
-Closing this gap so the champion serves a *full* vector requires the caller to
-pass the assembled feature vector; that is a composition-root change and is
-flagged for the human (mirrors RETRAINING_ARCHITECTURE §1.2 "flag, do NOT
-fabricate"). Until a champion is promoted this path is never taken in production
-— cold start serves the heuristic score.
+``risk_score`` (this endpoint's own composite estimate) and ``confidence`` are
+filled. The remaining keys are left missing (NaN at score time). The full assembled
+vector IS served — by ``/v1/fraud/refine``, which the Go layer calls once it has
+gathered every signal, closing the train/serve skew.
+
+v2 removed two keys that were never measurements: ``fake_follower_rate`` (this
+same composite score renamed — nothing ever fetched a follower list) and
+``bot_comment_rate`` (a bit-for-bit duplicate of ``clique_membership_fraction`` —
+no comment's text was ever classified). The v1 vector therefore carried six
+positions holding five distinct values.
 """
 
 from __future__ import annotations
