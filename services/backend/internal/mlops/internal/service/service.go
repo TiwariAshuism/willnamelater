@@ -248,7 +248,12 @@ func (s *Service) PromoteModel(ctx context.Context, version string, req model.Pr
 		return model.PromoteModelResponse{}, errs.New(errs.KindConflict, "mlops.version_rejected", "a rejected version cannot be promoted")
 	}
 
-	isRollback := mv.Role == model.RoleArchived
+	// A rollback waives gates only for a version that actually served as champion
+	// before (promoted_at set). An archived version that never earned that — a
+	// challenger superseded when a different version won — must re-validate its
+	// stored gate report like any first promotion, so gates cannot be waived for a
+	// model that never passed them.
+	isRollback := mv.Role == model.RoleArchived && mv.PromotedAt != nil
 	if err := validatePromotable(mv, isRollback, req.OverrideShadow); err != nil {
 		return model.PromoteModelResponse{}, err
 	}

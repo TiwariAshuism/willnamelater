@@ -42,6 +42,13 @@ type FraudInput struct {
 	EngagementAnomaly float64
 	Confidence        float64
 	ModelVersion      string
+	// RefinedScore is the fraud champion's estimate over the FULL assembled
+	// feature vector (0-100, higher = more inauthentic), set only once a champion
+	// is promoted and serves. When non-nil it is the authenticity subscore's fraud
+	// aggregate — the champion trained to predict the fraud label from these
+	// signals, so its output supersedes the heuristic weighted sum. Nil in cold
+	// start, where the heuristic aggregate stands unchanged.
+	RefinedScore *float64
 }
 
 // Verification tiers describe how much a score can be trusted based on where its

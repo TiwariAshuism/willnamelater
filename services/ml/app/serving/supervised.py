@@ -13,12 +13,18 @@ serving mechanics can be exercised with a test fake that implements the
 
 from __future__ import annotations
 
+import json
 import math
 import threading
 from dataclasses import dataclass
 from typing import Protocol
 
 from app.registry import ArtifactRef
+
+#: The artifact "kind" the fraud champion serializes: a bootstrap ensemble of
+#: LightGBM boosters (training.challenger.FRAUD_KIND). The served probability is
+#: the mean over the ensemble.
+FRAUD_ENSEMBLE_KIND = "lgbm-fraud-ensemble"
 
 #: Value used for a feature the caller could not observe. Never zero — a missing
 #: feature is native-missing (NaN), which LightGBM consumes as such. Zero-filling
@@ -44,24 +50,40 @@ class SupervisedPrediction:
     score: float
 
 
-class _LgbmModel:
-    """Adapts a LightGBM booster to :class:`LoadedModel`."""
+class _EnsembleModel:
+    """A mean over a bootstrap ensemble of LightGBM boosters — the fraud champion
+    the trainer produces. predict_proba averages the members, matching the
+    trainer's own scoring (training.challenger.FraudChallenger.scores)."""
 
-    def __init__(self, booster: object) -> None:
-        self._booster = booster
+    def __init__(self, boosters: list) -> None:
+        self._boosters = boosters
 
     def predict_proba(self, row: list[float]) -> float:
-        # booster.predict returns a length-1 array for a single row.
-        return float(self._booster.predict([row])[0])
+        preds = [float(b.predict([row])[0]) for b in self._boosters]
+        return sum(preds) / len(preds)
 
 
 def _default_loader(ref: ArtifactRef) -> LoadedModel:
-    """Load a LightGBM booster from disk. Imported lazily to keep the runtime
-    lean and the pure tests LightGBM-free."""
+    """Load the trained fraud artifact from disk. The trainer serializes a JSON
+    wrapper (a bootstrap ensemble of LightGBM boosters), NOT a bare booster, so
+    the loader parses it and reconstructs the mean-ensemble. LightGBM is imported
+    lazily so the runtime and pure tests stay LightGBM-free unless an artifact is
+    actually served."""
     import lightgbm as lgb
 
-    booster = lgb.Booster(model_file=str(ref.model_path))
-    return _LgbmModel(booster)
+    payload = json.loads(ref.model_path.read_text(encoding="utf-8"))
+    kind = payload.get("kind")
+    members = payload.get("models")
+    if not isinstance(members, list) or not members:
+        # A reach (quantile) artifact, or anything else, cannot serve a fraud
+        # probability. Raising here is caught by the serving guard, which falls
+        # back to the heuristic score rather than failing the request.
+        raise ValueError(
+            f"artifact {ref.version} (kind={kind!r}) is not a servable fraud "
+            "ensemble"
+        )
+    boosters = [lgb.Booster(model_str=m) for m in members]
+    return _EnsembleModel(boosters)
 
 
 _loader = _default_loader

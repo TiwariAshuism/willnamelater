@@ -156,6 +156,45 @@ class FraudScoreResponse(BaseModel):
     generated_at: datetime
 
 
+class FraudRefineRequest(_StrictRequest):
+    """The full assembled fraud feature vector, for champion serving on the exact
+    ``training.features.FEATURE_ORDER`` the model was trained on (no train/serve
+    skew). Unlike :class:`FraudScoreRequest` — a single-account payload that can
+    only observe ``confidence`` — this carries all six signals the Go ``scoring``
+    layer assembles across the fraud + clique models. Every field is optional: a
+    signal the audit could not observe is ``null`` (native-missing at score time,
+    never zero-filled). This endpoint refines nothing in cold start; it only
+    serves a promoted champion, so an all-null vector still costs nothing there.
+    """
+
+    fake_follower_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    bot_comment_rate: float | None = Field(default=None, ge=0.0, le=1.0)
+    engagement_anomaly: float | None = Field(default=None, ge=0.0, le=1.0)
+    clique_count: int | None = Field(default=None, ge=0)
+    clique_membership_fraction: float | None = Field(default=None, ge=0.0, le=1.0)
+    confidence: float | None = Field(default=None, ge=0.0, le=1.0)
+    # Optional correlation id for the shadow prediction log (§5.6).
+    audit_ref: str | None = None
+
+
+class FraudRefineResponse(BaseModel):
+    """A champion's refined fraud score over the full assembled vector.
+
+    ``refined`` is false in cold start or when the champion could not be loaded —
+    then ``score`` is null and the Go caller keeps its heuristic authenticity
+    aggregate untouched. When true, ``score`` (0-100, higher = more inauthentic)
+    is the champion's estimate on the full vector and ``model_version`` names it.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    refined: bool
+    score: float | None = Field(default=None, ge=0.0, le=100.0)
+    model_version: str
+    estimate: bool = True
+    generated_at: datetime
+
+
 # ---------------------------------------------------------------------------
 # Engagement-pod detection
 # ---------------------------------------------------------------------------

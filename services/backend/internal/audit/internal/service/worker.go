@@ -355,6 +355,7 @@ func toFraudInput(f port.FraudSummary) port.FraudInput {
 		EngagementAnomaly: f.EngagementAnomaly,
 		Confidence:        f.Confidence,
 		ModelVersion:      f.ModelVersion,
+		RefinedScore:      f.RefinedScore,
 	}
 }
 

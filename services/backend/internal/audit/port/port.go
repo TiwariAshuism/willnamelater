@@ -64,6 +64,11 @@ type FraudSummary struct {
 	CliqueMembershipFraction float64
 	Confidence               float64
 	ModelVersion             string
+	// RefinedScore is the fraud champion's estimate over the full assembled vector
+	// (0-100, higher = more inauthentic), set by the adapter only when a champion
+	// is promoted and serving. Nil in cold start. It is threaded into scoring's
+	// FraudInput; it is not persisted on the fraud_result row.
+	RefinedScore *float64
 }
 
 // FraudClient scores coordinated-inauthenticity signals over the snapshots an
@@ -84,6 +89,9 @@ type FraudInput struct {
 	EngagementAnomaly float64
 	Confidence        float64
 	ModelVersion      string
+	// RefinedScore, when non-nil, is the champion's score over the full assembled
+	// vector; scoring uses it as the fraud aggregate. Nil in cold start.
+	RefinedScore *float64
 }
 
 // ScoreResult is the narrow score summary the orchestrator threads from the

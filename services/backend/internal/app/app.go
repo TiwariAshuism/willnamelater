@@ -308,6 +308,12 @@ func (a *App) buildModules(connectors *connector.Config) error {
 	// satisfied by an adapter in audit_wiring.go. Two providers satisfy their port
 	// directly and need no adapter: metrics.Module is a port.Ingester, and the
 	// connector registry is a port.Connectors.
+	// mlops owns the champion-challenger retraining data surface. It is constructed
+	// before audit and admin so their intake seams (feature recorder, training-label
+	// sink) can adapt onto it. It reaches auth, the ml service token, and object
+	// storage only through ports; its tables are empty at boot (cold-start).
+	mlopsMod := mlops.New(a.Pool, adminGuard{}, mlServiceAuth{}, mlopsStore{s: a.storage})
+
 	auditMod := audit.New(
 		a.Pool,
 		a.asynqClient,
@@ -319,6 +325,10 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		a.Connector,
 		auditConnections{influencer: influencerMod, oauth: oauthMod},
 		auditCaller{},
+		// The ml feature-store intake (the flywheel): each completed audit is
+		// recorded best-effort as a training row, enriched with the score's
+		// niche/tier/verification and a real reach label when one exists.
+		mlopsFeatureRecorder{mlops: mlopsMod, scoring: scoringMod},
 	)
 
 	// Object storage for published report PDFs. Constructing the client is pure
@@ -376,6 +386,9 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		adminFraudReader{a: auditMod},
 		adminCostReader{l: llmMod},
 		a.asynqInspector,
+		// The ml training-label sink: a resolved dispute backfills the supervised
+		// fraud label onto the audit's feature-store row, best-effort.
+		mlopsLabelSink{mlops: mlopsMod},
 	)
 
 	a.Modules = Modules{
@@ -395,7 +408,7 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		Campaign:   campaign.New(),
 		// mlops reaches auth (admin bit), the ml service token, and object storage
 		// only through ports; its feature store + registry are empty at boot.
-		MLOps: mlops.New(a.Pool, adminGuard{}, mlServiceAuth{}, mlopsStore{s: a.storage}),
+		MLOps: mlopsMod,
 	}
 	return nil
 }

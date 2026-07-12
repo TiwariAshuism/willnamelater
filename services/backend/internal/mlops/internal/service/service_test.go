@@ -419,11 +419,14 @@ func TestPromoteMissingVersionIsNotFound(t *testing.T) {
 // Rollback: an archived former champion promotes without any gate re-check,
 // because it already earned its gates when it was champion.
 func TestPromoteRollbackWaivesGates(t *testing.T) {
+	promotedAt := time.Unix(1_700_000_000, 0).UTC()
 	repo := &fakeRepo{
 		getFound: true,
 		getResult: model.Version{
 			ModelName: model.ModelFraud, Version: "lgbm-old", Role: model.RoleArchived,
-			// A deliberately empty report: a rollback must still succeed.
+			// A former champion (promoted_at set): a rollback must still succeed even
+			// with an empty report — it earned its gates when it first served.
+			PromotedAt:       &promotedAt,
 			ValidationReport: json.RawMessage(`{}`), DataFloorCounts: json.RawMessage(`{}`),
 		},
 		promoteRes: model.PromotionResult{ChampionVersion: "lgbm-old", PreviousChampionVersion: "lgbm-current"},
@@ -435,6 +438,29 @@ func TestPromoteRollbackWaivesGates(t *testing.T) {
 	}
 	if resp.ChampionVersion != "lgbm-old" || repo.promoteArg == nil {
 		t.Fatalf("rollback did not promote the archived version: %+v", resp)
+	}
+}
+
+// A never-promoted archived version (a challenger superseded when a different
+// version won, promoted_at nil) is not a rollback: it must re-validate its stored
+// gate report in full, so an empty/failing report is a conflict. Gates can never
+// be waived for a model that never earned them (H6).
+func TestPromoteNeverServedArchivedReValidates(t *testing.T) {
+	repo := &fakeRepo{
+		getFound: true,
+		getResult: model.Version{
+			ModelName: model.ModelFraud, Version: "lgbm-loser", Role: model.RoleArchived,
+			// No PromotedAt: never served. An empty report cannot pass the gates.
+			ValidationReport: json.RawMessage(`{}`), DataFloorCounts: json.RawMessage(`{}`),
+		},
+	}
+	svc := adminSvc(repo, &fakeStore{})
+	_, err := svc.PromoteModel(context.Background(), "lgbm-loser", model.PromoteModelRequest{ModelName: model.ModelFraud})
+	if err == nil {
+		t.Fatal("expected a never-served archived version to re-validate and be rejected")
+	}
+	if repo.promoteArg != nil {
+		t.Fatalf("a failing re-validation must not promote: %+v", repo.promoteArg)
 	}
 }
 

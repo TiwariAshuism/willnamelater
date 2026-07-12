@@ -107,6 +107,33 @@ type FraudScoreResponse struct {
 	GeneratedAt  time.Time            `json:"generated_at"`
 }
 
+// FraudRefineRequest mirrors app.schemas.FraudRefineRequest: the full assembled
+// fraud feature vector, for champion serving on the exact FEATURE_ORDER the model
+// trained on. Every field is a pointer so a signal the audit could not observe
+// marshals to null (native-missing at score time), never a misleading zero.
+type FraudRefineRequest struct {
+	FakeFollowerRate         *float64 `json:"fake_follower_rate"`
+	BotCommentRate           *float64 `json:"bot_comment_rate"`
+	EngagementAnomaly        *float64 `json:"engagement_anomaly"`
+	CliqueCount              *int     `json:"clique_count"`
+	CliqueMembershipFraction *float64 `json:"clique_membership_fraction"`
+	Confidence               *float64 `json:"confidence"`
+	AuditRef                 string   `json:"audit_ref,omitempty"`
+}
+
+// FraudRefineResponse mirrors app.schemas.FraudRefineResponse: the fraud
+// champion's score over the full assembled vector. Refined is false in cold start
+// or when the champion could not serve — then Score is nil and the caller keeps
+// its heuristic authenticity aggregate. When true, Score (0-100, higher = more
+// inauthentic) is the champion's estimate and ModelVersion names it.
+type FraudRefineResponse struct {
+	Refined      bool      `json:"refined"`
+	Score        *float64  `json:"score"`
+	ModelVersion string    `json:"model_version"`
+	Estimate     bool      `json:"estimate"`
+	GeneratedAt  time.Time `json:"generated_at"`
+}
+
 // CommentEvent mirrors app.schemas.CommentEvent: one commenter appearing on one
 // post. PostID is what lets the service join a comment to its post and build the
 // co-commenter graph. Text is carried as a wire-contract slot for future

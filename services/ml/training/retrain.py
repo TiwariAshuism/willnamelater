@@ -256,19 +256,26 @@ def _promote(model_name, args, model_bytes, manifest, feature_order) -> None:
         for k in ("validation_report", "feature_snapshot")
         if k in manifest
     }
-    write_artifact(
-        args.out, model_bytes, feature_order=feature_order,
-        metrics=manifest["metrics"], extra=champion_extra,
-    )
-    clear_shadow_artifact(args.out)
-    print(f"[{model_name}] materialized champion {manifest['version']} to {args.out}")
+    # Confirm the promotion with the backend FIRST: it re-validates the stored gate
+    # report + data-floor counts and flips the champion role in a transaction, and
+    # raises on any rejection. Only once that succeeds do we mutate the serving
+    # artifact dir — otherwise a rejected promote (e.g. a failed server-side
+    # re-check) would leave the serving champion and the registry diverged (H5).
     if args.models_url:
         resp = promotion.promote(
             args.models_url, manifest["version"], model_name=model_name,
             reason=args.reason, override_shadow=args.override_shadow, token=args.token,
         )
         prev = resp.get("previous_champion_version")
-        print(f"[{model_name}] promoted; previous champion archived: {prev}")
+        print(
+            f"[{model_name}] promoted in registry; previous champion archived: {prev}"
+        )
+    write_artifact(
+        args.out, model_bytes, feature_order=feature_order,
+        metrics=manifest["metrics"], extra=champion_extra,
+    )
+    clear_shadow_artifact(args.out)
+    print(f"[{model_name}] materialized champion {manifest['version']} to {args.out}")
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -14,6 +14,8 @@ const eps = 1e-9
 
 func approx(a, b float64) bool { return math.Abs(a-b) < 1e-6 }
 
+func ptr[T any](v T) *T { return &v }
+
 // benchFor returns the bootstrap benchmark for a tier, so the ladder tests run
 // against the real seeded cells rather than invented numbers.
 func benchFor(t *testing.T, tier string) Benchmark {
@@ -154,6 +156,20 @@ func TestAuthenticitySubscore(t *testing.T) {
 			"rates clamp above one",
 			contract.FraudInput{Present: true, FakeFollowerRate: 5, Confidence: 2},
 			60, 1, // fake clamps to 1 -> 1-0.4=0.6 ; conf clamps to 1
+		},
+		{
+			// A promoted champion refines the whole vector: its 0-100 score is the
+			// fraud aggregate, superseding the heuristic weighted sum. Here the
+			// heuristic rates alone would give a clean 100, but the champion says 75.
+			"refined score supersedes heuristic",
+			contract.FraudInput{Present: true, Confidence: 0.9, RefinedScore: ptr(75.0)},
+			25, 0.9, // 1 - 0.75 = 0.25 -> 25
+		},
+		{
+			// The refined score clamps to [0,100] just like the heuristic path.
+			"refined score clamps above 100",
+			contract.FraudInput{Present: true, FakeFollowerRate: 1, Confidence: 1, RefinedScore: ptr(150.0)},
+			0, 1, // clamps to 100 -> 1-1 = 0
 		},
 	}
 	for _, tt := range tests {

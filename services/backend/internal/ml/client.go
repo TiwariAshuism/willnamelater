@@ -29,6 +29,7 @@ import (
 // services/ml/app/api. They are joined to the client's base URL.
 const (
 	pathFraudScore       = "/v1/fraud/score"
+	pathFraudRefine      = "/v1/fraud/refine"
 	pathPodsDetect       = "/v1/pods/detect"
 	pathCommentsClassify = "/v1/comments/classify"
 )
@@ -64,6 +65,16 @@ func New(baseURL string, doer Doer) *Client {
 func (c *Client) ScoreFraud(ctx context.Context, req FraudScoreRequest) (FraudScoreResponse, error) {
 	var resp FraudScoreResponse
 	err := c.do(ctx, pathFraudScore, req, &resp)
+	return resp, err
+}
+
+// RefineFraud asks the fraud champion to score the FULL assembled feature vector
+// (all six FEATURE_ORDER signals the scoring layer aggregated across the fraud and
+// clique models), matching what the champion trained on. In cold start the ML
+// service returns Refined=false and the caller keeps its heuristic aggregate.
+func (c *Client) RefineFraud(ctx context.Context, req FraudRefineRequest) (FraudRefineResponse, error) {
+	var resp FraudRefineResponse
+	err := c.do(ctx, pathFraudRefine, req, &resp)
 	return resp, err
 }
 

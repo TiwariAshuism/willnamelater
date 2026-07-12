@@ -46,8 +46,10 @@ type dataFloorCounts struct {
 }
 
 // validatePromotable re-checks a challenger's recorded gate report and data floor
-// before a promotion. A rollback (promoting an archived former champion) waives
-// every gate — it already earned them when it was champion. overrideShadow waives
+// before a promotion. A rollback (promoting an archived version that previously
+// served as champion — promoted_at set) waives every gate — it already earned
+// them when it was champion. A never-promoted archived version is not a rollback
+// and re-validates in full. overrideShadow waives
 // only the shadow gate, for an emergency promotion. Any failing or absent
 // required gate is a conflict, so a version whose report does not honestly show
 // the gates passing can never be promoted.

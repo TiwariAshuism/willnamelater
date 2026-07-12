@@ -232,9 +232,18 @@ func authenticitySubscore(f contract.FraudInput) contract.Subscore {
 	if !f.Present {
 		return contract.Subscore{Value: 50, Confidence: 0}
 	}
-	fraud := clamp01(fraudWeightFakeFollowers*clamp01(f.FakeFollowerRate) +
-		fraudWeightBotComments*clamp01(f.BotCommentRate) +
-		fraudWeightAnomaly*clamp01(f.EngagementAnomaly))
+	// A promoted champion refines the whole vector: its score IS the calibrated
+	// fraud probability (0-100, higher = more fraud), trained on the fraud label,
+	// so it supersedes the heuristic weighted sum. Cold start (RefinedScore nil)
+	// keeps the explainable heuristic blend below.
+	var fraud float64
+	if f.RefinedScore != nil {
+		fraud = clamp01(*f.RefinedScore / 100)
+	} else {
+		fraud = clamp01(fraudWeightFakeFollowers*clamp01(f.FakeFollowerRate) +
+			fraudWeightBotComments*clamp01(f.BotCommentRate) +
+			fraudWeightAnomaly*clamp01(f.EngagementAnomaly))
+	}
 	return contract.Subscore{Value: (1 - fraud) * 100, Confidence: clamp01(f.Confidence)}
 }
 

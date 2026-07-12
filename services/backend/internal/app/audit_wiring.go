@@ -64,6 +64,7 @@ func (a auditScorer) Score(ctx context.Context, auditJobID, influencerID uuid.UU
 		EngagementAnomaly: fraud.EngagementAnomaly,
 		Confidence:        fraud.Confidence,
 		ModelVersion:      fraud.ModelVersion,
+		RefinedScore:      fraud.RefinedScore,
 	})
 	if err != nil {
 		return port.ScoreResult{}, err
@@ -133,6 +134,27 @@ func (a auditFraud) ScoreFraud(ctx context.Context, snapshots []connector.Snapsh
 	out.Present = true
 	out.Confidence = meanF(confs)
 	out.ModelVersion = strings.Join(versions, "+")
+
+	// If a fraud champion is promoted, refine the whole assembled vector through
+	// it — the exact FEATURE_ORDER it trained on, so the champion serves without
+	// train/serve skew (unlike the per-account /score calls above). The assembled
+	// values are passed verbatim, including a genuine zero where a sub-model had no
+	// signal: the feature store froze training rows the same way, so this keeps
+	// train and serve aligned. Best-effort: a refine error or a cold-start decline
+	// leaves RefinedScore nil and scoring keeps its heuristic authenticity blend.
+	ffr, bcr, ea := out.FakeFollowerRate, out.BotCommentRate, out.EngagementAnomaly
+	cmf, conf, cc := out.CliqueMembershipFraction, out.Confidence, out.CliqueCount
+	if rr, err := a.c.RefineFraud(ctx, ml.FraudRefineRequest{
+		FakeFollowerRate:         &ffr,
+		BotCommentRate:           &bcr,
+		EngagementAnomaly:        &ea,
+		CliqueCount:              &cc,
+		CliqueMembershipFraction: &cmf,
+		Confidence:               &conf,
+	}); err == nil && rr.Refined && rr.Score != nil {
+		out.RefinedScore = rr.Score
+		out.ModelVersion = strings.Join(append(versions, "refine:"+rr.ModelVersion), "+")
+	}
 	return out, nil
 }
 
