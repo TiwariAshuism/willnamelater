@@ -99,7 +99,7 @@ type FraudSummary struct {
 // the ml module's own types out of the audit module. The real implementation is
 // the ml client, adapted by app.
 type FraudClient interface {
-	ScoreFraud(ctx context.Context, snapshots []connector.Snapshot) (FraudSummary, error)
+	ScoreFraud(ctx context.Context, auditJobID uuid.UUID, snapshots []connector.Snapshot) (FraudSummary, error)
 }
 
 // FraudInput is the fraud contribution the scoring engine consumes. It is

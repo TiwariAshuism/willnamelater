@@ -146,9 +146,14 @@ def test_comments_classify_schema_and_bounds(client: TestClient) -> None:
     body = resp.json()
 
     assert body["estimate"] is True
-    assert body["model_version"] == "heuristic"
+    # The comment classifier's OWN version — never the fraud registry's. See
+    # tests/test_comments_version.py.
+    assert body["model_version"] == "heuristic-comments-v1"
     assert 0.0 <= body["confidence"] <= 1.0
-    assert 0.0 <= body["low_quality_ratio"] <= 1.0
+    # Four comments is far below the n=50 floor: no rate is reported at all.
+    assert body["low_quality_ratio"] is None
+    assert body["sufficient_sample"] is False
+    assert body["analyzed_count"] == 4
     assert len(body["classifications"]) == 4
     for item in body["classifications"]:
         assert 0.0 <= item["confidence"] <= 1.0

@@ -155,15 +155,15 @@ func Compute(in Input) (contract.Score, error) {
 
 	var weightedValue, weightedConf, evidencedWeight float64
 	for _, c := range components {
-		if c.sub.Confidence <= 0 {
+		if c.sub.Support <= 0 {
 			// Not measured. It contributes nothing and forfeits its weight.
 			continue
 		}
-		// Shrink toward neutral by confidence: a half-trusted 90 should not move the
-		// composite as far as a fully-trusted 90.
-		effective := neutralScore + c.sub.Confidence*(c.sub.Value-neutralScore)
+		// Shrink toward neutral by support: a half-supported 90 should not move the
+		// composite as far as a fully-supported 90.
+		effective := neutralScore + c.sub.Support*(c.sub.Value-neutralScore)
 		weightedValue += c.weight * effective
-		weightedConf += c.weight * c.sub.Confidence
+		weightedConf += c.weight * c.sub.Support
 		evidencedWeight += c.weight
 	}
 
@@ -233,15 +233,28 @@ func representativeFollowers(snaps []connector.Snapshot) int64 {
 // composite, which meant buying followers RAISED an account's audit score. It no
 // longer can dominate, and it is no longer named for a thing it does not measure.
 //
-// Confidence is zero when no follower count is known: the size is then absent, not
-// zero, and a zero-confidence component is dropped from the composite entirely.
+// Support is zero when no follower count is known: the size is then absent, not
+// zero, and a zero-support component is dropped from the composite entirely. When
+// a count IS known the support is audienceSizeConfidence — a documented PRIOR
+// discount on a purchasable number, not a confidence anyone measured, so it is
+// stamped SupportPrior.
 func audienceSizeSubscore(followers int64) contract.Subscore {
 	if followers <= 0 {
-		return contract.Subscore{Value: 0, Confidence: 0}
+		return contract.Subscore{
+			Value:       0,
+			Basis:       contract.BasisClosedForm,
+			Support:     0,
+			SupportKind: contract.SupportNone,
+		}
 	}
 	num := math.Log10(float64(followers)) - math.Log10(audienceFloor)
 	den := math.Log10(audienceCeil) - math.Log10(audienceFloor)
-	return contract.Subscore{Value: clamp01(num/den) * 100, Confidence: audienceSizeConfidence}
+	return contract.Subscore{
+		Value:       clamp01(num/den) * 100,
+		Basis:       contract.BasisClosedForm,
+		Support:     audienceSizeConfidence,
+		SupportKind: contract.SupportPrior,
+	}
 }
 
 // ObservedEngagementRate is the mean per-post engagement rate across snapshots
@@ -269,17 +282,26 @@ func ObservedEngagementRate(snaps []connector.Snapshot) (float64, bool) {
 // engagementSubscore places the observed engagement rate within the benchmark's
 // percentile band. It rewards healthy engagement without penalizing unusually
 // high values here — inflated engagement is the authenticity subscore's job, and
-// double-counting it would punish genuinely strong creators. Confidence tracks
-// the benchmark's sample size, so a cold-start band yields a low-confidence
-// subscore.
+// double-counting it would punish genuinely strong creators.
+//
+// Its basis and support come from the benchmark's provenance: against a corpus
+// cell it is a real percentile whose confidence rises with the number of distinct
+// influencers observed; against a cold-start band it is a closed-form ladder over
+// reference constants, carrying the documented BootstrapPriorSupport and nothing
+// more.
 func engagementSubscore(snaps []connector.Snapshot, followers int64, b Benchmark) contract.Subscore {
-	conf := confidenceForSamples(b.SampleSize)
 	observed, ok := ObservedEngagementRate(snaps)
 	if !ok || followers <= 0 {
-		// No posts to judge: neutral value, no confidence.
-		return contract.Subscore{Value: 50, Confidence: 0}
+		// No posts to judge: neutral value, no support.
+		return contract.Subscore{Value: 50, Basis: benchmarkBasis(b), Support: 0, SupportKind: contract.SupportNone}
 	}
-	return contract.Subscore{Value: percentileScore(observed, b) * 100, Confidence: conf}
+	support, kind := benchmarkSupport(b)
+	return contract.Subscore{
+		Value:       percentileScore(observed, b) * 100,
+		Basis:       benchmarkBasis(b),
+		Support:     support,
+		SupportKind: kind,
+	}
 }
 
 // percentileScore maps a value onto [0,1] against the benchmark's percentile
@@ -322,16 +344,22 @@ func percentileScore(v float64, b Benchmark) float64 {
 // certifies an account.
 func authenticitySubscore(f contract.FraudInput) contract.Subscore {
 	if !f.Present {
-		return contract.Subscore{Value: 50, Confidence: 0}
+		return contract.Subscore{Value: 50, Basis: contract.BasisClosedForm, Support: 0, SupportKind: contract.SupportNone}
 	}
 
 	// A promoted champion refines the whole vector: its score IS the calibrated
 	// fraud probability (0-100, higher = more fraud), trained on the fraud label,
 	// so it supersedes the heuristic blend. Cold start (RefinedScore nil) uses the
-	// explainable blend below.
+	// explainable blend below. The basis names the exact model version, so a reader
+	// can tell a champion's output from the arithmetic blend it replaced.
 	if f.RefinedScore != nil {
 		fraud := clamp01(*f.RefinedScore / 100)
-		return contract.Subscore{Value: (1 - fraud) * 100, Confidence: clamp01(f.Confidence)}
+		return contract.Subscore{
+			Value:       (1 - fraud) * 100,
+			Basis:       contract.ModelBasis(f.ModelVersion),
+			Support:     clamp01(f.Confidence),
+			SupportKind: contract.SupportConfidence,
+		}
 	}
 
 	// Blend only the signals actually OBSERVED, renormalizing their weights. An
@@ -349,47 +377,63 @@ func authenticitySubscore(f contract.FraudInput) contract.Subscore {
 	}
 
 	// A fraud pass ran but produced no usable signal. That is not a clean account —
-	// it is an unexamined one. Return neutral at zero confidence, exactly as if no
+	// it is an unexamined one. Return neutral at zero support, exactly as if no
 	// pass had run, so it cannot certify anything.
 	if presentWeight == 0 {
-		return contract.Subscore{Value: 50, Confidence: 0}
+		return contract.Subscore{Value: 50, Basis: contract.BasisClosedForm, Support: 0, SupportKind: contract.SupportNone}
 	}
 
 	fraud := clamp01(weighted / presentWeight)
-	// Scale confidence by the share of the signal vector we actually saw: an
-	// authenticity verdict resting on one of two signals is not as trustworthy as
-	// one resting on both, and the number must say so.
+	// Scale the ml service's own confidence by the share of the signal vector we
+	// actually saw: an authenticity verdict resting on one of two signals is not as
+	// trustworthy as one resting on both, and the number must say so. The support
+	// therefore IS a confidence (the model's, discounted by observed coverage), but
+	// the value itself is an arithmetic blend of model outputs — a closed form, not
+	// a model trained to produce it.
 	conf := clamp01(f.Confidence) * presentWeight
-	return contract.Subscore{Value: (1 - fraud) * 100, Confidence: clamp01(conf)}
+	return contract.Subscore{
+		Value:       (1 - fraud) * 100,
+		Basis:       contract.BasisClosedForm,
+		Support:     clamp01(conf),
+		SupportKind: contract.SupportConfidence,
+	}
 }
 
 // consistencySubscore blends growth smoothness (steady rather than spiky
 // follower trajectory) and posting cadence regularity. Each component is used
-// only when it has enough data; the value is the mean of the available
-// components and the confidence the mean of their data-backed confidences.
+// only when it has enough data; the value is the mean of the available components
+// and the support the mean of their COVERAGES — how much of the series each one
+// got to look at. Coverage, not confidence: a long series makes the closed form
+// better fed, not validated.
 func consistencySubscore(snaps []connector.Snapshot) contract.Subscore {
-	var values, confs []float64
+	var values, coverages []float64
 
 	if v, c, ok := growthSmoothness(snaps); ok {
 		values = append(values, v)
-		confs = append(confs, c)
+		coverages = append(coverages, c)
 	}
 	if v, c, ok := cadenceRegularity(snaps); ok {
 		values = append(values, v)
-		confs = append(confs, c)
+		coverages = append(coverages, c)
 	}
 	if len(values) == 0 {
-		return contract.Subscore{Value: 50, Confidence: 0}
+		return contract.Subscore{Value: 50, Basis: contract.BasisClosedForm, Support: 0, SupportKind: contract.SupportNone}
 	}
-	return contract.Subscore{Value: mean(values) * 100, Confidence: mean(confs)}
+	return contract.Subscore{
+		Value:       mean(values) * 100,
+		Basis:       contract.BasisClosedForm,
+		Support:     mean(coverages),
+		SupportKind: contract.SupportCoverage,
+	}
 }
 
 // growthSmoothness measures how steady the follower trajectory is. It reads the
 // follower/subscriber metric series across snapshots, orders it by time, and
 // scores 1 minus the (clamped) standard deviation of period-over-period growth
-// rates. It needs at least three points; confidence grows with the series
-// length.
-func growthSmoothness(snaps []connector.Snapshot) (value, confidence float64, ok bool) {
+// rates. It needs at least three points; COVERAGE (how much of the series we
+// have, saturating at twelve points) grows with the series length. Coverage is
+// not a claim that the smoothness proxy detects anything.
+func growthSmoothness(snaps []connector.Snapshot) (value, coverage float64, ok bool) {
 	type pt struct {
 		at time.Time
 		v  float64
@@ -419,8 +463,8 @@ func growthSmoothness(snaps []connector.Snapshot) (value, confidence float64, ok
 // cadenceRegularity measures how evenly spaced an account's posts are. It orders
 // post timestamps across snapshots and scores 1 minus the (clamped) coefficient
 // of variation of the inter-post intervals. It needs at least three timestamped
-// posts; confidence grows with the post count.
-func cadenceRegularity(snaps []connector.Snapshot) (value, confidence float64, ok bool) {
+// posts; COVERAGE grows with the post count and says nothing about accuracy.
+func cadenceRegularity(snaps []connector.Snapshot) (value, coverage float64, ok bool) {
 	var times []time.Time
 	for _, s := range snaps {
 		for _, p := range s.Posts {
@@ -446,10 +490,23 @@ func cadenceRegularity(snaps []connector.Snapshot) (value, confidence float64, o
 	return regularity, clamp01(float64(len(times)-2) / 10), true
 }
 
+// contentPostsForFullCoverage is the number of posts at which the content proxy
+// has all the data it can use. Beyond it, coverage saturates — MORE POSTS DO NOT
+// MAKE THE PROXY MORE CORRECT, they only stop it being starved.
+const contentPostsForFullCoverage = 10.0
+
 // contentSubscore rewards interaction depth: comments and shares relative to
 // likes, since a share or a comment is a stronger signal of resonance than a
 // passive like. It uses the median across posts so one viral post does not
-// dominate. With no posts it is neutral and zero-confidence.
+// dominate. With no posts it is neutral and unsupported.
+//
+// Its support is postCount/10 — and that number is DATA COVERAGE, nothing else.
+// It was previously emitted in a field called Confidence, which said, to anyone
+// reading the score, that an account with ten posts had a 100%-confident content
+// score. What it actually meant was "we saw ten posts". Whether the
+// comments-and-shares-over-likes ratio tracks content quality at all is an open
+// question this number cannot and does not answer, which is exactly why the kind
+// is stamped SupportCoverage and the basis is closed_form.
 func contentSubscore(snaps []connector.Snapshot) contract.Subscore {
 	var depths []float64
 	var postCount int
@@ -460,8 +517,13 @@ func contentSubscore(snaps []connector.Snapshot) contract.Subscore {
 		}
 	}
 	if len(depths) == 0 {
-		return contract.Subscore{Value: 50, Confidence: 0}
+		return contract.Subscore{Value: 50, Basis: contract.BasisClosedForm, Support: 0, SupportKind: contract.SupportNone}
 	}
 	value := clamp01(median(depths)/engagementDepthSpan) * 100
-	return contract.Subscore{Value: value, Confidence: clamp01(float64(postCount) / 10)}
+	return contract.Subscore{
+		Value:       value,
+		Basis:       contract.BasisClosedForm,
+		Support:     clamp01(float64(postCount) / contentPostsForFullCoverage),
+		SupportKind: contract.SupportCoverage,
+	}
 }

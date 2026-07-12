@@ -84,8 +84,10 @@ export default async function BadgePage({
             <div className="text-xs uppercase tracking-wide text-[var(--muted)]">
               Authenticity
             </div>
+            {/* Null when the dimension rested on no measurement: the badge says so
+                rather than printing a number nobody measured. */}
             <div className="text-5xl font-bold leading-none">
-              {fmt(badge.authenticity)}
+              {badge.authenticity != null ? fmt(badge.authenticity) : "—"}
             </div>
           </div>
         </div>

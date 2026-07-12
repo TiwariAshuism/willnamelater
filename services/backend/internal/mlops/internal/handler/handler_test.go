@@ -112,7 +112,8 @@ func TestExport_RejectsBadSince(t *testing.T) {
 func TestIngest_Returns202(t *testing.T) {
 	svc := &fakeService{predict: model.PredictionLogResponse{Accepted: true}}
 	r := newRouter(svc)
-	body := `{"model_name":"fraud","champion_version":"v","features_hash":"h"}`
+	body := `{"model_name":"fraud","audit_job_id":"6f1c3c5e-3a1e-4b0e-9a6a-0b5f5b0d9a11",` +
+		`"champion_version":"v","features_hash":"h"}`
 	rec := do(r, http.MethodPost, "/ml/predictions", body)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("ingest must return 202, got %d", rec.Code)
@@ -120,6 +121,17 @@ func TestIngest_Returns202(t *testing.T) {
 	var resp model.PredictionLogResponse
 	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil || !resp.Accepted {
 		t.Fatalf("ingest response wrong: %s", rec.Body.String())
+	}
+}
+
+// audit_job_id is required at the transport boundary too: a shadow row without it
+// can never be joined back to an outcome, so it is rejected before it is written.
+func TestIngest_RejectsMissingAuditJobID(t *testing.T) {
+	svc := &fakeService{predict: model.PredictionLogResponse{Accepted: true}}
+	r := newRouter(svc)
+	rec := do(r, http.MethodPost, "/ml/predictions", `{"model_name":"fraud","champion_version":"v","features_hash":"h"}`)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("an ingest with no audit_job_id must be 400, got %d", rec.Code)
 	}
 }
 

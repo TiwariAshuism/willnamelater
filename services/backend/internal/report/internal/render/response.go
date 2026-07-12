@@ -48,12 +48,12 @@ type ShareResult struct {
 // owner. Available is always true for a resolved slug (an unknown slug is a
 // not-found, not an empty badge).
 type PublicBadge struct {
-	Handle         string  `json:"handle,omitempty"`
-	Overall        float64 `json:"overall"`
-	Authenticity   float64 `json:"authenticity"`
-	Niche          string  `json:"niche,omitempty"`
-	Tier           string  `json:"tier,omitempty"`
-	BenchmarkLabel string  `json:"benchmark_label,omitempty"`
+	Handle         string   `json:"handle,omitempty"`
+	Overall        float64  `json:"overall"`
+	Authenticity   *float64 `json:"authenticity,omitempty"`
+	Niche          string   `json:"niche,omitempty"`
+	Tier           string   `json:"tier,omitempty"`
+	BenchmarkLabel string   `json:"benchmark_label,omitempty"`
 	// VerificationTier is the trust tier ("verified"/"estimated"), the 🟢/🟡
 	// signal shown on the public badge. A verified badge rests on live-API data;
 	// an estimated one includes uploaded or provider-sourced data.

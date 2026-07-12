@@ -1,4 +1,25 @@
-"""POST /v1/comments/classify — rule-based comment-quality buckets."""
+"""POST /v1/comments/classify — RULE-BASED comment-quality buckets.
+
+Three rules govern this endpoint, all learned the hard way:
+
+1. **Its own version namespace.** ``model_version`` comes from the *comment*
+   registry (:func:`app.registry.get_comment_registry`), never the fraud one.
+   Stamping the fraud registry's version here meant that the day a fraud champion
+   was promoted, this 18-phrase regex would start reporting a trained LightGBM
+   model's version into a paying customer's PDF. Until a real comment artifact
+   exists the version is the hardcoded ``heuristic-comments-v1``.
+
+2. **No rate without a denominator, and no rate at all below n=50.** See
+   :func:`app.features.comments.summarize`. Below the floor the response carries
+   raw counts and ``sufficient_sample: false``, and ``low_quality_ratio`` is
+   ``null`` — not 0.0.
+
+3. **This output is quarantined from the fraud score.** It is returned under
+   ``rate_key`` = ``generic_comment_rate_v1`` and must not be blended into the
+   0-100 composite until its weight is fitted against real fraud outcomes. A high
+   generic-comment rate is not fraud; fan and meme accounts are full of genuine
+   emoji.
+"""
 
 from __future__ import annotations
 
@@ -6,8 +27,14 @@ from datetime import UTC, datetime
 
 from fastapi import APIRouter
 
-from app.features.comments import classify_comment, duplicate_norms
-from app.registry import get_registry
+from app.features.comments import (
+    GENERIC_COMMENT_RATE_KEY,
+    MIN_RATE_SAMPLE,
+    classify_comment,
+    duplicate_norms,
+    summarize,
+)
+from app.registry import get_comment_registry
 from app.schemas import (
     CommentClassification,
     CommentLabel,
@@ -30,11 +57,10 @@ def classify(request: CommentsClassifyRequest) -> CommentsClassifyResponse:
 
     classifications: list[CommentClassification] = []
     item_confidences: list[float] = []
-    low_quality = 0
+    labels: list[CommentLabel] = []
     for item in comments:
         label, item_conf, signals = classify_comment(item.text, dupes)
-        if label is not CommentLabel.genuine:
-            low_quality += 1
+        labels.append(label)
         item_confidences.append(item_conf)
         classifications.append(
             CommentClassification(
@@ -45,9 +71,9 @@ def classify(request: CommentsClassifyRequest) -> CommentsClassifyResponse:
             )
         )
 
-    total = len(comments)
-    low_quality_ratio = low_quality / total if total else 0.0
+    summary = summarize(labels, posts_sampled=request.posts_sampled)
 
+    total = len(comments)
     if total:
         volume_factor = min(total / _VOLUME_TARGET, 1.0)
         mean_item = sum(item_confidences) / total
@@ -61,8 +87,17 @@ def classify(request: CommentsClassifyRequest) -> CommentsClassifyResponse:
 
     return CommentsClassifyResponse(
         classifications=classifications,
-        low_quality_ratio=round(low_quality_ratio, 6),
+        low_quality_ratio=summary.low_quality_ratio,
+        analyzed_count=summary.analyzed,
+        counts=summary.counts,
+        low_quality_count=summary.low_quality_count,
+        sufficient_sample=summary.sufficient_sample,
+        min_sample=MIN_RATE_SAMPLE,
+        detail=summary.detail,
+        rate_key=GENERIC_COMMENT_RATE_KEY,
         confidence=round(confidence, 4),
-        model_version=get_registry().active_version(),
+        # The COMMENT registry — not the fraud registry. This string must not move
+        # when a fraud champion is promoted.
+        model_version=get_comment_registry().active_version(),
         generated_at=datetime.now(UTC),
     )

@@ -13,12 +13,22 @@ const BootstrapLabel = "industry-bootstrap v1"
 // recomputation writes strictly higher versions.
 const bootstrapVersion = 1
 
+// Benchmark provenance sources. They are the two values benchmark.source may
+// take (the column CHECKs them), and they decide whether a subscore built on the
+// benchmark carries a measured confidence or a documented prior.
+const (
+	// SourceBootstrap: an industry REFERENCE BAND. No observations behind it.
+	SourceBootstrap = "bootstrap"
+	// SourceCorpus: percentiles over real audits of DISTINCT influencers.
+	SourceCorpus = "corpus"
+)
+
 // BenchmarkLabelFor renders the human-facing provenance label for a benchmark
 // from its source and version: a bootstrap generation is always the fixed
 // "industry-bootstrap v1" reference tag, while a corpus generation is labelled
 // with its version so a reader can tell how many recomputations back it is.
 func BenchmarkLabelFor(source string, version int) string {
-	if source == "bootstrap" {
+	if source != SourceCorpus {
 		return BootstrapLabel
 	}
 	return "corpus v" + itoa(version)
@@ -48,11 +58,24 @@ func itoa(n int) string {
 	return string(buf[i:])
 }
 
-// bootstrapSampleSize is the nominal sample size attributed to a bootstrap band.
-// It is deliberately small: these are priors, not measurements, so every
-// subscore built on them carries low confidence (confidenceForSamples(10) ≈
-// 0.25) until real corpus data (SampleSize >= corpusThreshold) supersedes them.
-const bootstrapSampleSize = 10
+// BootstrapPriorSupport is the support a subscore gets when its benchmark is a
+// bootstrap REFERENCE BAND rather than a corpus percentile. It is a documented
+// PRIOR — a judgement written into the code — and it is emitted with
+// SupportKind = contract.SupportPrior so nobody can mistake it for a measurement.
+//
+// It replaces a bootstrapSampleSize = 10 constant that was fed into
+// confidenceForSamples(n) to manufacture ~0.25. There are ZERO observations behind
+// a bootstrap band, so "n = 10" was a fabricated sample count laundering a prior
+// into a customer-facing statistic. The 0.25 is kept (it is the level we have been
+// shipping, and it is deliberately low), but it is now stated as the constant it
+// always was instead of being derived from a sample that does not exist.
+const BootstrapPriorSupport = 0.25
+
+// bootstrapSampleSize is the number of observations behind a bootstrap band:
+// none. It is written to benchmark.sample_size as SQL NULL (see the repository),
+// because a band that rests on no observations must say so rather than claim a
+// count nobody counted.
+const bootstrapSampleSize = 0
 
 // BootstrapWeights returns the cold-start weight set: the composite weighting
 // mandated by the PRD (0.30 reach, 0.30 engagement quality, 0.25 authenticity,
@@ -130,7 +153,7 @@ func BootstrapBenchmarks() []BootstrapBenchmark {
 				Stddev:     (b.p90 - b.p10) / p10p90Sigmas,
 				SampleSize: bootstrapSampleSize,
 				Version:    bootstrapVersion,
-				Source:     "bootstrap",
+				Source:     SourceBootstrap,
 				Label:      BootstrapLabel,
 			},
 		})

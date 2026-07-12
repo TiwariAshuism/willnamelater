@@ -1,6 +1,7 @@
 package service
 
 import (
+	"sort"
 	"time"
 
 	"github.com/getnyx/influaudit/backend/internal/connector"
@@ -14,6 +15,71 @@ import (
 var followerMetricNames = map[string]struct{}{
 	"followers":   {},
 	"subscribers": {},
+}
+
+// reachMetricName is the metric point a Meta/Instagram Graph Insights pull emits
+// per media: the accounts that saw it.
+const reachMetricName = "reach"
+
+// snapshotSources is the deduplicated, sorted set of data paths behind a capture
+// (connector.DataSource values). It is persisted with the row so a later reader —
+// the canary endpoint — can tell what the numbers actually came from instead of
+// taking a caller's word for it. A snapshot with no Source contributes nothing, so
+// an unattributable capture ends up with an empty set (unknown, never assumed clean).
+func snapshotSources(snaps []connector.Snapshot) []string {
+	seen := make(map[string]struct{}, len(snaps))
+	out := make([]string, 0, len(snaps))
+	for _, s := range snaps {
+		src := string(s.Source)
+		if src == "" {
+			continue
+		}
+		if _, dup := seen[src]; dup {
+			continue
+		}
+		seen[src] = struct{}{}
+		out = append(out, src)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// deriveReachLabel computes the reach training label from the snapshots the audit
+// actually collected: the median of the per-media reach points, taken ONLY from
+// snapshots produced by a live Instagram Graph pull. ok is false when no such
+// point exists.
+//
+// The caller's own ReachLabel is not consulted. The service used to accept an
+// integer from the composition root and stamp "instagram_insights" on it without
+// ever looking at where it came from, which made the provenance column a constant
+// rather than evidence. Deriving it here means only a genuine
+// connector.SourceInstagramGraph snapshot can produce a labelled reach at all.
+func deriveReachLabel(snaps []connector.Snapshot) (int64, contract.ReachLabelSource, bool) {
+	var reaches []int64
+	for _, s := range snaps {
+		source, ok := contract.ReachSourceFor(s.Source)
+		if !ok || source != contract.ReachSourceInstagramGraph {
+			continue
+		}
+		for _, m := range s.Metrics {
+			if m.Name == reachMetricName && m.Value > 0 {
+				reaches = append(reaches, int64(m.Value))
+			}
+		}
+	}
+	if len(reaches) == 0 {
+		return 0, "", false
+	}
+	sort.Slice(reaches, func(i, j int) bool { return reaches[i] < reaches[j] })
+	return reaches[len(reaches)/2], contract.ReachSourceInstagramGraph, true
+}
+
+// isOrganic reports whether the capture positively states that its reach figure
+// excludes ad-delivered reach. nil is UNKNOWN, and unknown is not organic: a
+// boosted post's Insights reach counts the audience the account paid for, and
+// there is no honest way to estimate the organic portion back out of it.
+func isOrganic(organic *bool) bool {
+	return organic != nil && *organic
 }
 
 // primarySnapshot returns the snapshot the feature vector describes: the one with

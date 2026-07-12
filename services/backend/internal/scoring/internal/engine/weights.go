@@ -4,7 +4,11 @@
 // exhaustively table-tested over every weight and benchmark cell.
 package engine
 
-import "math"
+import (
+	"math"
+
+	"github.com/getnyx/influaudit/backend/internal/scoring/contract"
+)
 
 // DefaultTier is the tier used when a follower count cannot place an account,
 // and BaselineNiche / BaselineTier key the cold-start rows every lookup falls
@@ -78,34 +82,67 @@ func (w Weights) sum() float64 {
 // cell: the percentile band, its summary statistics, the sample size behind it,
 // and the provenance that qualifies it.
 type Benchmark struct {
-	Metric     string
-	P10        float64
-	P25        float64
-	P50        float64
-	P75        float64
-	P90        float64
-	Mean       float64
-	Stddev     float64
+	Metric string
+	P10    float64
+	P25    float64
+	P50    float64
+	P75    float64
+	P90    float64
+	Mean   float64
+	Stddev float64
+	// SampleSize is the number of DISTINCT INFLUENCERS observed in the cell — and
+	// only that. It is 0 (persisted as SQL NULL) for a SourceBootstrap band, which
+	// rests on no observations whatsoever. It is never a nominal or notional count:
+	// every value here is something that was actually counted.
 	SampleSize int
 	Version    int
 	Source     string
 	Label      string
 }
 
-// corpusThreshold is the sample size at which a cell has enough real data to be
-// recomputed from the corpus. It also sets the confidence half-life below: a
-// benchmark with SampleSize == corpusThreshold carries 0.5 confidence.
+// corpusThreshold is the number of DISTINCT INFLUENCERS a cell needs before its
+// bootstrap band may be replaced by corpus percentiles. It also sets the
+// confidence half-life below: a benchmark built on corpusThreshold distinct
+// influencers carries 0.5 confidence.
 const corpusThreshold = 30
 
-// confidenceForSamples maps a sample size to a [0,1) confidence via n/(n+k) with
-// k = corpusThreshold. It rises monotonically and stays low while n is small —
-// a cold-start bootstrap band (n ≈ 10) yields ~0.25, so no subscore built on it
-// ever looks more certain than the evidence warrants.
+// confidenceForSamples maps a REAL, COUNTED sample size to a [0,1) confidence via
+// n/(n+k) with k = corpusThreshold. n is the number of DISTINCT INFLUENCERS behind
+// a corpus benchmark — never a nominal stand-in. It is called only for
+// SourceCorpus benchmarks: a bootstrap band has no samples at all and takes
+// BootstrapPriorSupport instead, so no prior is ever laundered through this
+// function into a number that looks measured.
 func confidenceForSamples(n int) float64 {
 	if n <= 0 {
 		return 0
 	}
 	return float64(n) / float64(n+corpusThreshold)
+}
+
+// benchmarkSupport returns the support a subscore inherits from its benchmark and
+// the KIND of claim that support makes.
+//
+// A corpus benchmark's support is a genuine confidence: it rises with the number
+// of distinct influencers actually observed in the cell. A bootstrap band's
+// support is a documented prior over zero observations. Keeping these apart is the
+// whole point — the previous code ran the bootstrap band through
+// confidenceForSamples(10) and shipped the result as a measured confidence.
+func benchmarkSupport(b Benchmark) (support float64, kind string) {
+	if b.Source == SourceCorpus {
+		return confidenceForSamples(b.SampleSize), contract.SupportConfidence
+	}
+	return BootstrapPriorSupport, contract.SupportPrior
+}
+
+// benchmarkBasis names what produced a value scored against this benchmark: a
+// percentile within a real reference population (corpus), or a closed-form ladder
+// against fixed reference constants (bootstrap) — which is arithmetic, not a
+// measurement of any population.
+func benchmarkBasis(b Benchmark) string {
+	if b.Source == SourceCorpus {
+		return contract.BasisCorpus
+	}
+	return contract.BasisClosedForm
 }
 
 // clamp01 bounds v into [0,1].

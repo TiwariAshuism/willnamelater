@@ -59,13 +59,13 @@ def test_feature_order_carries_no_duplicate_or_renamed_columns():
             confidence=0.55,
         )
     ]
-    features, _, _ = to_dataset(labels)
+    features, _, _, _ = to_dataset(labels)
     assert len(set(features[0])) == len(FEATURE_ORDER)
 
 
 def test_drops_rows_without_features_and_never_zero_fills():
     labels = [_row(True), _row(True, has_features=False), _row(False, present=False)]
-    features, targets, _ = to_dataset(labels)
+    features, targets, _, _ = to_dataset(labels)
     # Only the one genuinely feature-bearing row survives; the has_features=false
     # and present=false rows are dropped, not zero-filled.
     assert len(features) == 1
@@ -74,13 +74,22 @@ def test_drops_rows_without_features_and_never_zero_fills():
 
 
 def test_label_mapping():
-    _, targets, _ = to_dataset([_row(True), _row(False)])
+    _, targets, _, _ = to_dataset([_row(True), _row(False)])
     assert targets == [1, 0]
+
+
+def test_dataset_carries_the_influencer_group_key():
+    # The group key must survive the projection: the floor counts creators and the
+    # split groups by creator, so a dataset that forgets who the row is about
+    # cannot be gated honestly. An export without one yields a blank, which counts
+    # as zero distinct creators — below the floor, train nothing.
+    _, _, _, ids = to_dataset([_row(True) | {"influencer_id": "inf-1"}, _row(False)])
+    assert ids == ["inf-1", ""]
 
 
 def test_columns_follow_feature_order():
     labels = [_row(True, risk_score=90.0, clique_count=7, confidence=0.6)]
-    features, _, _ = to_dataset(labels)
+    features, _, _, _ = to_dataset(labels)
     assert features[0][0] == 90.0  # risk_score first (the 0-100 composite estimate)
     assert features[0][2] == 7.0  # clique_count third
     assert features[0][4] == 0.6  # confidence last

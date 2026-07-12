@@ -27,9 +27,16 @@ export function ReportView({ report }: { report: Report }) {
           <>
             <div className="flex flex-wrap gap-8">
               <Metric label="Overall" value={score.overall.toFixed(1)} />
+              {/* Authenticity is null when the dimension rested on NO measurement.
+                  The engine's neutral 50 means "we don't know" — printing it would
+                  certify an account nobody examined. */}
               <Metric
                 label="Authenticity"
-                value={score.authenticity.toFixed(1)}
+                value={
+                  score.authenticity != null
+                    ? score.authenticity.toFixed(1)
+                    : "Not assessed"
+                }
               />
               {score.tier && <Metric label="Tier" value={score.tier} />}
               {score.niche && <Metric label="Niche" value={score.niche} />}

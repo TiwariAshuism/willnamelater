@@ -346,15 +346,41 @@ completed audit
 
 ### Gate criteria (each recorded in `validation_report_jsonb` with its verdict + evidence)
 
-**G0 — Data floor (extends `training.gate`).**
-- Fraud: reuse `FLOOR_PER_CLASS = 50` per class on rows with `quality_ok` AND
-  `fraud_label IS NOT NULL`. Below floor → no challenger, `registry.active_version`
-  stays `heuristic`.
-- Reach: new floor `MIN_REACH_ROWS = 200` rows with `quality_ok` AND
-  `reach_label IS NOT NULL`. Below floor → no reach challenger.
+**G0 — Data floor (extends `training.gate`). Counts CREATORS, not rows.**
+
+The unit of evidence is an INFLUENCER, not an audit row. Rows are keyed by
+`audit_job_id` and the same creator is re-audited on a schedule, so a row count
+is not a sample size: 25 creators audited monthly for 8 months is 200 rows and
+25 accounts. A row floor calls that "enough data" and it is not.
+
+- Fraud: `FLOOR_PER_CLASS = 50` labelled rows per class **and**
+  `MIN_FRAUD_INFLUENCERS_PER_CLASS = 25` DISTINCT influencers per class, on rows
+  with `quality_ok`, `fraud_label IS NOT NULL`, **and a trainable
+  `fraud_label_evidence`** (see below). Below floor → no challenger,
+  `registry.active_version` stays `heuristic`.
+- Reach: `MIN_REACH_INFLUENCERS = 200` **DISTINCT INFLUENCERS** (not rows) with
+  `quality_ok` AND `reach_label IS NOT NULL`. Below floor → no reach challenger.
+- A row with no `influencer_id` counts as zero distinct creators: we cannot prove
+  it is independent of any other row, and unprovable independence is not
+  independence.
+
+**Label admissibility (fraud) — an echo is not ground truth.** A `fraud_label`
+is trainable only when `fraud_label_evidence` names an OBSERVATION the heuristic
+could not have made: `platform_enforcement_action`, `creator_admission`,
+`purchase_receipt_or_panel_invoice`, `brand_campaign_conversion_data`,
+`manual_follower_sample_audit`. The value `none_reviewed_heuristic_only` means
+the reviewer saw nothing the heuristic had not already computed — that label IS
+the heuristic's output, and a model trained on it is a distillation of the
+heuristic that every gate below would then certify as independent. Such rows,
+and rows with a missing/unknown evidence kind, are **UNLABELLED** — neither y=1
+nor y=0. Missing is not trainable: absence of a stated observation is not an
+observation.
 
 **G1 — Held-out test** (newest-20% temporal slice, never used in training, per
-existing `TRAIN_FRACTION = 0.8`):
+existing `TRAIN_FRACTION = 0.8`) — the split is **GROUPED BY INFLUENCER**
+(`train.grouped_temporal_split`): whole creators go to one side or the other, so
+no influencer is ever in both train and held-out. A row-wise split lets the model
+memorize creators it has already seen and G1 then reports recall of a memory:
 - Fraud: per-class precision **and** recall `>= 0.70` for **both** classes.
 - Reach: P50 quantile MAPE `<= 0.35`, and empirical coverage of the [P10,P90]
   band within `[0.70, 0.90]`.
@@ -382,20 +408,54 @@ re-scored on it):
 - **First-ever model (no champion): G4 auto-passes**; the model must still clear
   G1 and G3.
 
-**G5 — Shadow window** (catches train/serve skew, doc §2):
-- Window = **3 days or 200 live shadow scores, whichever first** (configurable).
-  Minimum `MIN_SHADOW_N = 50` logged pairs or the window cannot conclude (stays
-  in shadow — gated on real traffic).
-- Pass: PSI (population stability index) between the shadow challenger score
-  distribution and the offline held-out challenger score distribution `< 0.25`
-  (no pathological train/serve shift).
+**G6 — Beats the raw heuristic (MANDATORY; no auto-pass, no skip).**
 
-All gates pass → promote. Any gate fails → `role='rejected'`, alert, the failing
-gate is recorded. The register endpoint only **records** a challenger; the
-**promote** endpoint re-checks the stored report's gate verdicts server-side
-(defense in depth: it refuses to promote a version whose report shows any
-required gate failing or absent — it validates the report's pass flags and the
-floor/canary policy, it does not recompute model metrics).
+A challenger that cannot beat the heuristic it was trained downstream of is a
+**distillation of that heuristic, not a model**. It adds no information — only
+the appearance of one — and promoting it launders a rule of thumb into "our ML
+says". This gate is the only one that can catch that, because G1–G4 all compare
+the model to LABELS and are perfectly happy with a model that has merely
+re-learned the existing score.
+
+- Fraud: baseline = the raw heuristic composite `risk_score`, read straight off
+  the held-out rows' frozen feature vectors. Challenger **AUC** must exceed the
+  heuristic's by `HEURISTIC_AUC_MARGIN = 0.02`. AUC because it is invariant to
+  the two scores' different scales; a tie is a FAIL.
+- Reach: the pipeline ships **no heuristic reach estimator**, so the honest
+  "what you get without a model" baseline is the constant train-median predictor.
+  Challenger MAPE must beat it by `HEURISTIC_MAPE_MARGIN = 0.02`. If a real
+  heuristic reach estimator is ever shipped, pass its predictions instead.
+- No first-model auto-pass (a first model has MORE to prove). If the baseline
+  cannot be evaluated on enough held-out rows (`G6_MIN_N`), the gate **FAILS** —
+  unproven is not promotable, and "we couldn't check" is not "it passed".
+
+**Serving skew (`g5_serving_skew`) — a PLUMBING CHECK. NOT A GATE.**
+
+It measures PSI between the offline held-out and live shadow score
+*distributions*. **It joins NO LABELS.** It therefore cannot say the challenger
+is more accurate, and it is written so that it cannot express such a claim: its
+result carries **no `pass` key**, only `skew_detected: true | false | null`. It
+can VETO a promotion (skew found, or too little traffic to say) and it can never
+grant one. `should_promote` raises if handed a dict with a `pass` key.
+
+> A null "plumbing" challenger that merely echoes the champion produces an
+> identical score distribution and PSI ≈ 0. Under the old name (`g5_shadow`, with
+> a `pass` key) that zero-label result read as a shadow-window PASS on 50 pairs,
+> which is how a heuristic echo could be registered as an ML champion.
+
+**The real shadow arbiter does not exist yet.** The label-joined comparison —
+`ml_prediction_log` JOIN `training_feature_row` ON `audit_job_id`, scoring
+champion and challenger against outcomes that arrived AFTER the prediction — is a
+SEPARATE, NOT-YET-BUILT gate. Nothing above substitutes for it. Until it is
+built, there is no shadow evidence of accuracy, and the report must not be read
+as if there were.
+
+All gates (G1, G2, G3, G4, G6) pass → promotable. Any gate fails →
+`role='rejected'`, alert, the failing gate is recorded. The register endpoint only
+**records** a challenger; the **promote** endpoint re-checks the stored report's
+gate verdicts server-side (defense in depth: it refuses to promote a version whose
+report shows any required gate failing or absent — it validates the report's pass
+flags and the floor/canary policy, it does not recompute model metrics).
 
 ---
 
@@ -540,8 +600,16 @@ metric dicts, noted as such in tests):**
   floor).
 - Promotion (needs a real passing validation report).
 - Canary gate (needs real manually-verified accounts; empty → skipped-with-warning).
-- Shadow window (needs real live traffic).
-- Reach model (needs real Instagram Insights reach labels ≥ MIN_REACH_ROWS).
+- Serving-skew reading (needs real live traffic) — and it is not an accuracy gate.
+- Reach model (needs real Instagram Insights reach labels covering
+  ≥ MIN_REACH_INFLUENCERS **distinct creators**).
+- Fraud model (needs dispute labels backed by a real `fraud_label_evidence`
+  observation; until the Go side emits that field, the fraud fold is EMPTY and
+  the model correctly refuses to train).
+
+**Not built:** the label-joined shadow arbiter (`ml_prediction_log` JOIN
+`training_feature_row`) — the only thing that could tell us a challenger is
+genuinely more accurate on live traffic. `g5_serving_skew` is not it.
 
 **Honest cold-start behavior (day one, zero labels):** no `ml_model_version`
 champion row; artifact dir empty; `registry.active_version()` = `heuristic`;

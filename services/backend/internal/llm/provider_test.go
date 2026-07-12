@@ -84,7 +84,7 @@ func inputA() ReportInput {
 		Followers:      120000,
 		Platforms:      []string{"youtube"},
 		InfluenceScore: 61.5,
-		Authenticity:   72.0,
+		Authenticity:   ptrF(72.0),
 		Subscores:      []Subscore{{Name: "engagement_quality", Value: 58, Confidence: 0.6}},
 		Fraud:          FraudEstimate{CliqueCount: 3, Confidence: 0.4, Estimate: true},
 		Metrics:        []Metric{{Name: "engagement_rate", Value: 0.031}},
@@ -100,7 +100,7 @@ func inputB() ReportInput {
 		Followers:      2400000,
 		Platforms:      []string{"youtube", "instagram"},
 		InfluenceScore: 88.0,
-		Authenticity:   40.0,
+		Authenticity:   ptrF(40.0),
 		Subscores:      []Subscore{{Name: "authenticity", Value: 40, Confidence: 0.9}},
 		Fraud:          FraudEstimate{CliqueCount: 27, Confidence: 0.8, Estimate: true},
 		Metrics:        []Metric{{Name: "engagement_rate", Value: 0.012}},
@@ -288,3 +288,7 @@ func TestChat_NotImplemented(t *testing.T) {
 
 // Provider is satisfied by the concrete provider — a compile-time guard.
 var _ Provider = (*anthropicProvider)(nil)
+
+// ptrF is a pointer helper: Authenticity is nil when the subscore rested on no
+// measurement, so the test must supply a real pointer to assert a real value.
+func ptrF(v float64) *float64 { return &v }

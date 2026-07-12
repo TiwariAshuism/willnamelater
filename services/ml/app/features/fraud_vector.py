@@ -26,12 +26,58 @@ same composite score renamed — nothing ever fetched a follower list) and
 ``bot_comment_rate`` (a bit-for-bit duplicate of ``clique_membership_fraction`` —
 no comment's text was ever classified). The v1 vector therefore carried six
 positions holding five distinct values.
+
+FIREWALL: the comment classifier does not belong in this vector
+---------------------------------------------------------------
+STOP before you "just wire it in". Now that ``bot_comment_rate`` is gone there is
+an obvious-looking hole, and an obvious-looking thing to plug it with: the output
+of ``/v1/comments/classify``. DO NOT.
+
+That endpoint is not a model. It is an 18-phrase English frozenset with an
+unmeasured error rate that systematically mislabels Hinglish, Tamil and
+Portuguese comment sections (see :mod:`app.features.comments`). And a high
+generic-comment rate is not fraud in the first place — fan accounts and meme
+pages earn oceans of genuine "🔥🔥🔥".
+
+Its output therefore lives under its own quarantined key,
+:data:`~app.features.comments.GENERIC_COMMENT_RATE_KEY`
+(``generic_comment_rate_v1``), and may enter ``FEATURE_ORDER``, the 0-100
+composite, or any weighted blend ONLY after its weight has been **fitted against
+real fraud outcomes** (resolved dispute labels), which requires bumping
+``FEATURE_ORDER_VERSION`` and retraining. Hand-picking a weight is the exact sin
+that produced ``bot_comment_rate`` and the uncited engagement curve, both of which
+this project has since had to delete.
+
+:data:`_QUARANTINED_KEYS` enforces this at import time: if a comment-derived key
+ever appears in ``FEATURE_ORDER``, the service refuses to start.
 """
 
 from __future__ import annotations
 
+from app.features.comments import GENERIC_COMMENT_RATE_KEY
 from app.models.heuristics import FraudResult
 from training.features import FEATURE_ORDER
+
+#: Keys that must NEVER be positions in the fraud feature vector. Two of them are
+#: comment-derived (unfitted, unevaluated, culturally biased); ``bot_comment_rate``
+#: is the deleted fake, listed so it cannot be resurrected under its old name.
+_QUARANTINED_KEYS = frozenset(
+    {
+        GENERIC_COMMENT_RATE_KEY,
+        "bot_comment_rate",
+        "low_quality_comment_rate",
+    }
+)
+
+_leaked = _QUARANTINED_KEYS & set(FEATURE_ORDER)
+if _leaked:
+    raise RuntimeError(
+        "FIREWALL: comment-derived signal(s) "
+        f"{sorted(_leaked)} entered the fraud FEATURE_ORDER. The comment "
+        "classifier is a rule set with an unmeasured error rate; its weight has "
+        "never been fitted against real fraud outcomes, and a high "
+        "generic-comment rate is not fraud. See app/features/comments.py."
+    )
 
 
 def build_fraud_vector(result: FraudResult) -> dict[str, float | None]:

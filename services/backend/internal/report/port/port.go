@@ -78,9 +78,12 @@ type Subscore struct {
 // the audit produced no score (a fully failed audit), in which case the report
 // discloses the absence rather than inventing a number.
 type ScoreView struct {
-	Present        bool
-	Overall        float64
-	Authenticity   float64
+	Present bool
+	Overall float64
+	// Authenticity is nil when the authenticity subscore rests on NO measurement —
+	// the engine's neutral 50 means "we don't know", and printing it as a headline
+	// would certify an account nobody examined. The report says "not assessed".
+	Authenticity   *float64
 	Niche          string
 	Tier           string
 	BenchmarkLabel string

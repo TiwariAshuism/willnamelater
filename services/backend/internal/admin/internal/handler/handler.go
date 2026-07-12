@@ -40,6 +40,11 @@ func (h *Handler) Register(rg gin.IRouter) {
 
 	admin := rg.Group("/admin")
 	admin.GET("/disputes", h.listDisputeQueue)
+	admin.GET("/disputes/:id", h.reviewDispute)
+	// The reveal is a POST because it is not a read: it changes the record of how
+	// the decision was reached. Disclosing the heuristic's score to the adjudicator
+	// is an act, and the act is what gets stamped on the row.
+	admin.POST("/disputes/:id/reveal-score", h.revealHeuristicScore)
 	admin.POST("/disputes/:id/resolve", h.resolveDispute)
 	admin.GET("/costs", h.costDashboard)
 	admin.GET("/queues", h.queueMonitor)
@@ -65,6 +70,31 @@ func (h *Handler) fileDispute(c *gin.Context) {
 // listDisputeQueue handles GET /admin/disputes.
 func (h *Handler) listDisputeQueue(c *gin.Context) {
 	resp, err := h.svc.ListDisputeQueue(c.Request.Context())
+	if err != nil {
+		httpx.RenderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// reviewDispute handles GET /admin/disputes/:id. The response carries no
+// heuristic score unless one was explicitly revealed for this dispute — the
+// service, not the transport, decides that, and no query parameter can override
+// it.
+func (h *Handler) reviewDispute(c *gin.Context) {
+	resp, err := h.svc.ReviewDispute(c.Request.Context(), c.Param("id"))
+	if err != nil {
+		httpx.RenderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// revealHeuristicScore handles POST /admin/disputes/:id/reveal-score. It takes no
+// body: there is nothing for the client to say. The disclosure is recorded
+// server-side.
+func (h *Handler) revealHeuristicScore(c *gin.Context) {
+	resp, err := h.svc.RevealHeuristicScore(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		httpx.RenderError(c, err)
 		return

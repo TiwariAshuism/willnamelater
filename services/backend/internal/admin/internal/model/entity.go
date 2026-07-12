@@ -8,6 +8,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+
+	"github.com/getnyx/influaudit/backend/internal/admin/port"
 )
 
 // Status is a dispute's lifecycle state. It mirrors the CHECK constraint on
@@ -64,9 +66,32 @@ func (d Decision) Status() Status {
 // FraudLabel returns the supervised training target the decision implies: true
 // when the account was confirmed fraudulent/coordinated (the flag stood), false
 // when it was confirmed legitimate (the flag was overturned).
+//
+// It is a target ONLY in company with an observable LabelEvidence. On its own the
+// bool says nothing more than "a human agreed with the heuristic".
 func (d Decision) FraudLabel() bool {
 	return d == DecisionRejected
 }
+
+// LabelEvidence is what the adjudicator actually observed, outside the
+// heuristic's own output. The type and its closed value set live on the module's
+// public seam (internal/admin/port) because the composition root has to map them
+// onto mlops's mirror of the same enum; the domain layer names them through this
+// alias so nothing here reaches across the module boundary for a string.
+type LabelEvidence = port.LabelEvidence
+
+// The evidence kinds, re-exported from port so the domain layer reads as one
+// package. See port.LabelEvidence for what each one means and why the enum is
+// closed: EvidenceHeuristicOnly is a real decision but a heuristic echo, and the
+// training-label export drops it.
+const (
+	EvidencePlatformEnforcement = port.EvidencePlatformEnforcement
+	EvidenceCreatorAdmission    = port.EvidenceCreatorAdmission
+	EvidencePurchaseReceipt     = port.EvidencePurchaseReceipt
+	EvidenceBrandConversionData = port.EvidenceBrandConversionData
+	EvidenceManualFollowerAudit = port.EvidenceManualFollowerAudit
+	EvidenceHeuristicOnly       = port.EvidenceHeuristicOnly
+)
 
 // Dispute is one row of the dispute table. RaisedBy and ResolvedBy are uuid.Nil
 // when the referenced account was deleted (the schema keeps the audit trail with
@@ -80,8 +105,17 @@ type Dispute struct {
 	Resolution string
 	ResolvedBy uuid.UUID
 	ResolvedAt *time.Time
-	CreatedAt  time.Time
-	UpdatedAt  time.Time
+	// LabelEvidence is what the adjudicator observed when they decided. It is
+	// empty ("") — SQL NULL — on a dispute nobody has decided yet, and is required
+	// of every decided one (CHECK dispute_decided_has_evidence).
+	LabelEvidence LabelEvidence
+	// ScoreShownToAdmin records whether the heuristic's composite score and flags
+	// were disclosed to the adjudicator before they decided. It defaults to false —
+	// adjudication is evidence-blind by default — and is flipped only by the
+	// explicit reveal act, server-side. No client may set it.
+	ScoreShownToAdmin bool
+	CreatedAt         time.Time
+	UpdatedAt         time.Time
 }
 
 // CreateDisputeParams is the input to filing a dispute.
@@ -93,10 +127,13 @@ type CreateDisputeParams struct {
 
 // ResolveDisputeParams is the input to resolving a dispute. Status and
 // Resolution are derived from the admin's Decision before the repository writes
-// them, so the data layer stores only the resolved shape.
+// them, so the data layer stores only the resolved shape. LabelEvidence is
+// validated against the closed set before it gets here and is never empty: a
+// decision that states no observation may not be recorded at all.
 type ResolveDisputeParams struct {
-	ID         uuid.UUID
-	Status     Status
-	Resolution string
-	ResolvedBy uuid.UUID
+	ID            uuid.UUID
+	Status        Status
+	Resolution    string
+	ResolvedBy    uuid.UUID
+	LabelEvidence LabelEvidence
 }

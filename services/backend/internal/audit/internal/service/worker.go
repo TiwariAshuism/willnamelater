@@ -269,7 +269,7 @@ func classifyFetchError(result model.PlatformResult, err error) model.PlatformRe
 // fraud and report steps are advisory: a failure there degrades gracefully
 // rather than failing an audit that already collected data.
 func (s *Service) scoreAndReport(ctx context.Context, job model.Job, snapshots []connector.Snapshot) error {
-	fraud, err := s.fraud.ScoreFraud(ctx, snapshots)
+	fraud, err := s.fraud.ScoreFraud(ctx, job.ID, snapshots)
 	if err != nil {
 		// The ml service was unavailable. Score without a fraud signal rather than
 		// failing; the summary's Present flag records the absence.

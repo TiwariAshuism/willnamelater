@@ -294,7 +294,15 @@ class CommentItem(_StrictRequest):
 
 
 class CommentsClassifyRequest(_StrictRequest):
+    """A batch of comments to bucket, plus the scope they were drawn from.
+
+    ``posts_sampled`` is optional and used for one thing only: naming the
+    denominator in the customer-facing detail string ("212 comments sampled from
+    6 recent posts"). It is never used to extrapolate to the account.
+    """
+
     comments: list[CommentItem] = Field(default_factory=list)
+    posts_sampled: int | None = Field(default=None, ge=0)
 
 
 class CommentClassification(BaseModel):
@@ -307,10 +315,42 @@ class CommentClassification(BaseModel):
 
 
 class CommentsClassifyResponse(BaseModel):
+    """Rule-based comment buckets. NOT a trained classifier — see
+    ``app/features/comments.py``.
+
+    ``model_version`` is always the comment classifier's OWN version
+    (``heuristic-comments-v1`` while it is rules). It is resolved from the comment
+    registry namespace and is unaffected by the promotion of a fraud champion: a
+    regex must never report a trained model's version.
+
+    ``low_quality_ratio`` is **null** — never 0.0 — when fewer than
+    ``min_sample`` comments were classified. Zero would mean "we measured, and it
+    is clean"; null says "we will not compute a percentage over this few
+    comments". ``counts`` and ``analyzed_count`` are always populated, so the
+    caller can render raw counts instead. ``rate_key`` names the key this rate is
+    stored under; it is QUARANTINED from the fraud feature vector until its weight
+    has been fitted against real fraud outcomes.
+    """
+
     model_config = ConfigDict(extra="forbid")
 
     classifications: list[CommentClassification]
-    low_quality_ratio: float = Field(ge=0.0, le=1.0)
+    #: null when ``sufficient_sample`` is false. Absent, not zero.
+    low_quality_ratio: float | None = Field(default=None, ge=0.0, le=1.0)
+    #: The denominator. Every rate above is over exactly this many comments.
+    analyzed_count: int = Field(ge=0)
+    #: Raw per-label counts, always reported (keys are ``CommentLabel`` values).
+    counts: dict[str, int]
+    #: Numerator: comments matching any low-quality rule.
+    low_quality_count: int = Field(ge=0)
+    #: False when ``analyzed_count`` is below ``min_sample``; the rate is then null.
+    sufficient_sample: bool
+    #: The floor below which no rate is reported at all.
+    min_sample: int = Field(ge=0)
+    #: Human-readable, denominator-carrying description of what was measured.
+    detail: str
+    #: The quarantined key this rate belongs under. NOT a fraud feature.
+    rate_key: str
     confidence: float = Field(ge=0.0, le=1.0)
     model_version: str
     estimate: bool = True

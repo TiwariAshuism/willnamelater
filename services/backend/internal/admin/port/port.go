@@ -101,12 +101,94 @@ type QueueInspector interface {
 	GetQueueInfo(queue string) (*asynq.QueueInfo, error)
 }
 
+// LabelEvidence is WHAT THE ADJUDICATOR ACTUALLY OBSERVED, outside the
+// heuristic's own output, when they decided a dispute. It is declared here, on
+// the admin module's public seam, because it crosses the boundary twice: it is
+// persisted on dispute.label_evidence (migration 000027), and it travels to the
+// ml training loop through TrainingLabelSink below.
+//
+// It exists because the decision alone is NOT ground truth and cannot be made
+// into it. A dispute exists only because the heuristic flagged the account, so
+// "rejected" means no more than "an admin declined to overturn the flag" — and
+// the review screen has historically shown that admin the heuristic's own risk
+// score. A model fit on those labels learns to predict whether a human agreed
+// with the heuristic; it can assert nothing the heuristic did not already assert.
+//
+// The observability test applies to humans exactly as it does to a model: nobody
+// can observe a follower purchase by looking at a follower count. So only a label
+// carrying an OBSERVABLE evidence kind may enter a training fold.
+//
+// The values mirror mlops's contract.FraudLabelEvidence one for one (and the
+// CHECK constraint on dispute.label_evidence). They are mirrored rather than
+// imported because a business module imports no other business module; the
+// composition root maps between the two string types.
+type LabelEvidence string
+
+const (
+	// EvidencePlatformEnforcement records that the platform itself acted (takedown,
+	// ban, removal of followers). An external authority observed the fraud.
+	EvidencePlatformEnforcement LabelEvidence = "platform_enforcement_action"
+	// EvidenceCreatorAdmission records that the creator admitted to buying
+	// engagement.
+	EvidenceCreatorAdmission LabelEvidence = "creator_admission"
+	// EvidencePurchaseReceipt records that a receipt or engagement-panel invoice was
+	// produced.
+	EvidencePurchaseReceipt LabelEvidence = "purchase_receipt_or_panel_invoice"
+	// EvidenceBrandConversionData records that a brand's own campaign conversion
+	// data contradicts the claimed audience.
+	EvidenceBrandConversionData LabelEvidence = "brand_campaign_conversion_data"
+	// EvidenceManualFollowerAudit records that a human sampled the actual follower
+	// list and examined the accounts — the one manual method that observes the thing
+	// itself.
+	EvidenceManualFollowerAudit LabelEvidence = "manual_follower_sample_audit"
+	// EvidenceHeuristicOnly records that the admin reviewed the flag and agreed,
+	// observing nothing the heuristic had not already computed.
+	//
+	// This is the HONEST, first-class answer for the common case, and it is why the
+	// enum exists. The dispute outcome is real and the customer is owed it, so the
+	// row is kept — but it is a heuristic echo, and it may NEVER become y. The
+	// training-label export drops it.
+	EvidenceHeuristicOnly LabelEvidence = "none_reviewed_heuristic_only"
+)
+
+// Valid reports whether e is a recognised evidence kind. The empty string is not
+// one: a decided dispute must state what was observed, even if the answer is
+// EvidenceHeuristicOnly ("nothing the heuristic had not already computed").
+func (e LabelEvidence) Valid() bool {
+	switch e {
+	case EvidencePlatformEnforcement, EvidenceCreatorAdmission, EvidencePurchaseReceipt,
+		EvidenceBrandConversionData, EvidenceManualFollowerAudit, EvidenceHeuristicOnly:
+		return true
+	}
+	return false
+}
+
+// Observable reports whether the evidence rests on something someone actually
+// SAW, outside the heuristic's own output — and therefore whether the label may
+// leave the training-label export at all.
+//
+// EvidenceHeuristicOnly is the sole false case among the valid kinds, and
+// deliberately so: it is a real admin decision but contains no observation, so
+// training on it would close the loop between the model and its own opinion. An
+// unknown or empty evidence is also false — absence of a stated observation is
+// not an observation.
+func (e LabelEvidence) Observable() bool {
+	return e.Valid() && e != EvidenceHeuristicOnly
+}
+
 // TrainingLabelSink backfills a supervised fraud label onto the ml feature-store
 // row when a dispute is decided: fraudulent=true when the flag stood (dispute
-// rejected), false when it was overturned (upheld). The real implementation is
-// the mlops module, adapted by app; the admin module never imports mlops. The
-// call is best-effort — a failure is logged and never fails the dispute
-// resolution, since the label is a training side-effect, not the decision itself.
+// rejected), false when it was overturned (upheld).
+//
+// evidence travels WITH the bool and is not optional. The bool on its own is an
+// echo of the heuristic — mlops needs the evidence kind to decide whether the
+// label may enter a fold at all, and must reject EvidenceHeuristicOnly exactly as
+// the HTTP export does.
+//
+// The real implementation is the mlops module, adapted by app; the admin module
+// never imports mlops. The call is best-effort — a failure is logged and never
+// fails the dispute resolution, since the label is a training side-effect, not
+// the decision itself.
 type TrainingLabelSink interface {
-	RecordDisputeLabel(ctx context.Context, auditJobID uuid.UUID, fraudulent bool) error
+	RecordDisputeLabel(ctx context.Context, auditJobID uuid.UUID, fraudulent bool, evidence LabelEvidence) error
 }

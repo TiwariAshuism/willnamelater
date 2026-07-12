@@ -35,15 +35,19 @@ from training.feature_store import (
 )
 from training.features import FEATURE_ORDER
 from training.gate import meets_floor, meets_reach_floor
-from training.train import TRAIN_FRACTION
+from training.train import grouped_temporal_split
 
 
-def _temporal_split(captured_at, fraction=TRAIN_FRACTION):
-    """Indices split into (train, held_out) by captured_at ascending; the newest
-    slice is held out and never trained on (temporal validation, §4 G1)."""
-    order = sorted(range(len(captured_at)), key=lambda i: (captured_at[i], i))
-    split = max(1, int(len(order) * fraction))
-    return order[:split], order[split:]
+def _heuristic_scores(features, feature_order, key="risk_score"):
+    """The raw heuristic's own score for each row, read off the frozen vector.
+
+    This is the number the product shipped before any model existed, and G6 makes
+    the challenger beat it. A vector without the column yields NaN, and G6 treats
+    an unscoreable baseline as a FAILURE, never as a free pass."""
+    if key not in feature_order:
+        return [float("nan")] * len(features)
+    col = feature_order.index(key)
+    return [row[col] for row in features]
 
 
 def _load_fraud_champion(out_dir):
@@ -113,35 +117,43 @@ def _num(value) -> float:
 def run_fraud(args) -> int:
     rows = fetch_feature_rows(args.feature_rows_url, token=args.token, since=args.since)
     ds = to_fraud_dataset(rows)
+    _report_dropped_labels(ds.excluded)
 
-    ok, counts = meets_floor(ds.targets)
+    ok, counts = meets_floor(ds.targets, ds.influencer_ids)
     if not ok:
         print(
             f"[fraud] below data floor: {counts['positive']} positive / "
-            f"{counts['negative']} negative labelled rows, need >= {counts['floor']} "
-            "per class. No challenger; registry stays 'heuristic'."
+            f"{counts['negative']} negative OBSERVED labelled rows "
+            f"(need >= {counts['floor']} per class), drawn from "
+            f"{counts['positive_influencers']} / {counts['negative_influencers']} "
+            f"distinct influencers (need >= {counts['influencer_floor']} per class). "
+            "No challenger; registry stays 'heuristic'."
         )
         return 0
 
-    train_idx, val_idx = _temporal_split(ds.captured_at)
+    train_idx, val_idx = grouped_temporal_split(ds.captured_at, ds.influencer_ids)
+    if not val_idx:
+        print("[fraud] no held-out influencers after the grouped split: the labels "
+              "cover too few distinct creators to validate on. Nothing trained.")
+        return 0
     model = ch.train_fraud_challenger(
         [ds.features[i] for i in train_idx], [ds.targets[i] for i in train_idx]
     )
 
     y_true = [ds.targets[i] for i in val_idx]
     strata = [ds.strata[i] for i in val_idx]
-    chal_scores = model.scores([ds.features[i] for i in val_idx])
+    val_features = [ds.features[i] for i in val_idx]
+    chal_scores = model.scores(val_features)
 
     champion = _load_fraud_champion(args.out)
-    champ_scores = (
-        champion.scores([ds.features[i] for i in val_idx]) if champion else None
-    )
+    champ_scores = champion.scores(val_features) if champion else None
 
     canaries = _fetch_canaries_safe(args.canaries_url, "fraud", args.token)
     canary_results = _fraud_canary_results(canaries, model)
 
     report = validate.build_fraud_report(
-        y_true, chal_scores, champ_scores, strata, canary_results
+        y_true, chal_scores, champ_scores, strata, canary_results,
+        _heuristic_scores(val_features, FEATURE_ORDER),
     )
     return _finish("fraud", args, model, report, ds, counts, FEATURE_ORDER)
 
@@ -150,39 +162,81 @@ def run_reach(args) -> int:
     rows = fetch_feature_rows(args.feature_rows_url, token=args.token, since=args.since)
     ds = to_reach_dataset(rows)
 
-    ok, counts = meets_reach_floor(len(ds.targets))
+    ok, counts = meets_reach_floor(len(ds.targets), ds.influencer_ids)
     if not ok:
         print(
-            f"[reach] below data floor: {counts['rows']} rows with a real reach "
-            f"label, need >= {counts['floor']}. No challenger; registry stays "
-            "'heuristic'."
+            f"[reach] below data floor: {counts['rows']} reach-labelled rows, but "
+            f"only {counts['distinct_influencers']} DISTINCT influencers — need "
+            f">= {counts['floor']}. Re-auditing the same creators does not add "
+            "creators. No challenger; registry stays 'heuristic'."
         )
         return 0
 
-    train_idx, val_idx = _temporal_split(ds.captured_at)
+    train_idx, val_idx = grouped_temporal_split(ds.captured_at, ds.influencer_ids)
+    if not val_idx:
+        print("[reach] no held-out influencers after the grouped split. "
+              "Nothing trained.")
+        return 0
     model = ch.train_reach_challenger(
         [ds.features[i] for i in train_idx],
+        # The SINGLE median reach label — all three quantile heads train on it.
         [ds.targets[i] for i in train_idx],
         REACH_FEATURE_ORDER,
     )
 
     y_true = [ds.targets[i] for i in val_idx]
     strata = [ds.strata[i] for i in val_idx]
-    preds = model.predict([ds.features[i] for i in val_idx])
+    val_features = [ds.features[i] for i in val_idx]
+    preds = model.predict(val_features)
     p10, p50, p90 = ch.reach_bands(preds)
 
     champion = _load_reach_champion(args.out)
-    champ_p50 = (
-        champion.scores([ds.features[i] for i in val_idx]) if champion else None
-    )
+    champ_p50 = champion.scores(val_features) if champion else None
 
     canaries = _fetch_canaries_safe(args.canaries_url, "reach", args.token)
     canary_results = _reach_canary_results(canaries, model)
 
+    # The non-model baseline for G6: the constant train-median predictor. The
+    # pipeline ships no heuristic reach estimator, so this is the honest "what
+    # you get without a model" — a regressor that cannot beat it has learned
+    # nothing from the features. See validate.g6_beats_heuristic_reach.
+    baseline_value = _median([ds.targets[i] for i in train_idx])
     report = validate.build_reach_report(
-        y_true, p10, p50, p90, champ_p50, strata, canary_results
+        y_true, p10, p50, p90, champ_p50, strata, canary_results,
+        [baseline_value] * len(y_true), baseline="train_median_constant",
+        within_account_spread=[ds.within_account_spread[i] for i in val_idx],
     )
     return _finish("reach", args, model, report, ds, counts, REACH_FEATURE_ORDER)
+
+
+def _median(values):
+    ordered = sorted(values)
+    if not ordered:
+        return float("nan")
+    mid = len(ordered) // 2
+    if len(ordered) % 2:
+        return float(ordered[mid])
+    return (float(ordered[mid - 1]) + float(ordered[mid])) / 2
+
+
+def _report_dropped_labels(excluded) -> None:
+    """State how many fraud labels were refused as ground truth, and why."""
+    echo = excluded.get("heuristic_echo", 0)
+    unknown = excluded.get("evidence_missing_or_unknown", 0)
+    if echo:
+        print(
+            f"[fraud] dropped {echo} label(s) whose evidence is "
+            "'none_reviewed_heuristic_only': the reviewer observed nothing the "
+            "heuristic had not already computed, so the label is the heuristic's "
+            "own output. Training on it would distil the heuristic and call it a "
+            "model. Treated as UNLABELLED."
+        )
+    if unknown:
+        print(
+            f"[fraud] dropped {unknown} label(s) with no stated evidence kind. "
+            "Absence of a stated observation is not an observation; treated as "
+            "UNLABELLED, not as a negative."
+        )
 
 
 def _fetch_canaries_safe(url, model_name, token):

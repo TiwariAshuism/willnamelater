@@ -92,6 +92,11 @@ type FraudScoreRequest struct {
 	FollowerSeries      []FollowerPoint      `json:"follower_series"`
 	Posts               []PostMetrics        `json:"posts"`
 	EngagementBenchmark *EngagementBenchmark `json:"engagement_benchmark"`
+	// AuditRef correlates the shadow prediction back to the audit that produced it.
+	// Without it a shadow row can never be joined to an OUTCOME, so the shadow gate
+	// could never become a real label-joined arbiter and every logged pair would be
+	// permanently unresolvable. The prediction log now REQUIRES it.
+	AuditRef string `json:"audit_ref,omitempty"`
 }
 
 // FraudScoreResponse mirrors app.schemas.FraudScoreResponse: an authenticity
@@ -219,13 +224,37 @@ type CommentClassification struct {
 }
 
 // CommentsClassifyResponse mirrors app.schemas.CommentsClassifyResponse.
+// The rate is NULLABLE and the counts are authoritative.
+//
+// LowQualityRatio is nil below MinSample (the ML service suppresses it): the
+// classifier is an 18-phrase English rule set with an UNMEASURED error rate that
+// systematically mislabels Hinglish, Tamil and Portuguese comment sections, so a
+// percentage over a handful of comments asserts a precision nobody has. A float64
+// here would decode that null to 0.0 — "0% low-quality comments" — which is the
+// exact fabrication the suppression exists to prevent.
+//
+// Any customer-facing rendering MUST carry the denominator (AnalyzedCount) and
+// must never extrapolate the batch to the account. And a high rate is NOT fraud:
+// fan and meme accounts earn oceans of genuine emoji. This response may not be
+// folded into any fraud signal — see RateKey and the ML-side firewall.
 type CommentsClassifyResponse struct {
 	Classifications []CommentClassification `json:"classifications"`
-	LowQualityRatio float64                 `json:"low_quality_ratio"`
-	Confidence      float64                 `json:"confidence"`
-	ModelVersion    string                  `json:"model_version"`
-	Estimate        bool                    `json:"estimate"`
-	GeneratedAt     time.Time               `json:"generated_at"`
+	LowQualityRatio *float64                `json:"low_quality_ratio"`
+	// AnalyzedCount is the denominator. LowQualityCount is its numerator.
+	AnalyzedCount    int            `json:"analyzed_count"`
+	LowQualityCount  int            `json:"low_quality_count"`
+	Counts           map[string]int `json:"counts"`
+	SufficientSample bool           `json:"sufficient_sample"`
+	MinSample        int            `json:"min_sample"`
+	Detail           string         `json:"detail"`
+	// RateKey names the quarantined signal ("generic_comment_rate_v1"). It is NOT a
+	// fraud feature and may not enter the fraud vector or the 0-100 composite until
+	// its weight has been fitted against real fraud outcomes.
+	RateKey      string    `json:"rate_key"`
+	Confidence   float64   `json:"confidence"`
+	ModelVersion string    `json:"model_version"`
+	Estimate     bool      `json:"estimate"`
+	GeneratedAt  time.Time `json:"generated_at"`
 }
 
 // errorEnvelope mirrors app.schemas.ErrorResponse: the {code, message} envelope

@@ -36,6 +36,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/admin/disputes/{id}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["ReviewDispute"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/admin/disputes/{id}/resolve": {
         parameters: {
             query?: never;
@@ -46,6 +62,22 @@ export interface paths {
         get?: never;
         put?: never;
         post: operations["ResolveDispute"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/admin/disputes/{id}/reveal-score": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["RevealHeuristicScore"];
         delete?: never;
         options?: never;
         head?: never;
@@ -816,15 +848,21 @@ export interface components {
             /** Format: date-time */
             created_at: string;
             id: string;
+            label_evidence?: string;
             raised_by?: string;
             reason: string;
             resolution?: string;
             /** Format: date-time */
             resolved_at?: string | null;
             resolved_by?: string;
+            score_shown_to_admin: boolean;
             status: string;
             /** Format: date-time */
             updated_at: string;
+        };
+        "admin.DisputeReviewResponse": {
+            dispute: components["schemas"]["admin.DisputeResponse"];
+            heuristic_score: components["schemas"]["admin.FraudFeatures"];
         };
         "admin.FileDisputeRequest": {
             reason: string;
@@ -840,6 +878,7 @@ export interface components {
         };
         "admin.LabelExportResponse": {
             count: number;
+            excluded_heuristic_only: number;
             labels: components["schemas"]["admin.TrainingLabel"][];
         };
         "admin.QueueMonitorResponse": {
@@ -861,6 +900,7 @@ export interface components {
         };
         "admin.ResolveDisputeRequest": {
             decision: string;
+            label_evidence: string;
             notes?: string;
         };
         "admin.TrainingLabel": {
@@ -869,8 +909,10 @@ export interface components {
             features: components["schemas"]["admin.FraudFeatures"];
             has_features: boolean;
             label: boolean;
+            label_evidence: string;
             /** Format: date-time */
             resolved_at: string;
+            score_shown_to_admin: boolean;
         };
         "alerts.AlertResponse": {
             comparator: string;
@@ -1113,6 +1155,7 @@ export interface components {
         };
         "mlops.CanaryItem": {
             active: boolean;
+            audit_job_id: string;
             /** Format: date-time */
             created_at: string;
             expected_label?: boolean | null;
@@ -1123,7 +1166,7 @@ export interface components {
             id: string;
             label: string;
             model_name: string;
-            source: string;
+            provenance_kind: string;
         };
         "mlops.CanaryListResponse": {
             canaries: components["schemas"]["mlops.CanaryItem"][];
@@ -1138,14 +1181,13 @@ export interface components {
             canary: components["schemas"]["mlops.CanaryItem"];
         };
         "mlops.CreateCanaryRequest": {
+            audit_job_id: string;
             expected_label: boolean | null;
             expected_reach_max: number | null;
             expected_reach_min: number | null;
-            /** Format: byte */
-            features: string;
             label: string;
             model_name: string;
-            source: string;
+            provenance_kind: string;
         };
         "mlops.FeatureRowExportResponse": {
             count: number;
@@ -1158,14 +1200,17 @@ export interface components {
             /** Format: byte */
             features: string;
             fraud_label: boolean | null;
+            fraud_label_evidence?: string;
             fraud_label_source?: string;
             influencer_id: string;
             model_version_at_capture: string;
             platform: string;
             quality_ok: boolean;
             quality_reasons: string[];
+            reach_is_organic: boolean | null;
             reach_label: number | null;
             reach_label_source?: string;
+            training_eligible: boolean;
             verification_tier: string;
         };
         "mlops.FeatureRowQuery": {
@@ -1181,7 +1226,7 @@ export interface components {
             row_count: number;
         };
         "mlops.PredictionLogRequest": {
-            audit_job_id: string | null;
+            audit_job_id: string;
             challenger_score: number | null;
             challenger_version: string | null;
             champion_score: number;
@@ -1270,7 +1315,7 @@ export interface components {
             weakness_fix_pairs: components["schemas"]["report.WeaknessFix"][];
         };
         "report.PublicBadge": {
-            authenticity: number;
+            authenticity?: number | null;
             benchmark_label?: string;
             generated_at?: string;
             handle?: string;
@@ -1298,7 +1343,7 @@ export interface components {
             status: string;
         };
         "report.ScoreBlock": {
-            authenticity: number;
+            authenticity?: number | null;
             available: boolean;
             benchmark_label?: string;
             niche?: string;
@@ -1356,7 +1401,9 @@ export interface components {
             weights_version: number;
         };
         "scoring.Subscore": {
-            confidence: number;
+            basis?: string;
+            support: number;
+            support_kind?: string;
             value: number;
         };
         "whitelabel.UpdateWhitelabelRequest": {
@@ -1422,6 +1469,28 @@ export interface operations {
             };
         };
     };
+    ReviewDispute: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["admin.DisputeReviewResponse"];
+                };
+            };
+        };
+    };
     ResolveDispute: {
         parameters: {
             query?: never;
@@ -1444,6 +1513,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["admin.DisputeResponse"];
+                };
+            };
+        };
+    };
+    RevealHeuristicScore: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["admin.DisputeReviewResponse"];
                 };
             };
         };

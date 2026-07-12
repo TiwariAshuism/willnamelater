@@ -1,0 +1,17 @@
+-- Owner: scoring module (internal/scoring).
+--
+-- A bootstrap benchmark is an industry REFERENCE BAND. Zero observations exist
+-- behind it. It was nevertheless seeded with sample_size = 10 — a nominal count
+-- nobody counted — which was then fed into confidenceForSamples(n) to produce a
+-- customer-facing "confidence" of ~0.25 for every cold-start engagement subscore.
+-- That is an invented statistic presented as a measured one.
+--
+-- The engine no longer reads sample_size for a bootstrap band (it takes a named
+-- BootstrapPriorSupport constant, emitted as a PRIOR, never as a confidence), but
+-- the fabricated count is still sitting in the column where any admin query,
+-- analytics job or future reader would take it for a real sample size. NULL is the
+-- honest value: not zero rows counted, but no counting done at all.
+--
+-- Corpus rows are untouched: their sample_size is a real count of DISTINCT
+-- INFLUENCERS and is the only sample size in this table that ever means anything.
+UPDATE benchmark SET sample_size = NULL WHERE source = 'bootstrap';

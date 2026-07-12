@@ -64,9 +64,28 @@ type FeatureCapture struct {
 	// VerificationTier is the trust tier the score carries
 	// (contract.DeriveVerificationTier): "verified" | "estimated" | "unverified".
 	VerificationTier string
-	// ReachLabel is the real reach (median reached accounts) from an Instagram
-	// Insights pull, or nil when no real figure was produced.
+	// ReachLabel is IGNORED and kept only so the composition root keeps compiling.
+	// It used to be the caller's word for the reach figure, and the service stamped
+	// "instagram_insights" on whatever integer arrived — provenance nobody had
+	// actually established. mlops now DERIVES the reach label from Snapshots itself
+	// (deriveReachLabel), so no caller can hand it a number to bless.
+	//
+	// Deprecated: unused. Delete the field, and the call site in the app adapter,
+	// once the composition root no longer sets it.
 	ReachLabel *int64
+	// ReachOrganic states whether the reach figure in Snapshots EXCLUDES
+	// ad-delivered reach. Insights `reach` on a boosted post includes the reach the
+	// account PAID for; training on it teaches the reach model that ad spend is
+	// organic virality. nil means the split is unknown, and unknown is NOT organic:
+	// mlops stores a reach label only when this is explicitly true. If the API
+	// cannot expose the split for a media type, that media must be excluded
+	// upstream — estimating the organic portion is not a third option.
+	ReachOrganic *bool
+	// PromotedMediaFraction is the fraction of the sampled media that were boosted /
+	// promoted, when the connector can observe it (nil = not observed). A
+	// promotion-heavy account's engagement features are ad-inflated, so the quality
+	// filter excludes such a row from training.
+	PromotedMediaFraction *float64
 	// CapturedAt is the audit completion time. A zero value is replaced with the
 	// module clock's now at capture.
 	CapturedAt time.Time
@@ -87,11 +106,97 @@ const (
 	LabelSourceDisputeUpheld FraudLabelSource = "dispute_upheld"
 )
 
-// ReachLabelSourceInsights is the only reach-label provenance: a real Instagram
-// Insights pull. It is stamped on reach_label_source when ReachLabel is set.
-const ReachLabelSourceInsights = "instagram_insights"
-
 // Valid reports whether s is one of the two recognised label sources.
 func (s FraudLabelSource) Valid() bool {
 	return s == LabelSourceDisputeRejected || s == LabelSourceDisputeUpheld
+}
+
+// FraudLabelEvidence is WHAT THE ADJUDICATOR ACTUALLY OBSERVED, outside the
+// heuristic's own output, when they decided a dispute.
+//
+// It exists because FraudLabelSource is NOT ground truth and cannot be made into
+// it. A dispute exists only because the heuristic flagged the account;
+// "dispute_rejected" therefore means no more than "an admin declined to overturn
+// the flag", and the review screen has always shown that admin the heuristic's own
+// risk score. A model fit on those labels learns to predict WHETHER A HUMAN AGREED
+// WITH THE HEURISTIC — it can assert nothing the heuristic did not already assert.
+// The G0-G5 gates cannot detect this: they check model-against-labels and assume
+// the labels are real.
+//
+// So the label alone may not enter a training fold. Only a label carrying an
+// OBSERVABLE evidence kind may. The observability test applies to humans exactly as
+// it does to an LLM: nobody — admin or model — can observe a follower purchase by
+// looking at a follower count.
+type FraudLabelEvidence string
+
+const (
+	// EvidencePlatformEnforcement is set when the platform itself acted (takedown, ban, removal
+	// of followers). An external authority observed the fraud.
+	EvidencePlatformEnforcement FraudLabelEvidence = "platform_enforcement_action"
+	// EvidenceCreatorAdmission is set when the creator admitted to buying engagement.
+	EvidenceCreatorAdmission FraudLabelEvidence = "creator_admission"
+	// EvidencePurchaseReceipt is set when a receipt or engagement-panel invoice was produced.
+	EvidencePurchaseReceipt FraudLabelEvidence = "purchase_receipt_or_panel_invoice"
+	// EvidenceBrandConversionData is set when a brand's own campaign conversion data contradicts
+	// the claimed audience.
+	EvidenceBrandConversionData FraudLabelEvidence = "brand_campaign_conversion_data"
+	// EvidenceManualFollowerAudit is set when a human sampled the actual follower list and
+	// examined the accounts — the one manual method that observes the thing itself.
+	EvidenceManualFollowerAudit FraudLabelEvidence = "manual_follower_sample_audit"
+	// EvidenceHeuristicOnly is set when the admin reviewed the flag and agreed, observing
+	// nothing the heuristic had not already computed.
+	//
+	// This is the HONEST, first-class answer for the common case, and it is why the
+	// enum exists. The dispute outcome is real and the customer is owed it, so the
+	// row is kept — but it is a heuristic echo, and it may NEVER become y.
+	EvidenceHeuristicOnly FraudLabelEvidence = "none_reviewed_heuristic_only"
+)
+
+// Valid reports whether e is a recognised evidence kind.
+func (e FraudLabelEvidence) Valid() bool {
+	switch e {
+	case EvidencePlatformEnforcement, EvidenceCreatorAdmission, EvidencePurchaseReceipt,
+		EvidenceBrandConversionData, EvidenceManualFollowerAudit, EvidenceHeuristicOnly:
+		return true
+	}
+	return false
+}
+
+// Observable reports whether the evidence rests on something someone actually SAW,
+// outside the heuristic's own output — and therefore whether a label carrying it
+// may enter a training fold.
+//
+// EvidenceHeuristicOnly is the sole false case, and deliberately so: it is a real
+// admin decision but contains no observation, so training on it would close the
+// loop between the model and its own opinion. An unknown/empty evidence is also
+// false — absence of a stated observation is not an observation.
+func (e FraudLabelEvidence) Observable() bool {
+	return e.Valid() && e != EvidenceHeuristicOnly
+}
+
+// ReachLabelSource records how a reach_label was MEASURED. It is derived from the
+// snapshot that produced the figure (connector.Snapshot.Source) — never from the
+// caller's assertion — because the column is only worth storing if it is evidence.
+type ReachLabelSource string
+
+// ReachSourceInstagramGraph is the only provenance a reach label may claim: a live
+// Meta/Instagram Graph Insights pull. A creator-uploaded CSV export is a
+// self-reported number nobody measured, and a provider read has no reach at all,
+// so neither can produce a reach label.
+const ReachSourceInstagramGraph ReachLabelSource = "instagram_graph_insights"
+
+// Valid reports whether s is a recognised reach-label source, mirroring
+// FraudLabelSource.Valid.
+func (s ReachLabelSource) Valid() bool {
+	return s == ReachSourceInstagramGraph
+}
+
+// ReachSourceFor maps a snapshot's data path onto the reach provenance it may
+// claim. ok is false for every path that cannot MEASURE reach (CSV upload,
+// provider, YouTube), and a snapshot from such a path never yields a reach label.
+func ReachSourceFor(ds connector.DataSource) (ReachLabelSource, bool) {
+	if ds == connector.SourceInstagramGraph {
+		return ReachSourceInstagramGraph, true
+	}
+	return "", false
 }

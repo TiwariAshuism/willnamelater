@@ -12,25 +12,61 @@ type FileDisputeRequest struct {
 // ResolveDisputeRequest is the POST /admin/disputes/:id/resolve body. Decision
 // is the admin's ruling (upheld or rejected); Notes is an optional free-text
 // justification stored alongside the derived resolution.
+//
+// LabelEvidence is REQUIRED and is the point of the endpoint: it states what the
+// adjudicator observed outside the heuristic's own output. Free text cannot gate
+// a training fold, so it is a closed set (see port.LabelEvidence), validated in
+// the service. It carries no binding:"required" tag deliberately — an omitted
+// evidence must come back as admin.invalid_label_evidence naming the accepted
+// kinds, not as a generic "request body is malformed".
+//
+// The dispute's score_shown_to_admin is NOT in this body and never will be: a
+// client cannot be trusted to report whether the adjudicator saw the score. It
+// is recorded server-side by the reveal endpoint.
 type ResolveDisputeRequest struct {
-	Decision string `json:"decision" binding:"required"`
-	Notes    string `json:"notes,omitempty"`
+	Decision      string `json:"decision" binding:"required"`
+	Notes         string `json:"notes,omitempty"`
+	LabelEvidence string `json:"label_evidence"`
 }
 
-// DisputeResponse is the dispute projection returned by the file, queue, and
-// resolve routes. The nil-able actor and timestamp fields are omitted when unset
-// so a client never sees an all-zero uuid or time.
+// DisputeResponse is the dispute projection returned by the file, queue, resolve,
+// review, and reveal routes. The nil-able actor and timestamp fields are omitted
+// when unset so a client never sees an all-zero uuid or time.
+//
+// It deliberately carries NO heuristic score: the review screen is evidence-blind
+// by default, and the score reaches an adjudicator only through the explicit,
+// recorded reveal (DisputeReviewResponse.HeuristicScore).
 type DisputeResponse struct {
-	ID         string     `json:"id"`
-	AuditJobID string     `json:"audit_job_id"`
-	RaisedBy   string     `json:"raised_by,omitempty"`
-	Reason     string     `json:"reason"`
-	Status     string     `json:"status"`
-	Resolution string     `json:"resolution,omitempty"`
-	ResolvedBy string     `json:"resolved_by,omitempty"`
-	ResolvedAt *time.Time `json:"resolved_at,omitempty"`
-	CreatedAt  time.Time  `json:"created_at"`
-	UpdatedAt  time.Time  `json:"updated_at"`
+	ID                string     `json:"id"`
+	AuditJobID        string     `json:"audit_job_id"`
+	RaisedBy          string     `json:"raised_by,omitempty"`
+	Reason            string     `json:"reason"`
+	Status            string     `json:"status"`
+	Resolution        string     `json:"resolution,omitempty"`
+	ResolvedBy        string     `json:"resolved_by,omitempty"`
+	ResolvedAt        *time.Time `json:"resolved_at,omitempty"`
+	LabelEvidence     string     `json:"label_evidence,omitempty"`
+	ScoreShownToAdmin bool       `json:"score_shown_to_admin"`
+	CreatedAt         time.Time  `json:"created_at"`
+	UpdatedAt         time.Time  `json:"updated_at"`
+}
+
+// DisputeReviewResponse is the adjudicator's view of one dispute: GET
+// /admin/disputes/:id, and the reply to the reveal.
+//
+// HeuristicScore is nil unless the score has been explicitly revealed for this
+// dispute. That is the whole design: an adjudicator who is shown the heuristic's
+// own risk score and then asked whether the heuristic was right is not producing
+// a label, they are ratifying one — and the model trained on that learns only
+// that humans agree with it. The default read hides the score; POST
+// /admin/disputes/:id/reveal-score discloses it and stamps the disclosure on the
+// row, so the circularity of any given label is auditable afterwards.
+type DisputeReviewResponse struct {
+	Dispute DisputeResponse `json:"dispute"`
+	// HeuristicScore is the composite score and its flags — the heuristic's own
+	// output. Present only after an explicit reveal; null on a blind read, and null
+	// when the disputed audit produced no fraud estimate at all.
+	HeuristicScore *FraudFeatures `json:"heuristic_score"`
 }
 
 // CostDashboardResponse is the API-cost dashboard: the aggregate of every LLM
@@ -100,25 +136,46 @@ type FraudFeatures struct {
 }
 
 // TrainingLabel is one labelled example the dispute-review loop produces for the
-// supervised fraud model. Label is the ground-truth target — true when the
-// account was confirmed fraudulent/coordinated (dispute rejected), false when
-// confirmed legitimate (dispute upheld). HasFeatures is false when the disputed
-// audit never produced a stored fraud estimate; the example then carries a label
-// with no features rather than a fabricated all-zero vector, and the trainer
-// decides whether to keep it.
+// supervised fraud model. Label is the target — true when the account was
+// confirmed fraudulent/coordinated (dispute rejected), false when confirmed
+// legitimate (dispute upheld). HasFeatures is false when the disputed audit never
+// produced a stored fraud estimate; the example then carries a label with no
+// features rather than a fabricated all-zero vector, and the trainer decides
+// whether to keep it.
+//
+// Label is a target only because LabelEvidence rides with it. Every exported row
+// carries an OBSERVABLE evidence kind — the export drops the heuristic-only ones
+// — and the trainer filters its folds on this field: a label resting on a
+// platform enforcement action is a different animal from one resting on a manual
+// follower sample, and neither may be pooled blindly.
 type TrainingLabel struct {
-	DisputeID   string        `json:"dispute_id"`
-	AuditJobID  string        `json:"audit_job_id"`
-	Label       bool          `json:"label"`
-	HasFeatures bool          `json:"has_features"`
-	Features    FraudFeatures `json:"features"`
-	ResolvedAt  time.Time     `json:"resolved_at"`
+	DisputeID  string `json:"dispute_id"`
+	AuditJobID string `json:"audit_job_id"`
+	Label      bool   `json:"label"`
+	// LabelEvidence is what the adjudicator observed outside the heuristic's own
+	// output. Never "none_reviewed_heuristic_only" here: those rows are not exported.
+	LabelEvidence string `json:"label_evidence"`
+	// ScoreShownToAdmin says whether the adjudicator could see the heuristic's own
+	// score while deciding. It is exported so the trainer can stratify on it, and so
+	// an auditor can tell a blind adjudication from a ratified one.
+	ScoreShownToAdmin bool          `json:"score_shown_to_admin"`
+	HasFeatures       bool          `json:"has_features"`
+	Features          FraudFeatures `json:"features"`
+	ResolvedAt        time.Time     `json:"resolved_at"`
 }
 
 // LabelExportResponse is the GET /admin/training/labels payload: every decided
-// dispute as a labelled training example, in a shape services/ml/training reads
-// directly. Count is the number of examples.
+// dispute WHOSE EVIDENCE IS OBSERVABLE, as a labelled training example, in a
+// shape services/ml/training reads directly. Count is the number of examples.
+//
+// Disputes decided on the heuristic alone (none_reviewed_heuristic_only) are
+// excluded. They stay in the database — the outcome is a real decision and the
+// customer is owed it — but they are echoes of the model's own opinion, not
+// observations, and a model fit on them can learn nothing the heuristic does not
+// already assert. Excluded is the number dropped, so a caller can see the gap
+// rather than mistake a filtered export for the whole population.
 type LabelExportResponse struct {
-	Count  int             `json:"count"`
-	Labels []TrainingLabel `json:"labels"`
+	Count    int             `json:"count"`
+	Excluded int             `json:"excluded_heuristic_only"`
+	Labels   []TrainingLabel `json:"labels"`
 }

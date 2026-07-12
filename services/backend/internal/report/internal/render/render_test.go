@@ -20,7 +20,7 @@ func fullReport() Report {
 		Score: ScoreBlock{
 			Available:      true,
 			Overall:        82.4,
-			Authenticity:   74.1,
+			Authenticity:   ptrF(74.1),
 			Niche:          "beauty",
 			Tier:           "micro",
 			BenchmarkLabel: "industry-bootstrap v1",
@@ -196,3 +196,7 @@ func TestFormatOne(t *testing.T) {
 		}
 	}
 }
+
+// ptrF supplies a real pointer: Authenticity is nil when the dimension rested on
+// no measurement, so a test asserting a value must say so explicitly.
+func ptrF(v float64) *float64 { return &v }

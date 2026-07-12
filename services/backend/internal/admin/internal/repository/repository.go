@@ -18,9 +18,12 @@ import (
 
 // disputeColumns is the dispute projection every read shares. uuid columns are
 // cast to text so they scan into strings; the nullable actor columns scan into
-// *string and the resolved timestamp into *time.Time.
+// *string and the resolved timestamp into *time.Time. label_evidence is nullable
+// (an undecided dispute has observed nothing yet) and scans into *string;
+// score_shown_to_admin is NOT NULL with a false default (migration 000027).
 const disputeColumns = "id::text, audit_job_id::text, raised_by::text, reason, " +
-	"status, resolution, resolved_by::text, resolved_at, created_at, updated_at"
+	"status, resolution, resolved_by::text, resolved_at, label_evidence, " +
+	"score_shown_to_admin, created_at, updated_at"
 
 // rowScanner is the read surface shared by pgx.Row and pgx.Rows, letting one
 // scan helper serve both single-row and multi-row queries.
@@ -78,32 +81,82 @@ func (r *PostgresRepository) ListDecidedDisputes(ctx context.Context) ([]model.D
 	return r.queryDisputes(ctx, q)
 }
 
-// ResolveDispute records an admin's decision on an open dispute. The update is
-// guarded by status = 'open' so a second resolve of the same dispute changes
-// nothing; when no row is updated the dispute is disambiguated into a not-found
-// or an already-resolved conflict rather than a silent no-op.
+// DisputeByID loads one dispute. It backs the adjudicator's review read, which
+// is evidence-blind: the row carries no heuristic score, and score_shown_to_admin
+// tells the service whether one has ever been disclosed for this dispute.
+func (r *PostgresRepository) DisputeByID(ctx context.Context, id uuid.UUID) (model.Dispute, error) {
+	const q = "SELECT " + disputeColumns + " FROM dispute WHERE id = $1"
+
+	d, err := scanDispute(r.pool.QueryRow(ctx, q, id))
+	if err != nil {
+		if notFound(err) {
+			return model.Dispute{}, errDisputeNotFound()
+		}
+		return model.Dispute{}, errs.Wrap(err, errs.KindInternal, "admin.dispute_read_failed", "could not read dispute")
+	}
+	return d, nil
+}
+
+// MarkScoreShown records that the heuristic's composite score and flags were
+// disclosed to the adjudicator. It is the only writer of score_shown_to_admin —
+// no client can set the column, because a client's word on whether a human looked
+// at the score is worth nothing.
+//
+// The update is guarded by an undecided status: the flag is a fact ABOUT a
+// decision, so stamping it onto a dispute already decided would rewrite the
+// provenance of a label after the fact. A reveal against a decided dispute is a
+// conflict, disambiguated from a missing one exactly as ResolveDispute does.
+func (r *PostgresRepository) MarkScoreShown(ctx context.Context, id uuid.UUID) (model.Dispute, error) {
+	const q = "UPDATE dispute SET score_shown_to_admin = true " +
+		"WHERE id = $1 AND status IN ('open', 'under_review') RETURNING " + disputeColumns
+
+	d, err := scanDispute(r.pool.QueryRow(ctx, q, id))
+	if err == nil {
+		return d, nil
+	}
+	if !notFound(err) {
+		return model.Dispute{}, errs.Wrap(err, errs.KindInternal, "admin.dispute_reveal_failed", "could not record score disclosure")
+	}
+	return model.Dispute{}, r.disambiguateNoOpenRow(ctx, id)
+}
+
+// ResolveDispute records an admin's decision on an open dispute, together with
+// the evidence that decision actually rests on. The update is guarded by
+// status = 'open' so a second resolve of the same dispute changes nothing; when
+// no row is updated the dispute is disambiguated into a not-found or an
+// already-resolved conflict rather than a silent no-op.
+//
+// label_evidence is never NULL here: the service rejects a resolve that states no
+// observation, and the CHECK constraint dispute_decided_has_evidence is the
+// backstop.
 func (r *PostgresRepository) ResolveDispute(ctx context.Context, params model.ResolveDisputeParams) (model.Dispute, error) {
-	const q = "UPDATE dispute SET status = $2, resolution = $3, resolved_by = $4, resolved_at = now() " +
+	const q = "UPDATE dispute SET status = $2, resolution = $3, resolved_by = $4, " +
+		"resolved_at = now(), label_evidence = $5 " +
 		"WHERE id = $1 AND status = 'open' RETURNING " + disputeColumns
 
-	d, err := scanDispute(r.pool.QueryRow(ctx, q, params.ID, string(params.Status), nullString(params.Resolution), params.ResolvedBy))
+	d, err := scanDispute(r.pool.QueryRow(ctx, q, params.ID, string(params.Status),
+		nullString(params.Resolution), params.ResolvedBy, string(params.LabelEvidence)))
 	if err == nil {
 		return d, nil
 	}
 	if !notFound(err) {
 		return model.Dispute{}, errs.Wrap(err, errs.KindInternal, "admin.dispute_resolve_failed", "could not resolve dispute")
 	}
+	return model.Dispute{}, r.disambiguateNoOpenRow(ctx, params.ID)
+}
 
-	// No open row was updated: tell a missing dispute apart from one already
-	// decided so the caller gets a 404 or a 409 rather than a bare 500.
-	exists, existErr := r.disputeExists(ctx, params.ID)
-	if existErr != nil {
-		return model.Dispute{}, existErr
+// disambiguateNoOpenRow explains an UPDATE ... WHERE status = open that matched
+// nothing: tell a missing dispute apart from one already decided so the caller
+// gets a 404 or a 409 rather than a bare 500.
+func (r *PostgresRepository) disambiguateNoOpenRow(ctx context.Context, id uuid.UUID) error {
+	exists, err := r.disputeExists(ctx, id)
+	if err != nil {
+		return err
 	}
 	if !exists {
-		return model.Dispute{}, errDisputeNotFound()
+		return errDisputeNotFound()
 	}
-	return model.Dispute{}, errAlreadyResolved()
+	return errAlreadyResolved()
 }
 
 // disputeExists reports whether a dispute row with id is present.
@@ -142,23 +195,28 @@ func (r *PostgresRepository) queryDisputes(ctx context.Context, q string) ([]mod
 // scanDispute reads one dispute row into a domain Dispute. The nullable actor
 // columns become uuid.Nil when SQL NULL (an account deleted, or an unresolved
 // dispute's resolver), so the domain type never carries a bogus zero uuid it
-// cannot distinguish from absence.
+// cannot distinguish from absence. A NULL label_evidence — an undecided dispute,
+// which has observed nothing yet — becomes the empty LabelEvidence, which is not
+// a valid kind and therefore never passes the export's observability filter.
 func scanDispute(row rowScanner) (model.Dispute, error) {
 	var (
-		id         string
-		auditJobID string
-		raisedBy   *string
-		reason     string
-		status     string
-		resolution *string
-		resolvedBy *string
-		resolvedAt *time.Time
-		createdAt  time.Time
-		updatedAt  time.Time
+		id            string
+		auditJobID    string
+		raisedBy      *string
+		reason        string
+		status        string
+		resolution    *string
+		resolvedBy    *string
+		resolvedAt    *time.Time
+		labelEvidence *string
+		scoreShown    bool
+		createdAt     time.Time
+		updatedAt     time.Time
 	)
 
 	if err := row.Scan(&id, &auditJobID, &raisedBy, &reason, &status,
-		&resolution, &resolvedBy, &resolvedAt, &createdAt, &updatedAt); err != nil {
+		&resolution, &resolvedBy, &resolvedAt, &labelEvidence, &scoreShown,
+		&createdAt, &updatedAt); err != nil {
 		return model.Dispute{}, err
 	}
 
@@ -180,16 +238,18 @@ func scanDispute(row rowScanner) (model.Dispute, error) {
 	}
 
 	return model.Dispute{
-		ID:         disputeID,
-		AuditJobID: auditUUID,
-		RaisedBy:   raisedUUID,
-		Reason:     reason,
-		Status:     model.Status(status),
-		Resolution: deref(resolution),
-		ResolvedBy: resolvedUUID,
-		ResolvedAt: resolvedAt,
-		CreatedAt:  createdAt,
-		UpdatedAt:  updatedAt,
+		ID:                disputeID,
+		AuditJobID:        auditUUID,
+		RaisedBy:          raisedUUID,
+		Reason:            reason,
+		Status:            model.Status(status),
+		Resolution:        deref(resolution),
+		ResolvedBy:        resolvedUUID,
+		ResolvedAt:        resolvedAt,
+		LabelEvidence:     model.LabelEvidence(deref(labelEvidence)),
+		ScoreShownToAdmin: scoreShown,
+		CreatedAt:         createdAt,
+		UpdatedAt:         updatedAt,
 	}, nil
 }
 

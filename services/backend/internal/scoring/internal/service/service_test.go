@@ -30,7 +30,7 @@ type fakeRepo struct {
 
 	seededWeights    int
 	seededBenchmarks int
-	corpusCells      []repository.CorpusCell
+	observations     []engine.CorpusObservation
 	published        []publishCall
 }
 
@@ -81,8 +81,8 @@ func (f *fakeRepo) InsertBenchmarkIfAbsent(_ context.Context, _, _ string, _ eng
 	return nil
 }
 
-func (f *fakeRepo) CorpusCells(_ context.Context, _ int) ([]repository.CorpusCell, error) {
-	return f.corpusCells, nil
+func (f *fakeRepo) CorpusObservations(_ context.Context) ([]engine.CorpusObservation, error) {
+	return f.observations, nil
 }
 
 func (f *fakeRepo) PublishCorpusBenchmark(_ context.Context, niche, tier string, b engine.Benchmark) error {
@@ -254,16 +254,33 @@ func TestEnsureBootstrapSeedsEveryTier(t *testing.T) {
 	}
 }
 
-// TestRecomputeCorpusPublishesReadyCells confirms only cells at/above the sample
-// threshold are republished as corpus benchmarks.
+// observationsFor builds n verified observations for n DISTINCT influencers in one
+// cell, with spread-out engagement rates.
+func observationsFor(niche, tier string, n int) []engine.CorpusObservation {
+	out := make([]engine.CorpusObservation, 0, n)
+	for i := 0; i < n; i++ {
+		out = append(out, engine.CorpusObservation{
+			InfluencerID:     uuid.New(),
+			Niche:            niche,
+			Tier:             tier,
+			EngagementRate:   0.01 + float64(i)*0.001,
+			VerificationTier: contract.VerificationVerified,
+		})
+	}
+	return out
+}
+
+// TestRecomputeCorpusPublishesReadyCells confirms a cell backed by enough DISTINCT
+// influencers is republished, and that the published sample size is that count of
+// people — the only number a corpus benchmark's confidence may be derived from.
 func TestRecomputeCorpusPublishesReadyCells(t *testing.T) {
 	t.Parallel()
 
 	repo := bootstrapRepo()
-	repo.corpusCells = []repository.CorpusCell{
-		{Niche: "beauty", Tier: "micro", SampleSize: 42, P10: 0.01, P25: 0.02, P50: 0.03, P75: 0.05, P90: 0.08, Mean: 0.035},
-		{Niche: "gaming", Tier: "mid", SampleSize: 31, P50: 0.02},
-	}
+	repo.observations = append(
+		observationsFor("beauty", "micro", corpusMinDistinctInfluencers),
+		observationsFor("gaming", "mid", corpusMinDistinctInfluencers+5)...,
+	)
 	svc := New(repo, nil)
 
 	n, err := svc.RecomputeCorpus(context.Background())
@@ -273,8 +290,70 @@ func TestRecomputeCorpusPublishesReadyCells(t *testing.T) {
 	if n != 2 || len(repo.published) != 2 {
 		t.Fatalf("published %d cells, want 2", n)
 	}
-	if repo.published[0].bench.Source != "corpus" || repo.published[0].bench.Metric != engine.MetricEngagementRate {
-		t.Fatalf("published benchmark not a corpus engagement_rate: %+v", repo.published[0].bench)
+	got := repo.published[0].bench
+	if got.Source != engine.SourceCorpus || got.Metric != engine.MetricEngagementRate {
+		t.Fatalf("published benchmark not a corpus engagement_rate: %+v", got)
+	}
+	if got.SampleSize != corpusMinDistinctInfluencers {
+		t.Fatalf("sample size = %d, want %d distinct influencers", got.SampleSize, corpusMinDistinctInfluencers)
+	}
+}
+
+// TestRecomputeCorpusIgnoresRepeatAuditsOfTheSameInfluencer is the headline
+// guarantee of defect B: 30 audits spread over 3 influencers is 3 samples, not 30,
+// and PUBLISHES NOTHING.
+//
+// The old aggregation was a count(*) over the score table with no DISTINCT, so
+// thirty re-audits of one creator crossed the threshold and published a
+// source='corpus' benchmark of "sample size 30" — a reference band built from one
+// person, which every other creator was then percentiled against. Below the
+// distinct-influencer threshold the bootstrap band stands and we say we do not have
+// the data yet, which is the true answer.
+func TestRecomputeCorpusIgnoresRepeatAuditsOfTheSameInfluencer(t *testing.T) {
+	t.Parallel()
+
+	repo := bootstrapRepo()
+	people := []uuid.UUID{uuid.New(), uuid.New(), uuid.New()}
+	for i := 0; i < 30; i++ {
+		repo.observations = append(repo.observations, engine.CorpusObservation{
+			InfluencerID:     people[i%len(people)],
+			Niche:            "beauty",
+			Tier:             "micro",
+			EngagementRate:   0.02 + float64(i)*0.0001,
+			VerificationTier: contract.VerificationVerified,
+		})
+	}
+	svc := New(repo, nil)
+
+	n, err := svc.RecomputeCorpus(context.Background())
+	if err != nil {
+		t.Fatalf("recompute: %v", err)
+	}
+	if n != 0 || len(repo.published) != 0 {
+		t.Fatalf("published %d cells from 30 audits of 3 people — a corpus of 3 is not a corpus of 30", n)
+	}
+}
+
+// TestRecomputeCorpusExcludesUploadedProvenance pins the provenance rule: a score
+// whose data came from a CSV/upload (verification tier "estimated") never enters a
+// benchmark other creators are percentiled against. Otherwise a creator could move
+// the band they are judged against by uploading numbers of their own choosing.
+func TestRecomputeCorpusExcludesUploadedProvenance(t *testing.T) {
+	t.Parallel()
+
+	repo := bootstrapRepo()
+	repo.observations = observationsFor("beauty", "micro", corpusMinDistinctInfluencers+10)
+	for i := range repo.observations {
+		repo.observations[i].VerificationTier = contract.VerificationEstimated
+	}
+	svc := New(repo, nil)
+
+	n, err := svc.RecomputeCorpus(context.Background())
+	if err != nil {
+		t.Fatalf("recompute: %v", err)
+	}
+	if n != 0 || len(repo.published) != 0 {
+		t.Fatalf("published %d cells from upload-sourced scores — user-supplied numbers must not become a benchmark", n)
 	}
 }
 
@@ -309,7 +388,9 @@ func TestGetLatestScoreMapsRow(t *testing.T) {
 			Tier:              "micro",
 			OverallConfidence: 0.4,
 			BenchmarkLabel:    engine.BootstrapLabel,
-			Subscores:         map[string]contract.Subscore{contract.ComponentReach: {Value: 60, Confidence: 1}},
+			Subscores: map[string]contract.Subscore{contract.ComponentReach: {
+				Value: 60, Basis: contract.BasisClosedForm, Support: 0.5, SupportKind: contract.SupportPrior,
+			}},
 		},
 	}
 	svc := New(repo, nil)

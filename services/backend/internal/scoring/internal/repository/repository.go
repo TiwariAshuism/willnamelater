@@ -14,24 +14,6 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/scoring/internal/model"
 )
 
-// CorpusCell is one (niche, tier) engagement-rate distribution aggregated from
-// persisted scores: the percentiles and summary statistics of the observed
-// engagement rates, plus the sample size behind them. Corpus recomputation turns
-// a cell whose SampleSize has reached the threshold into a source='corpus'
-// benchmark.
-type CorpusCell struct {
-	Niche      string
-	Tier       string
-	SampleSize int
-	P10        float64
-	P25        float64
-	P50        float64
-	P75        float64
-	P90        float64
-	Mean       float64
-	Stddev     float64
-}
-
 // Repository is the scoring module's persistence contract.
 type Repository interface {
 	// ActiveWeights returns the active weight set for a (niche, tier) cell. The
@@ -64,9 +46,13 @@ type Repository interface {
 	// exists.
 	InsertBenchmarkIfAbsent(ctx context.Context, niche, tier string, b engine.Benchmark, active bool) error
 
-	// CorpusCells aggregates persisted scores into per-(niche, tier)
-	// engagement-rate distributions whose sample size is at least minSamples.
-	CorpusCells(ctx context.Context, minSamples int) ([]CorpusCell, error)
+	// CorpusObservations returns the reference population one row per DISTINCT
+	// INFLUENCER (the newest score each has), restricted to scores whose data came
+	// from a live, authenticated API pull. Aggregation into cells is the engine's
+	// job (engine.CorpusCells), which de-duplicates again and enforces the same
+	// provenance rule — the guarantee is too important to live only in SQL that no
+	// unit test executes.
+	CorpusObservations(ctx context.Context) ([]engine.CorpusObservation, error)
 
 	// PublishCorpusBenchmark inserts a new benchmark version for a cell and makes
 	// it the active one, deactivating the previous active row, in a single

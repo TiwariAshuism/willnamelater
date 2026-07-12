@@ -51,6 +51,24 @@ const (
 	LabelSourceDisputeUpheld   = contract.LabelSourceDisputeUpheld
 )
 
+// FraudLabelEvidence is what the dispute adjudicator actually OBSERVED, outside
+// the heuristic's own output. Only a label carrying an observable evidence kind
+// may enter a training fold — a bare "an admin agreed with the flag" is the
+// heuristic agreeing with itself through a human.
+type FraudLabelEvidence = contract.FraudLabelEvidence
+
+// The evidence kinds, re-exported so the composition root maps an admin decision
+// onto one without importing the contract leaf. EvidenceHeuristicOnly is the
+// honest answer for the common case, and is deliberately NOT trainable.
+const (
+	EvidencePlatformEnforcement = contract.EvidencePlatformEnforcement
+	EvidenceCreatorAdmission    = contract.EvidenceCreatorAdmission
+	EvidencePurchaseReceipt     = contract.EvidencePurchaseReceipt
+	EvidenceBrandConversionData = contract.EvidenceBrandConversionData
+	EvidenceManualFollowerAudit = contract.EvidenceManualFollowerAudit
+	EvidenceHeuristicOnly       = contract.EvidenceHeuristicOnly
+)
+
 // Module is the wired mlops module. Construct it with New, mount it with
 // RegisterAdminRoutes / RegisterServiceRoutes, and drive its in-process seams
 // with RecordFeatureRow / SetFraudLabel.
@@ -98,6 +116,6 @@ func (m *Module) RecordFeatureRow(ctx context.Context, capture FeatureCapture) e
 // composition root adapts it onto an admin TrainingLabelSink port and calls it
 // after ResolveDispute records a decision; the call is non-fatal to the dispute
 // resolution.
-func (m *Module) SetFraudLabel(ctx context.Context, auditJobID uuid.UUID, label bool, source FraudLabelSource) error {
-	return m.svc.SetFraudLabel(ctx, auditJobID, label, source)
+func (m *Module) SetFraudLabel(ctx context.Context, auditJobID uuid.UUID, label bool, source FraudLabelSource, evidence FraudLabelEvidence) error {
+	return m.svc.SetFraudLabel(ctx, auditJobID, label, source, evidence)
 }

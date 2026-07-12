@@ -63,7 +63,10 @@ type ReportInput struct {
 	// InfluenceScore and Authenticity are the composite outputs of the scoring
 	// engine, on a 0..100 scale.
 	InfluenceScore float64
-	Authenticity   float64
+	// Authenticity is nil when the subscore rests on no measurement. The narrative
+	// prompt must not be handed a neutral 50 as though it were a finding — the LLM
+	// would write prose around an invented number.
+	Authenticity *float64
 	// Subscores is the per-dimension breakdown behind InfluenceScore, each with
 	// its own confidence.
 	Subscores []Subscore

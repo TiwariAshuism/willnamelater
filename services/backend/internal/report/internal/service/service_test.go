@@ -157,6 +157,10 @@ func (f *fakeStorage) ShareURL(key string, _ time.Duration) (string, error) {
 func f64p(v float64) *float64 { return &v }
 func intp(v int) *int         { return &v }
 
+// ptr supplies a real pointer: Authenticity is nil when the dimension rested on no
+// measurement, so a test asserting a value must say so explicitly.
+func ptr[T any](v T) *T { return &v }
+
 func infID() uuid.UUID { return uuid.MustParse("11111111-1111-1111-1111-111111111111") }
 func audID() uuid.UUID { return uuid.MustParse("22222222-2222-2222-2222-222222222222") }
 
@@ -194,7 +198,7 @@ func fullView() port.AuditView {
 func TestAssembleFoldsAllSources(t *testing.T) {
 	svc := newSvc(
 		fakeAudit{view: fullView()},
-		fakeScore{view: port.ScoreView{Present: true, Overall: 82, Authenticity: 74, Niche: "beauty",
+		fakeScore{view: port.ScoreView{Present: true, Overall: 82, Authenticity: ptr(74.0), Niche: "beauty",
 			Subscores: []port.Subscore{{Name: "reach", Value: 80, Confidence: 0.6}}}},
 		fakeNarrative{view: port.Narrative{Present: true, Summary: "s", GrowthTips: []string{"t"},
 			WeaknessFixPairs: []port.WeaknessFix{{Weakness: "w", Fix: "f"}}}},
@@ -347,7 +351,7 @@ func TestPublishStoresPDFAndPersistsBadge(t *testing.T) {
 	store := &fakeStorage{}
 	svc := New(
 		fakeAudit{view: fullView()},
-		fakeScore{view: port.ScoreView{Present: true, Overall: 82, Authenticity: 74, Niche: "beauty", Tier: "micro", BenchmarkLabel: "industry-bootstrap v1"}},
+		fakeScore{view: port.ScoreView{Present: true, Overall: 82, Authenticity: ptr(74.0), Niche: "beauty", Tier: "micro", BenchmarkLabel: "industry-bootstrap v1"}},
 		fakeNarrative{view: port.Narrative{Present: true, Summary: "s"}},
 		fakeFraud{},
 		&fakePDF{out: []byte("%PDF-1.4 body")},
@@ -393,7 +397,7 @@ func TestPublishRejectsScorelessAudit(t *testing.T) {
 func TestPublicBadgeReturnsSnapshotAndShareLink(t *testing.T) {
 	repo := &fakeRepo{found: true, get: PublishedReport{
 		StorageKey: "reports/x.pdf",
-		Badge:      BadgeSnapshot{Overall: 90, Authenticity: 80, Niche: "fitness", Tier: "mid"},
+		Badge:      BadgeSnapshot{Overall: 90, Authenticity: ptr(80.0), Niche: "fitness", Tier: "mid"},
 	}}
 	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, repo,
 		&fakeStorage{shareURL: "https://s3/x?signed"}, fakeCaller{id: ownerID()}, ownedByCreator())

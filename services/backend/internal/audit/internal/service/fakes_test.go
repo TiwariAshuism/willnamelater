@@ -330,7 +330,7 @@ type fakeFraud struct {
 	err     error
 }
 
-func (f *fakeFraud) ScoreFraud(context.Context, []connector.Snapshot) (port.FraudSummary, error) {
+func (f *fakeFraud) ScoreFraud(context.Context, uuid.UUID, []connector.Snapshot) (port.FraudSummary, error) {
 	f.calls++
 	if f.err != nil {
 		return port.FraudSummary{}, f.err

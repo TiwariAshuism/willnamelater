@@ -3,7 +3,7 @@
 import base64
 
 from training import promotion
-from training.gate import MIN_REACH_ROWS, meets_reach_floor
+from training.gate import MIN_REACH_INFLUENCERS, meets_reach_floor
 
 
 def test_snapshot_hash_is_deterministic_and_order_sensitive():
@@ -41,7 +41,13 @@ def test_register_payload_shape_matches_contract():
 
 
 def test_reach_floor_gate():
-    assert meets_reach_floor(MIN_REACH_ROWS)[0] is True
-    ok, counts = meets_reach_floor(MIN_REACH_ROWS - 1)
+    # The floor is taken over DISTINCT INFLUENCERS, not rows (see
+    # test_training_gate.py for the 200-rows-from-20-creators regression guard).
+    enough = [f"inf{i}" for i in range(MIN_REACH_INFLUENCERS)]
+    assert meets_reach_floor(len(enough), enough)[0] is True
+
+    one_short = enough[:-1]
+    ok, counts = meets_reach_floor(len(one_short), one_short)
     assert ok is False
-    assert counts == {"rows": MIN_REACH_ROWS - 1, "floor": MIN_REACH_ROWS}
+    assert counts["distinct_influencers"] == MIN_REACH_INFLUENCERS - 1
+    assert counts["floor"] == MIN_REACH_INFLUENCERS

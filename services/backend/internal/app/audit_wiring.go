@@ -92,7 +92,7 @@ func (a auditScorer) Score(ctx context.Context, auditJobID, influencerID uuid.UU
 // pass as advisory.
 type auditFraud struct{ c *ml.Client }
 
-func (a auditFraud) ScoreFraud(ctx context.Context, snapshots []connector.Snapshot) (port.FraudSummary, error) {
+func (a auditFraud) ScoreFraud(ctx context.Context, auditJobID uuid.UUID, snapshots []connector.Snapshot) (port.FraudSummary, error) {
 	var (
 		out       port.FraudSummary
 		confs     []float64
@@ -101,7 +101,7 @@ func (a auditFraud) ScoreFraud(ctx context.Context, snapshots []connector.Snapsh
 	)
 
 	for _, snap := range snapshots {
-		if fr, err := a.c.ScoreFraud(ctx, ml.BuildFraudRequest(snap)); err == nil && fr.Observed && fr.Score != nil {
+		if fr, err := a.c.ScoreFraud(ctx, ml.BuildFraudRequest(auditJobID.String(), snap)); err == nil && fr.Observed && fr.Score != nil {
 			anySignal = true
 			// The ml service's composite per-account risk estimate, carried through
 			// as what it is. It was previously assigned to a field called
@@ -149,8 +149,14 @@ func (a auditFraud) ScoreFraud(ctx context.Context, snapshots []connector.Snapsh
 	// lie to the model and skew it against every account whose comments we never
 	// pulled. Best-effort: a refine error or a cold-start decline leaves RefinedScore
 	// nil and scoring keeps its heuristic authenticity blend.
+	// The audit ref rides along so the shadow prediction can be JOINED BACK to this
+	// audit's eventual outcome. Without it the prediction log is a write-only pile
+	// of unresolvable pairs and the shadow gate can never become a real,
+	// label-joined arbiter — it stays a train/serve-skew check wearing an
+	// accuracy-gate's name.
 	conf := out.Confidence
 	if rr, err := a.c.RefineFraud(ctx, ml.FraudRefineRequest{
+		AuditRef:                 auditJobID.String(),
 		RiskScore:                out.RiskScore,
 		EngagementAnomaly:        out.EngagementAnomaly,
 		CliqueCount:              out.CliqueCount,

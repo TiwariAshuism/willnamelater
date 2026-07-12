@@ -22,25 +22,29 @@ import (
 // write of each kind and returns canned reads, so the service's mapping and state
 // transitions can be exercised without a database.
 type fakeRepo struct {
-	upserted   *model.FeatureRow
-	labelCall  *labelCall
-	rows       []model.FeatureRow
-	registered *model.Version
-	getResult  model.Version
-	getFound   bool
-	promoteArg *promoteArg
-	promoteRes model.PromotionResult
-	canaries   []model.Canary
-	createdCan *model.Canary
-	prediction *model.PredictionLog
+	upserted    *model.FeatureRow
+	labelCall   *labelCall
+	rows        []model.FeatureRow
+	featureRow  model.FeatureRow
+	rowFound    bool
+	registered  *model.Version
+	getResult   model.Version
+	getFound    bool
+	hasChampion bool
+	promoteArg  *promoteArg
+	promoteRes  model.PromotionResult
+	canaries    []model.Canary
+	createdCan  *model.Canary
+	prediction  *model.PredictionLog
 
-	upsertErr, labelErr, listErr, registerErr, getErr, promoteErr, canaryListErr, canaryCreateErr, predictErr error
+	upsertErr, labelErr, listErr, rowErr, registerErr, getErr, championErr, promoteErr, canaryListErr, canaryCreateErr, predictErr error
 }
 
 type labelCall struct {
 	auditJobID uuid.UUID
 	label      bool
 	source     string
+	evidence   string
 }
 
 type promoteArg struct {
@@ -53,13 +57,21 @@ func (r *fakeRepo) UpsertFeatureRow(_ context.Context, row model.FeatureRow) err
 	return r.upsertErr
 }
 
-func (r *fakeRepo) SetFraudLabel(_ context.Context, id uuid.UUID, label bool, source string) error {
-	r.labelCall = &labelCall{auditJobID: id, label: label, source: source}
+func (r *fakeRepo) SetFraudLabel(_ context.Context, id uuid.UUID, label bool, source, evidence string) error {
+	r.labelCall = &labelCall{auditJobID: id, label: label, source: source, evidence: evidence}
 	return r.labelErr
 }
 
 func (r *fakeRepo) ListFeatureRows(_ context.Context, _ model.FeatureRowFilter) ([]model.FeatureRow, error) {
 	return r.rows, r.listErr
+}
+
+func (r *fakeRepo) GetFeatureRow(_ context.Context, _ uuid.UUID) (model.FeatureRow, bool, error) {
+	return r.featureRow, r.rowFound, r.rowErr
+}
+
+func (r *fakeRepo) HasChampion(_ context.Context, _ string) (bool, error) {
+	return r.hasChampion, r.championErr
 }
 
 func (r *fakeRepo) RegisterChallenger(_ context.Context, mv model.Version) (model.Version, error) {
@@ -224,24 +236,89 @@ func TestRecordFeatureRowNoSnapshotsIsNoOp(t *testing.T) {
 	}
 }
 
-func TestRecordFeatureRowStoresReachLabelSourceOnlyWhenPresent(t *testing.T) {
-	reach := int64(15234)
+// igSnapshot is an Instagram snapshot from the given data path carrying one reach
+// metric point — the shape a real Insights pull produces.
+func igSnapshot(source connector.DataSource, reach float64) connector.Snapshot {
+	return connector.Snapshot{
+		Platform:  connector.PlatformInstagram,
+		Source:    source,
+		Followers: 100,
+		Metrics:   []connector.MetricPoint{{Name: "reach", Value: reach}},
+	}
+}
+
+func organic(v bool) *bool { return &v }
+
+// A reach label is only ever stored with MEASURED provenance: a live Instagram
+// Graph pull, and the capture stating the figure is organic. The source is derived
+// from the snapshot, never from the caller.
+func TestRecordFeatureRowDerivesReachProvenanceFromSnapshot(t *testing.T) {
 	repo := &fakeRepo{}
 	svc := adminSvc(repo, &fakeStore{})
 	capture := contract.FeatureCapture{
-		AuditJobID: uuid.New(),
-		Snapshots:  []connector.Snapshot{{Platform: connector.PlatformInstagram, Followers: 100}},
-		Fraud:      contract.FraudSignal{Present: true},
-		ReachLabel: &reach,
+		AuditJobID:   uuid.New(),
+		Snapshots:    []connector.Snapshot{igSnapshot(connector.SourceInstagramGraph, 15234)},
+		Fraud:        contract.FraudSignal{Present: true},
+		ReachOrganic: organic(true),
 	}
 	if err := svc.RecordFeatureRow(context.Background(), capture); err != nil {
 		t.Fatalf("RecordFeatureRow: %v", err)
 	}
-	if repo.upserted.ReachLabel == nil || *repo.upserted.ReachLabel != reach {
-		t.Fatalf("reach label not stored: %+v", repo.upserted.ReachLabel)
+	if repo.upserted.ReachLabel == nil || *repo.upserted.ReachLabel != 15234 {
+		t.Fatalf("reach label not derived from the snapshot: %+v", repo.upserted.ReachLabel)
 	}
-	if repo.upserted.ReachLabelSource == nil || *repo.upserted.ReachLabelSource != contract.ReachLabelSourceInsights {
-		t.Fatalf("reach label source must be set when reach is present: %+v", repo.upserted.ReachLabelSource)
+	if repo.upserted.ReachLabelSource == nil || *repo.upserted.ReachLabelSource != string(contract.ReachSourceInstagramGraph) {
+		t.Fatalf("reach provenance must be the measured source: %+v", repo.upserted.ReachLabelSource)
+	}
+	if repo.upserted.ReachOrganic == nil || !*repo.upserted.ReachOrganic {
+		t.Fatalf("the organic flag must be persisted: %+v", repo.upserted.ReachOrganic)
+	}
+}
+
+// A CSV export is a creator's self-reported number. It may not claim measured
+// reach provenance, so no reach label is stored at all — and the caller's own
+// ReachLabel is ignored, which is what makes the column evidence rather than a
+// constant.
+func TestRecordFeatureRowRefusesReachLabelFromCSVAndFromTheCaller(t *testing.T) {
+	claimed := int64(999999)
+	repo := &fakeRepo{}
+	svc := adminSvc(repo, &fakeStore{})
+	capture := contract.FeatureCapture{
+		AuditJobID:   uuid.New(),
+		Snapshots:    []connector.Snapshot{igSnapshot(connector.SourceCSVUpload, 15234)},
+		Fraud:        contract.FraudSignal{Present: true},
+		ReachLabel:   &claimed, // the caller's word: must not be honoured
+		ReachOrganic: organic(true),
+	}
+	if err := svc.RecordFeatureRow(context.Background(), capture); err != nil {
+		t.Fatalf("RecordFeatureRow: %v", err)
+	}
+	if repo.upserted.ReachLabel != nil || repo.upserted.ReachLabelSource != nil {
+		t.Fatalf("a CSV snapshot must yield no reach label: label=%v source=%v",
+			repo.upserted.ReachLabel, repo.upserted.ReachLabelSource)
+	}
+	if len(repo.upserted.SnapshotSources) != 1 || repo.upserted.SnapshotSources[0] != string(connector.SourceCSVUpload) {
+		t.Fatalf("the data path must be recorded on the row: %+v", repo.upserted.SnapshotSources)
+	}
+}
+
+// Insights reach on a boosted post includes AD-DELIVERED reach. Unknown organic
+// split is NOT organic: no label is stored, because there is no honest way to
+// estimate the organic portion back out of it.
+func TestRecordFeatureRowWithholdsReachWhenOrganicSplitUnknown(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := adminSvc(repo, &fakeStore{})
+	capture := contract.FeatureCapture{
+		AuditJobID: uuid.New(),
+		Snapshots:  []connector.Snapshot{igSnapshot(connector.SourceInstagramGraph, 15234)},
+		Fraud:      contract.FraudSignal{Present: true},
+		// ReachOrganic nil: the connector could not expose the split.
+	}
+	if err := svc.RecordFeatureRow(context.Background(), capture); err != nil {
+		t.Fatalf("RecordFeatureRow: %v", err)
+	}
+	if repo.upserted.ReachLabel != nil || repo.upserted.ReachLabelSource != nil {
+		t.Fatalf("an unknown organic split must yield no reach label: %+v", repo.upserted)
 	}
 }
 
@@ -251,7 +328,7 @@ func TestSetFraudLabelPassesThroughToRepo(t *testing.T) {
 	repo := &fakeRepo{}
 	svc := adminSvc(repo, &fakeStore{})
 	id := uuid.New()
-	if err := svc.SetFraudLabel(context.Background(), id, true, contract.LabelSourceDisputeRejected); err != nil {
+	if err := svc.SetFraudLabel(context.Background(), id, true, contract.LabelSourceDisputeRejected, contract.EvidenceManualFollowerAudit); err != nil {
 		t.Fatalf("SetFraudLabel: %v", err)
 	}
 	if repo.labelCall == nil || repo.labelCall.auditJobID != id || !repo.labelCall.label ||
@@ -262,7 +339,7 @@ func TestSetFraudLabelPassesThroughToRepo(t *testing.T) {
 
 func TestSetFraudLabelRejectsUnknownSource(t *testing.T) {
 	svc := adminSvc(&fakeRepo{}, &fakeStore{})
-	if err := svc.SetFraudLabel(context.Background(), uuid.New(), true, contract.FraudLabelSource("guess")); errs.KindOf(err) != errs.KindInvalid {
+	if err := svc.SetFraudLabel(context.Background(), uuid.New(), true, contract.FraudLabelSource("guess"), contract.EvidenceManualFollowerAudit); errs.KindOf(err) != errs.KindInvalid {
 		t.Fatalf("want invalid for an unknown label source, got %v", err)
 	}
 }
@@ -286,6 +363,111 @@ func TestExportFeatureRowsDefaultsQualityAndLimit(t *testing.T) {
 	}
 	if resp.Count != 1 || len(resp.Rows) != 1 {
 		t.Fatalf("export count wrong: %+v", resp)
+	}
+}
+
+// THE POSITIVE CLASS MUST SURVIVE THE QUALITY GATE. A disputed account is a
+// high-risk account by construction, so a fraud-score-derived quality reason on a
+// HUMAN-LABELED row would censor exactly the rows that carry y=1 — forever. The
+// row below (risk 80/100, quality_ok=false, fraud_label set) MUST appear in the
+// default export.
+func TestExportFeatureRowsKeepsLabelledHighRiskRows(t *testing.T) {
+	labelled := true
+	// EXPECTATION TIGHTENED: the waiver keys on the label's EVIDENCE, not on the
+	// mere presence of a label. This row carries a manual follower-sample audit — a
+	// human actually looked at the follower list — so it is a real observation and
+	// the fraud-risk censorship is waived.
+	observed := string(contract.EvidenceManualFollowerAudit)
+	repo := &fakeRepo{rows: []model.FeatureRow{{
+		AuditJobID: uuid.New(), InfluencerID: uuid.New(), Features: json.RawMessage(`{"risk_score":80}`),
+		FraudLabel: &labelled, FraudLabelEvidence: &observed,
+		QualityOK: false, QualityReasons: []string{model.ReasonFraudRiskHigh},
+	}}}
+	svc := adminSvc(repo, &fakeStore{})
+	resp, err := svc.ExportFeatureRows(context.Background(), model.FeatureRowQuery{})
+	if err != nil {
+		t.Fatalf("ExportFeatureRows: %v", err)
+	}
+	if resp.Count != 1 {
+		t.Fatalf("an evidence-backed labelled row must never be censored by our own fraud estimate: %+v", resp)
+	}
+	if !resp.Rows[0].TrainingEligible {
+		t.Fatal("the exported row must report itself training-eligible")
+	}
+}
+
+// The OTHER half of the rule, and the more important one: a label with NO
+// observation behind it is a heuristic ECHO and must never reach the trainer.
+//
+// A dispute exists only because the heuristic flagged the account, and the
+// adjudicator sees the heuristic's own score. "The admin agreed with the flag"
+// therefore contains no information the heuristic did not already assert. Waiving
+// the fraud-risk exclusion for such a row would hand-pick precisely the circular
+// labels and feed them to the model as ground truth — and G0-G5 could not see it,
+// because they check the model against the labels and assume the labels are real.
+//
+// An empty positive class is a shippable answer. A laundered one is not.
+func TestExportFeatureRowsExcludesHeuristicEchoLabels(t *testing.T) {
+	labelled := true
+	echo := string(contract.EvidenceHeuristicOnly)
+	repo := &fakeRepo{rows: []model.FeatureRow{{
+		AuditJobID: uuid.New(), InfluencerID: uuid.New(), Features: json.RawMessage(`{"risk_score":80}`),
+		FraudLabel: &labelled, FraudLabelEvidence: &echo,
+		QualityOK: false, QualityReasons: []string{model.ReasonFraudRiskHigh},
+	}}}
+	svc := adminSvc(repo, &fakeStore{})
+	resp, err := svc.ExportFeatureRows(context.Background(), model.FeatureRowQuery{})
+	if err != nil {
+		t.Fatalf("ExportFeatureRows: %v", err)
+	}
+	if resp.Count != 0 {
+		t.Fatalf("a heuristic-echo label must never enter the training export: %+v", resp)
+	}
+}
+
+// A label with NO evidence recorded at all is treated exactly like an echo. The
+// absence of a stated observation is not an observation, and defaulting it to
+// "trainable" would reopen the laundering path through the back door.
+func TestExportFeatureRowsExcludesLabelWithNoEvidence(t *testing.T) {
+	labelled := true
+	repo := &fakeRepo{rows: []model.FeatureRow{{
+		AuditJobID: uuid.New(), InfluencerID: uuid.New(), Features: json.RawMessage(`{"risk_score":80}`),
+		FraudLabel: &labelled, FraudLabelEvidence: nil,
+		QualityOK: false, QualityReasons: []string{model.ReasonFraudRiskHigh},
+	}}}
+	svc := adminSvc(repo, &fakeStore{})
+	resp, err := svc.ExportFeatureRows(context.Background(), model.FeatureRowQuery{})
+	if err != nil {
+		t.Fatalf("ExportFeatureRows: %v", err)
+	}
+	if resp.Count != 0 {
+		t.Fatalf("a label with no recorded observation must not be trainable: %+v", resp)
+	}
+}
+
+// The scoping is narrow: only the fraud-score-derived reason is waived for a
+// labelled row. An OBSERVED data-quality fact (too few posts) still excludes it,
+// and an unlabelled high-risk row is still excluded (the anti-gaming filter is
+// intact).
+func TestExportFeatureRowsStillDropsObservedQualityFailures(t *testing.T) {
+	labelled := true
+	repo := &fakeRepo{rows: []model.FeatureRow{
+		{
+			AuditJobID: uuid.New(), InfluencerID: uuid.New(), Features: json.RawMessage(`{}`),
+			FraudLabel: &labelled, QualityReasons: []string{model.ReasonFraudRiskHigh, "insufficient_posts"},
+		},
+		{
+			AuditJobID: uuid.New(), InfluencerID: uuid.New(), Features: json.RawMessage(`{}`),
+			QualityReasons: []string{model.ReasonFraudRiskHigh}, // unlabelled: the gate still applies
+		},
+	}}
+	svc := adminSvc(repo, &fakeStore{})
+	resp, err := svc.ExportFeatureRows(context.Background(), model.FeatureRowQuery{})
+	if err != nil {
+		t.Fatalf("ExportFeatureRows: %v", err)
+	}
+	if resp.Count != 0 {
+		t.Fatalf("observed quality failures and unlabelled high-risk rows must stay out: %+v", resp)
 	}
 }
 
@@ -348,7 +530,8 @@ func TestRegisterModelRejectsBadBase64(t *testing.T) {
 
 func TestPromoteChallengerFlipsRolesWhenGatesPass(t *testing.T) {
 	repo := &fakeRepo{
-		getFound: true,
+		getFound:    true,
+		hasChampion: true, // a succession, not a first champion
 		getResult: model.Version{
 			ModelName: model.ModelFraud, Version: "lgbm-new", Role: model.RoleChallenger,
 			ValidationReport: passingReport(), DataFloorCounts: fraudFloor(),
@@ -374,7 +557,7 @@ func TestPromoteChallengerFlipsRolesWhenGatesPass(t *testing.T) {
 
 func TestPromoteRejectsFailingGate(t *testing.T) {
 	failing := json.RawMessage(`{"g1_held_out":{"pass":false},"g3_canary":{"pass":true},"g4_vs_champion":{"pass":true}}`)
-	repo := &fakeRepo{getFound: true, getResult: model.Version{
+	repo := &fakeRepo{getFound: true, hasChampion: true, getResult: model.Version{
 		ModelName: model.ModelFraud, Version: "lgbm-new", Role: model.RoleChallenger,
 		ValidationReport: failing, DataFloorCounts: fraudFloor(),
 	}}
@@ -389,7 +572,7 @@ func TestPromoteRejectsFailingGate(t *testing.T) {
 
 func TestPromoteRejectsBelowDataFloor(t *testing.T) {
 	belowFloor := json.RawMessage(`{"positive":10,"negative":74,"floor":50}`)
-	repo := &fakeRepo{getFound: true, getResult: model.Version{
+	repo := &fakeRepo{getFound: true, hasChampion: true, getResult: model.Version{
 		ModelName: model.ModelFraud, Version: "lgbm-new", Role: model.RoleChallenger,
 		ValidationReport: passingReport(), DataFloorCounts: belowFloor,
 	}}
@@ -450,7 +633,8 @@ func TestPromoteRollbackWaivesGates(t *testing.T) {
 // be waived for a model that never earned them (H6).
 func TestPromoteNeverServedArchivedReValidates(t *testing.T) {
 	repo := &fakeRepo{
-		getFound: true,
+		getFound:    true,
+		hasChampion: true,
 		getResult: model.Version{
 			ModelName: model.ModelFraud, Version: "lgbm-loser", Role: model.RoleArchived,
 			// No PromotedAt: never served. An empty report cannot pass the gates.
@@ -485,41 +669,243 @@ func TestPromoteChampionIsIdempotent(t *testing.T) {
 	}
 }
 
+// THE FIRST CHAMPION IS UNRECOVERABLE. There is no previous champion to roll back
+// to, and every later rollback short-circuits the gates — so crowning a first
+// champion with no canary set means no mistake after it can ever be caught by the
+// one artifact built to catch mistakes. It is refused server-side, in Go.
+func TestPromoteFirstChampionWithNoCanariesIsConflict(t *testing.T) {
+	repo := &fakeRepo{
+		getFound:    true,
+		hasChampion: false, // no champion yet: this promotion crowns the first one
+		canaries:    nil,   // and there is nothing to catch it
+		getResult: model.Version{
+			ModelName: model.ModelFraud, Version: "lgbm-first", Role: model.RoleChallenger,
+			ValidationReport: passingReport(), DataFloorCounts: fraudFloor(),
+		},
+	}
+	svc := adminSvc(repo, &fakeStore{})
+	_, err := svc.PromoteModel(context.Background(), "lgbm-first", model.PromoteModelRequest{ModelName: model.ModelFraud})
+	if errs.KindOf(err) != errs.KindConflict {
+		t.Fatalf("want conflict for a first champion with an empty canary set, got %v", err)
+	}
+	if repo.promoteArg != nil {
+		t.Fatal("a first champion must not be crowned on an empty canary set")
+	}
+}
+
+// With canaries on file the first champion is promotable — but its report must now
+// show G3 actually PASSING, not skipped (the server knows the set is not empty).
+func TestPromoteFirstChampionWithCanariesRequiresPassingCanaryGate(t *testing.T) {
+	canaryOnFile := []model.Canary{{ID: uuid.New(), ModelName: model.ModelFraud, ProvenanceKind: model.ProvenanceVendorReceipt}}
+	base := model.Version{
+		ModelName: model.ModelFraud, Version: "lgbm-first", Role: model.RoleChallenger,
+		ValidationReport: passingReport(), // g3 skipped
+		DataFloorCounts:  fraudFloor(),
+	}
+
+	skipped := &fakeRepo{getFound: true, getResult: base, canaries: canaryOnFile}
+	svc := adminSvc(skipped, &fakeStore{})
+	if _, err := svc.PromoteModel(context.Background(), "lgbm-first", model.PromoteModelRequest{ModelName: model.ModelFraud}); errs.KindOf(err) != errs.KindConflict {
+		t.Fatalf("a skipped canary gate with canaries on file must be a conflict, got %v", err)
+	}
+
+	passing := base
+	passing.ValidationReport = json.RawMessage(`{"g1_held_out":{"pass":true},"g2_stratified":{"pass":true},` +
+		`"g3_canary":{"pass":true},"g4_vs_champion":{"pass":true}}`)
+	repo := &fakeRepo{
+		getFound: true, getResult: passing, canaries: canaryOnFile,
+		promoteRes: model.PromotionResult{ChampionVersion: "lgbm-first"},
+	}
+	svc = adminSvc(repo, &fakeStore{})
+	if _, err := svc.PromoteModel(context.Background(), "lgbm-first", model.PromoteModelRequest{ModelName: model.ModelFraud}); err != nil {
+		t.Fatalf("a first champion with a passing canary gate must promote: %v", err)
+	}
+	if repo.promoteArg == nil {
+		t.Fatal("expected the promotion to run")
+	}
+}
+
 // --- Canaries ------------------------------------------------------------
 
+// auditRow is a captured feature row from a live Instagram Graph audit: the source
+// the canary endpoint copies its frozen vector from.
+func auditRow() model.FeatureRow {
+	return model.FeatureRow{
+		AuditJobID:      uuid.New(),
+		Features:        json.RawMessage(`{"risk_score":61.2,"follower_count":15200}`),
+		SnapshotSources: []string{string(connector.SourceInstagramGraph)},
+	}
+}
+
+// canaryReq is a well-formed positive fraud canary over the given audit.
+func canaryReq(auditJobID uuid.UUID) model.CreateCanaryRequest {
+	label := true
+	return model.CreateCanaryRequest{
+		ModelName:      model.ModelFraud,
+		AuditJobID:     auditJobID.String(),
+		Label:          "known bought-follower account",
+		ProvenanceKind: model.ProvenanceVendorReceipt,
+		ExpectedLabel:  &label,
+	}
+}
+
+// The canary's feature vector comes from the SERVER's frozen row, not from the
+// client — there is no features field on the request at all, so the operator who
+// runs the model cannot hand-type the vector the model is then tested against.
+func TestCreateCanaryCopiesTheFrozenVectorFromTheAudit(t *testing.T) {
+	row := auditRow()
+	repo := &fakeRepo{featureRow: row, rowFound: true}
+	svc := adminSvc(repo, &fakeStore{})
+
+	resp, err := svc.CreateCanary(context.Background(), canaryReq(row.AuditJobID))
+	if err != nil {
+		t.Fatalf("CreateCanary: %v", err)
+	}
+	if repo.createdCan == nil || !repo.createdCan.Active {
+		t.Fatalf("canary not stored as active: %+v", repo.createdCan)
+	}
+	if string(repo.createdCan.Features) != string(row.Features) {
+		t.Fatalf("the canary's vector must be the audit's frozen vector, got %s", repo.createdCan.Features)
+	}
+	if repo.createdCan.AuditJobID != row.AuditJobID {
+		t.Fatalf("the canary must be anchored to its audit: %+v", repo.createdCan.AuditJobID)
+	}
+	if resp.Canary.ProvenanceKind != model.ProvenanceVendorReceipt {
+		t.Fatalf("canary response wrong: %+v", resp)
+	}
+}
+
+func TestCreateCanaryUnknownAuditIsNotFound(t *testing.T) {
+	svc := adminSvc(&fakeRepo{rowFound: false}, &fakeStore{})
+	if _, err := svc.CreateCanary(context.Background(), canaryReq(uuid.New())); errs.KindOf(err) != errs.KindNotFound {
+		t.Fatalf("an audit with no captured row cannot back a canary, got %v", err)
+	}
+}
+
+// A hand-written CSV export laundered through the audit pipeline must not come out
+// the other side as ground truth. With Instagram gated on app review, the CSV is
+// the ONLY Instagram path — so this is the live laundering route, not a theoretical
+// one.
+func TestCreateCanaryRefusesCSVSourcedAudit(t *testing.T) {
+	row := auditRow()
+	row.SnapshotSources = []string{string(connector.SourceCSVUpload)}
+	repo := &fakeRepo{featureRow: row, rowFound: true}
+	svc := adminSvc(repo, &fakeStore{})
+
+	if _, err := svc.CreateCanary(context.Background(), canaryReq(row.AuditJobID)); errs.KindOf(err) != errs.KindConflict {
+		t.Fatalf("a CSV-sourced audit must not back a canary, got %v", err)
+	}
+	if repo.createdCan != nil {
+		t.Fatal("nothing may be inserted from a CSV-sourced audit")
+	}
+}
+
+// A row captured before the data path was recorded proves nothing about where its
+// numbers came from. Unknown provenance is refused: absence is not evidence.
+func TestCreateCanaryRefusesAuditWithUnknownProvenance(t *testing.T) {
+	row := auditRow()
+	row.SnapshotSources = nil
+	repo := &fakeRepo{featureRow: row, rowFound: true}
+	svc := adminSvc(repo, &fakeStore{})
+
+	if _, err := svc.CreateCanary(context.Background(), canaryReq(row.AuditJobID)); errs.KindOf(err) != errs.KindConflict {
+		t.Fatalf("an audit with no recorded data path must not back a canary, got %v", err)
+	}
+}
+
+// NO EVIDENCE PROVES ABSENCE. A clean canary may only rest on 'presumed_clean';
+// there is no way to spell "an admin checked and it was fine" in this API.
+func TestCreateCleanCanaryMustBePresumedClean(t *testing.T) {
+	row := auditRow()
+	repo := &fakeRepo{featureRow: row, rowFound: true}
+	svc := adminSvc(repo, &fakeStore{})
+
+	clean := false
+	req := canaryReq(row.AuditJobID)
+	req.ExpectedLabel = &clean
+	req.ProvenanceKind = model.ProvenancePlatformEnforcement // "verified" negative: not a thing
+	if _, err := svc.CreateCanary(context.Background(), req); errs.KindOf(err) != errs.KindInvalid {
+		t.Fatalf("a clean canary cannot claim positive evidence, got %v", err)
+	}
+
+	req.ProvenanceKind = model.ProvenancePresumedClean
+	if _, err := svc.CreateCanary(context.Background(), req); err != nil {
+		t.Fatalf("a presumed_clean negative canary must be accepted: %v", err)
+	}
+}
+
+// A positive fraud canary must rest on something someone could OBSERVE. An
+// operator's opinion, dressed as 'presumed_clean' or anything else without
+// evidence, is not a positive label.
+func TestCreatePositiveCanaryRequiresObservableEvidence(t *testing.T) {
+	row := auditRow()
+	repo := &fakeRepo{featureRow: row, rowFound: true}
+	svc := adminSvc(repo, &fakeStore{})
+
+	req := canaryReq(row.AuditJobID)
+	req.ProvenanceKind = model.ProvenancePresumedClean
+	if _, err := svc.CreateCanary(context.Background(), req); errs.KindOf(err) != errs.KindInvalid {
+		t.Fatalf("a fraudulent canary needs observable evidence, got %v", err)
+	}
+
+	req.ProvenanceKind = "an admin looked at it and it seemed fine"
+	if _, err := svc.CreateCanary(context.Background(), req); errs.KindOf(err) != errs.KindInvalid {
+		t.Fatalf("provenance is a closed enum, not prose, got %v", err)
+	}
+}
+
 func TestCreateFraudCanaryRequiresExpectedLabel(t *testing.T) {
-	svc := adminSvc(&fakeRepo{}, &fakeStore{})
-	req := model.CreateCanaryRequest{ModelName: model.ModelFraud, Label: "l", Features: json.RawMessage(`{}`), Source: "s"}
+	row := auditRow()
+	svc := adminSvc(&fakeRepo{featureRow: row, rowFound: true}, &fakeStore{})
+	req := canaryReq(row.AuditJobID)
+	req.ExpectedLabel = nil
 	if _, err := svc.CreateCanary(context.Background(), req); errs.KindOf(err) != errs.KindInvalid {
 		t.Fatalf("a fraud canary without an expected label must be invalid, got %v", err)
 	}
 }
 
-func TestCreateReachCanaryRequiresBand(t *testing.T) {
-	svc := adminSvc(&fakeRepo{}, &fakeStore{})
-	req := model.CreateCanaryRequest{ModelName: model.ModelReach, Label: "l", Features: json.RawMessage(`{}`), Source: "s"}
+// A reach canary's band must come from a MEASURED figure, and the audit must
+// actually carry one — a reach expectation with no measurement behind it is a
+// number someone chose.
+func TestCreateReachCanaryRequiresMeasuredReachOnTheAudit(t *testing.T) {
+	row := auditRow()
+	repo := &fakeRepo{featureRow: row, rowFound: true}
+	svc := adminSvc(repo, &fakeStore{})
+
+	min64, max64 := int64(10000), int64(20000)
+	req := model.CreateCanaryRequest{
+		ModelName: model.ModelReach, AuditJobID: row.AuditJobID.String(), Label: "steady reach account",
+		ProvenanceKind: model.ProvenanceOAuthInsightsMeasured, ExpectedReachMin: &min64, ExpectedReachMax: &max64,
+	}
+	if _, err := svc.CreateCanary(context.Background(), req); errs.KindOf(err) != errs.KindConflict {
+		t.Fatalf("a reach canary needs a measured reach on its audit, got %v", err)
+	}
+
+	// With a measured organic figure on the row, the band must contain it.
+	reach, source := int64(15234), string(contract.ReachSourceInstagramGraph)
+	row.ReachLabel, row.ReachLabelSource, row.ReachOrganic = &reach, &source, organic(true)
+	repo.featureRow = row
+	if _, err := svc.CreateCanary(context.Background(), req); err != nil {
+		t.Fatalf("a measured, organic reach audit must back a reach canary: %v", err)
+	}
+
+	outside := int64(100)
+	req.ExpectedReachMax = &outside
+	req.ExpectedReachMin = &outside
 	if _, err := svc.CreateCanary(context.Background(), req); errs.KindOf(err) != errs.KindInvalid {
-		t.Fatalf("a reach canary without a band must be invalid, got %v", err)
+		t.Fatalf("a band that excludes the audit's own measurement must be invalid, got %v", err)
 	}
 }
 
-func TestCreateFraudCanaryStored(t *testing.T) {
-	repo := &fakeRepo{}
-	svc := adminSvc(repo, &fakeStore{})
-	label := true
+func TestCreateReachCanaryRequiresBand(t *testing.T) {
+	row := auditRow()
+	svc := adminSvc(&fakeRepo{featureRow: row, rowFound: true}, &fakeStore{})
 	req := model.CreateCanaryRequest{
-		ModelName: model.ModelFraud, Label: "known bought-follower account",
-		Features: json.RawMessage(`{"fake_follower_rate":0.6}`), ExpectedLabel: &label, Source: "manual audit",
+		ModelName: model.ModelReach, AuditJobID: row.AuditJobID.String(), Label: "l",
+		ProvenanceKind: model.ProvenanceOAuthInsightsMeasured,
 	}
-	resp, err := svc.CreateCanary(context.Background(), req)
-	if err != nil {
-		t.Fatalf("CreateCanary: %v", err)
-	}
-	if repo.createdCan == nil || !repo.createdCan.Active || repo.createdCan.ExpectedLabel == nil || !*repo.createdCan.ExpectedLabel {
-		t.Fatalf("canary not stored as active with its label: %+v", repo.createdCan)
-	}
-	if resp.Canary.ModelName != model.ModelFraud {
-		t.Fatalf("canary response wrong: %+v", resp)
+	if _, err := svc.CreateCanary(context.Background(), req); errs.KindOf(err) != errs.KindInvalid {
+		t.Fatalf("a reach canary without a band must be invalid, got %v", err)
 	}
 }
 
@@ -527,7 +913,7 @@ func TestCreateFraudCanaryStored(t *testing.T) {
 
 func TestIngestPredictionRequiresServiceToken(t *testing.T) {
 	svc := New(&fakeRepo{}, fakeGuard{id: adminID()}, fakeServiceAuth{err: errs.New(errs.KindUnauthorized, "x", "y")}, &fakeStore{})
-	req := model.PredictionLogRequest{ModelName: model.ModelFraud, ChampionVersion: "v", FeaturesHash: "h"}
+	req := model.PredictionLogRequest{ModelName: model.ModelFraud, ChampionVersion: "v", FeaturesHash: "h", AuditJobID: uuid.NewString()}
 	if _, err := svc.IngestPrediction(context.Background(), req); errs.KindOf(err) != errs.KindUnauthorized {
 		t.Fatalf("ingest must require the service token, got %v", err)
 	}
@@ -538,8 +924,10 @@ func TestIngestPredictionAppends(t *testing.T) {
 	svc := adminSvc(repo, &fakeStore{})
 	challenger := "lgbm-new"
 	challengerScore := 58.1
+	auditJobID := uuid.New()
 	req := model.PredictionLogRequest{
-		ModelName: model.ModelFraud, ChampionVersion: "lgbm-old", ChampionScore: 62.4,
+		ModelName: model.ModelFraud, AuditJobID: auditJobID.String(),
+		ChampionVersion: "lgbm-old", ChampionScore: 62.4,
 		ChallengerVersion: &challenger, ChallengerScore: &challengerScore, FeaturesHash: "sha256:abc",
 	}
 	resp, err := svc.IngestPrediction(context.Background(), req)
@@ -549,6 +937,9 @@ func TestIngestPredictionAppends(t *testing.T) {
 	if !resp.Accepted || repo.prediction == nil {
 		t.Fatalf("prediction not appended: %+v", repo.prediction)
 	}
+	if repo.prediction.AuditJobID != auditJobID {
+		t.Fatalf("the correlation id must be persisted: %+v", repo.prediction.AuditJobID)
+	}
 	if repo.prediction.ChampionScore != 62.4 || repo.prediction.ChallengerVersion == nil || *repo.prediction.ChallengerVersion != challenger {
 		t.Fatalf("prediction mapped wrong: %+v", repo.prediction)
 	}
@@ -557,10 +948,24 @@ func TestIngestPredictionAppends(t *testing.T) {
 	}
 }
 
+// features_hash is a one-way sha256: without the audit job a logged prediction can
+// NEVER be joined back to an outcome. A shadow row that can never be resolved is
+// not evidence, and the ingest refuses to write one.
+func TestIngestPredictionRejectsMissingAuditID(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := adminSvc(repo, &fakeStore{})
+	req := model.PredictionLogRequest{ModelName: model.ModelFraud, ChampionVersion: "v", FeaturesHash: "h"}
+	if _, err := svc.IngestPrediction(context.Background(), req); errs.KindOf(err) != errs.KindInvalid {
+		t.Fatalf("want invalid for a prediction with no audit job, got %v", err)
+	}
+	if repo.prediction != nil {
+		t.Fatal("an unresolvable prediction must never be appended")
+	}
+}
+
 func TestIngestPredictionRejectsBadAuditID(t *testing.T) {
-	bad := "not-a-uuid"
 	svc := adminSvc(&fakeRepo{}, &fakeStore{})
-	req := model.PredictionLogRequest{ModelName: model.ModelFraud, ChampionVersion: "v", FeaturesHash: "h", AuditJobID: &bad}
+	req := model.PredictionLogRequest{ModelName: model.ModelFraud, ChampionVersion: "v", FeaturesHash: "h", AuditJobID: "not-a-uuid"}
 	if _, err := svc.IngestPrediction(context.Background(), req); errs.KindOf(err) != errs.KindInvalid {
 		t.Fatalf("want invalid for a bad audit id, got %v", err)
 	}

@@ -232,6 +232,9 @@ func (r *PostgresRepository) InsertWeightsIfAbsent(ctx context.Context, niche, t
 }
 
 // InsertBenchmarkIfAbsent seeds a benchmark, doing nothing if it already exists.
+// A bootstrap band's sample_size is written as SQL NULL (see nullableSamples): it
+// rests on zero observations, and a band that counted nobody must not carry a
+// count.
 func (r *PostgresRepository) InsertBenchmarkIfAbsent(ctx context.Context, niche, tier string, b engine.Benchmark, active bool) error {
 	const q = `INSERT INTO benchmark
 		(niche, tier, metric, version, source, p10, p25, p50, p75, p90, mean, stddev, sample_size, active)
@@ -239,56 +242,75 @@ func (r *PostgresRepository) InsertBenchmarkIfAbsent(ctx context.Context, niche,
 		ON CONFLICT (niche, tier, metric, version) DO NOTHING`
 	if _, err := r.pool.Exec(ctx, q,
 		niche, tier, b.Metric, b.Version, b.Source,
-		b.P10, b.P25, b.P50, b.P75, b.P90, b.Mean, b.Stddev, b.SampleSize, active,
+		b.P10, b.P25, b.P50, b.P75, b.P90, b.Mean, b.Stddev, nullableSamples(b.SampleSize), active,
 	); err != nil {
 		return errs.Wrap(err, errs.KindUnavailable, "scoring.seed_benchmark", "could not seed benchmark")
 	}
 	return nil
 }
 
-// CorpusCells aggregates persisted scores into per-cell engagement distributions.
-func (r *PostgresRepository) CorpusCells(ctx context.Context, minSamples int) ([]CorpusCell, error) {
-	// niche and tier are read out of the persisted breakdown, so the aggregation
-	// stays entirely within this module's own table rather than joining the
-	// influencer module's data.
-	const q = `
-		SELECT breakdown->>'niche'  AS niche,
-		       breakdown->>'tier'   AS tier,
-		       count(*)             AS n,
-		       percentile_cont(0.10) WITHIN GROUP (ORDER BY er) AS p10,
-		       percentile_cont(0.25) WITHIN GROUP (ORDER BY er) AS p25,
-		       percentile_cont(0.50) WITHIN GROUP (ORDER BY er) AS p50,
-		       percentile_cont(0.75) WITHIN GROUP (ORDER BY er) AS p75,
-		       percentile_cont(0.90) WITHIN GROUP (ORDER BY er) AS p90,
-		       avg(er)                         AS mean,
-		       coalesce(stddev_pop(er), 0)     AS stddev
-		FROM (
-			SELECT breakdown,
-			       (breakdown->>'observed_engagement_rate')::double precision AS er
-			FROM score
-			WHERE breakdown->>'observed_engagement_rate' IS NOT NULL
-			  AND breakdown->>'niche' IS NOT NULL
-			  AND breakdown->>'tier'  IS NOT NULL
-		) s
-		GROUP BY 1, 2
-		HAVING count(*) >= $1`
+// nullableSamples renders a sample size for the nullable benchmark.sample_size
+// column: a real count, or NULL when nothing was counted. Zero and NULL are not
+// the same claim, and "no observations" is the claim a bootstrap band has to make.
+func nullableSamples(n int) *int {
+	if n <= 0 {
+		return nil
+	}
+	return &n
+}
 
-	rows, err := r.pool.Query(ctx, q, minSamples)
+// CorpusObservations reads the reference population: ONE ROW PER DISTINCT
+// INFLUENCER — the newest score that influencer has — restricted to scores whose
+// data came from a live, authenticated API pull.
+//
+// It replaces an aggregation that did count(*) over the score table with no
+// DISTINCT, so thirty re-audits of one creator published a source='corpus'
+// benchmark with sample_size 30 that every other creator was then percentiled
+// against. DISTINCT ON (influencer_id) is therefore load-bearing, not an
+// optimisation.
+//
+// The WHERE clause is OBSERVATION-ONLY: it turns on who the row is about
+// (influencer_id), how its data was obtained (verification_tier), and whether the
+// metric exists. It must NEVER filter on a fraud-score-derived attribute — no
+// authenticity floor, no risk-score ceiling, no verdict. Excluding accounts our own
+// heuristic dislikes would make the reference population a function of the
+// heuristic's output, and the percentiles would then only ever confirm it.
+//
+// niche and tier are read out of the persisted breakdown, so the read stays
+// entirely within this module's own table rather than joining the influencer
+// module's data.
+func (r *PostgresRepository) CorpusObservations(ctx context.Context) ([]engine.CorpusObservation, error) {
+	const q = `
+		SELECT DISTINCT ON (s.influencer_id)
+		       s.influencer_id,
+		       s.breakdown->>'niche' AS niche,
+		       s.breakdown->>'tier'  AS tier,
+		       (s.breakdown->>'observed_engagement_rate')::double precision AS er,
+		       s.verification_tier
+		FROM score s
+		WHERE s.influencer_id IS NOT NULL
+		  AND s.verification_tier = $1
+		  AND s.breakdown->>'observed_engagement_rate' IS NOT NULL
+		  AND s.breakdown->>'niche' IS NOT NULL
+		  AND s.breakdown->>'tier'  IS NOT NULL
+		ORDER BY s.influencer_id, s.created_at DESC`
+
+	rows, err := r.pool.Query(ctx, q, contract.VerificationVerified)
 	if err != nil {
-		return nil, errs.Wrap(err, errs.KindUnavailable, "scoring.query_corpus", "could not aggregate corpus cells")
+		return nil, errs.Wrap(err, errs.KindUnavailable, "scoring.query_corpus", "could not read corpus observations")
 	}
 	defer rows.Close()
 
-	out := make([]CorpusCell, 0)
+	out := make([]engine.CorpusObservation, 0)
 	for rows.Next() {
-		var c CorpusCell
-		if err := rows.Scan(&c.Niche, &c.Tier, &c.SampleSize, &c.P10, &c.P25, &c.P50, &c.P75, &c.P90, &c.Mean, &c.Stddev); err != nil {
-			return nil, errs.Wrap(err, errs.KindInternal, "scoring.scan_corpus", "could not aggregate corpus cells")
+		var o engine.CorpusObservation
+		if err := rows.Scan(&o.InfluencerID, &o.Niche, &o.Tier, &o.EngagementRate, &o.VerificationTier); err != nil {
+			return nil, errs.Wrap(err, errs.KindInternal, "scoring.scan_corpus", "could not read corpus observations")
 		}
-		out = append(out, c)
+		out = append(out, o)
 	}
 	if err := rows.Err(); err != nil {
-		return nil, errs.Wrap(err, errs.KindUnavailable, "scoring.rows_corpus", "could not aggregate corpus cells")
+		return nil, errs.Wrap(err, errs.KindUnavailable, "scoring.rows_corpus", "could not read corpus observations")
 	}
 	return out, nil
 }

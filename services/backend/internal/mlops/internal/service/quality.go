@@ -30,17 +30,27 @@ const (
 	// minPostsForStableFeatures rejects a row with too few posts for stable
 	// engagement features.
 	minPostsForStableFeatures = 5
+	// maxPromotedMediaFraction rejects a promotion-heavy account: when this much of
+	// the sampled media was boosted, the engagement counters (and any Insights reach)
+	// include audience the account PAID for, and a model trained on them learns that
+	// ad spend is organic virality.
+	maxPromotedMediaFraction = 0.30
 )
 
 // Quality reason codes. Each failing rule appends its code; a row is clean
 // (quality_ok) only when no code fired. Rejected rows are still stored with their
 // reasons for admin review and excluded from the training export by default.
+//
+// One of them is not like the others. reasonFraudRiskHigh is derived from OUR OWN
+// heuristic's output, not from an observation, so it may not overrule a human
+// label — see model.TrainingEligible, which is what the export actually filters on.
 const (
-	reasonFraudRiskHigh    = "fraud_risk_estimate_high"
+	reasonFraudRiskHigh    = model.ReasonFraudRiskHigh
 	reasonAccountTooNew    = "account_too_new"
 	reasonFollowerSpike    = "follower_spike"
 	reasonInsufficientPost = "insufficient_posts"
 	reasonNoFraudEstimate  = "no_fraud_estimate"
+	reasonPromotionHeavy   = "promotion_heavy_media"
 )
 
 // evaluateQuality computes the data-quality verdict for a capture from the
@@ -48,8 +58,9 @@ const (
 // follower series. It returns the ordered reason codes; quality_ok is the empty
 // check (len == 0), which the caller records. The codes are appended in a fixed
 // order so the stored reasons are deterministic.
-func evaluateQuality(fraud contract.FraudSignal, vec model.FeatureVector, primary connector.Snapshot) []string {
-	reasons := make([]string, 0, 4)
+func evaluateQuality(capture contract.FeatureCapture, vec model.FeatureVector, primary connector.Snapshot) []string {
+	fraud := capture.Fraud
+	reasons := make([]string, 0, 5)
 
 	// Without the current model's read we cannot quality-check the row at all, so
 	// this is evaluated first and the other fraud-derived checks still run on
@@ -57,11 +68,13 @@ func evaluateQuality(fraud contract.FraudSignal, vec model.FeatureVector, primar
 	if !fraud.Present {
 		reasons = append(reasons, reasonNoFraudEstimate)
 	}
-	// The anti-gaming filter now reads the honest composite risk score (0-100). It
-	// used to read fake_follower_rate, which was that same score renamed — so the
-	// check is unchanged in substance, only in candour. A nil score means the signal
-	// was never observed, and an unobserved account is not filtered as suspicious:
-	// absence is not evidence.
+	// The anti-gaming filter reads the honest composite risk score (0-100). A nil
+	// score means the signal was never observed, and an unobserved account is not
+	// filtered as suspicious: absence is not evidence.
+	//
+	// This reason is recorded, but it never censors a row a HUMAN later labelled:
+	// the disputed accounts are precisely the high-risk ones, and letting our own
+	// estimate exclude them starves the positive class forever (model.TrainingEligible).
 	if fraud.RiskScore != nil && *fraud.RiskScore/100 >= maxFraudRisk {
 		reasons = append(reasons, reasonFraudRiskHigh)
 	}
@@ -73,6 +86,12 @@ func evaluateQuality(fraud contract.FraudSignal, vec model.FeatureVector, primar
 	}
 	if vec.PostCount < minPostsForStableFeatures {
 		reasons = append(reasons, reasonInsufficientPost)
+	}
+	// A nil fraction is "the connector could not observe the boost split", which is
+	// not the same as "nothing was boosted" — it fires no reason, and the reach label
+	// is withheld instead (RecordFeatureRow).
+	if capture.PromotedMediaFraction != nil && *capture.PromotedMediaFraction >= maxPromotedMediaFraction {
+		reasons = append(reasons, reasonPromotionHeavy)
 	}
 	return reasons
 }

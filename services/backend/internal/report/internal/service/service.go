@@ -47,14 +47,14 @@ const grantTTL = 30 * 24 * time.Hour
 // advisory narrative or anything identifying the account owner beyond the public
 // handle the creator already publishes.
 type BadgeSnapshot struct {
-	Handle           string  `json:"handle"`
-	Overall          float64 `json:"overall"`
-	Authenticity     float64 `json:"authenticity"`
-	Niche            string  `json:"niche"`
-	Tier             string  `json:"tier"`
-	BenchmarkLabel   string  `json:"benchmark_label"`
-	VerificationTier string  `json:"verification_tier"`
-	GeneratedAt      string  `json:"generated_at"`
+	Handle           string   `json:"handle"`
+	Overall          float64  `json:"overall"`
+	Authenticity     *float64 `json:"authenticity,omitempty"`
+	Niche            string   `json:"niche"`
+	Tier             string   `json:"tier"`
+	BenchmarkLabel   string   `json:"benchmark_label"`
+	VerificationTier string   `json:"verification_tier"`
+	GeneratedAt      string   `json:"generated_at"`
 }
 
 // ReportRecord is a published report to persist.

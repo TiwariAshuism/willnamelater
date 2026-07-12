@@ -9,6 +9,7 @@ import (
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 
+	adminport "github.com/getnyx/influaudit/backend/internal/admin/port"
 	auditport "github.com/getnyx/influaudit/backend/internal/audit/port"
 	"github.com/getnyx/influaudit/backend/internal/connector"
 	"github.com/getnyx/influaudit/backend/internal/mlops"
@@ -148,10 +149,15 @@ func reachLabelFromSnapshots(snaps []connector.Snapshot) *int64 {
 // resolved dispute's fraudulent/legitimate verdict onto the mlops label source.
 type mlopsLabelSink struct{ mlops *mlops.Module }
 
-func (s mlopsLabelSink) RecordDisputeLabel(ctx context.Context, auditJobID uuid.UUID, fraudulent bool) error {
+func (s mlopsLabelSink) RecordDisputeLabel(ctx context.Context, auditJobID uuid.UUID, fraudulent bool, evidence adminport.LabelEvidence) error {
 	source := mlops.LabelSourceDisputeUpheld
 	if fraudulent {
 		source = mlops.LabelSourceDisputeRejected
 	}
-	return s.mlops.SetFraudLabel(ctx, auditJobID, fraudulent, source)
+	// The two enums are declared independently (business modules import no other
+	// business module) but their values are identical strings by construction, so
+	// the mapping is a conversion. mlops re-validates and REJECTS an unrecognised
+	// evidence rather than defaulting it: a label whose basis we cannot name must
+	// never be silently treated as an observation.
+	return s.mlops.SetFraudLabel(ctx, auditJobID, fraudulent, source, mlops.FraudLabelEvidence(evidence))
 }

@@ -26,20 +26,65 @@ class TrainResult:
     metrics: dict | None = None
 
 
+def grouped_temporal_split(captured_at, influencer_ids, fraction=TRAIN_FRACTION):
+    """Split into (train, held_out) by time, GROUPED BY INFLUENCER.
+
+    The group key is the whole point. Rows are keyed by ``audit_job_id`` and the
+    same creator is re-audited on a schedule, so a plain row-wise temporal split
+    puts THE SAME INFLUENCER on both sides: the model memorizes creators it has
+    already seen, the held-out gate then measures recall of a memory rather than
+    generalization, and it reports a beautiful, meaningless number. No influencer
+    may appear on both sides of this split — enforced structurally here by
+    splitting GROUPS, not rows.
+
+    Temporal ordering is preserved at the group level: groups are ordered by the
+    LAST time we saw them, oldest first, and the newest groups are held out. The
+    held-out slice is therefore made of creators the model has never seen — the
+    honest analogue of scoring an account a brand has not booked before.
+
+    A row with a blank influencer_id is its own group: an id we do not have
+    cannot be proven to be the same creator as any other, and collapsing all the
+    blanks into one group would be an identity claim we cannot make.
+    """
+    groups: dict[str, list[int]] = {}
+    for i, raw in enumerate(influencer_ids):
+        key = str(raw or "").strip() or f"__unidentified__{i}"
+        groups.setdefault(key, []).append(i)
+
+    # Order groups by their most recent capture (then by key, for determinism).
+    ordered = sorted(
+        groups.items(),
+        key=lambda kv: (max(captured_at[i] for i in kv[1]), kv[0]),
+    )
+    target = len(captured_at) * fraction
+    train_idx: list[int] = []
+    held_out: list[int] = []
+    for pos, (_, idx) in enumerate(ordered):
+        last_group = pos == len(ordered) - 1
+        # Always leave the newest group on the held-out side; never leave the
+        # train side empty.
+        if train_idx and (len(train_idx) >= target or last_group):
+            held_out.extend(idx)
+        else:
+            train_idx.extend(idx)
+    return sorted(train_idx), sorted(held_out)
+
+
 def train(labels, *, seed: int = SEED) -> TrainResult:
     """Fit the classifier, or return ``trained=False`` when below the data floor.
 
     LightGBM is imported lazily so the pure modules (features, gate) — and the
     tests that exercise them — never require the training extra to be installed.
     """
-    features, targets, resolved_at = to_dataset(labels)
-    ok, counts = meets_floor(targets)
+    features, targets, resolved_at, influencer_ids = to_dataset(labels)
+    ok, counts = meets_floor(targets, influencer_ids)
     if not ok:
         return TrainResult(trained=False, counts=counts)
 
-    order = _temporal_order(resolved_at)
-    split = max(1, int(len(order) * TRAIN_FRACTION))
-    train_idx, val_idx = order[:split], order[split:]
+    train_idx, val_idx = grouped_temporal_split(resolved_at, influencer_ids)
+    if not val_idx:
+        # Nothing to validate on without leaking a creator into both sides.
+        return TrainResult(trained=False, counts=counts)
 
     import lightgbm as lgb
     import numpy as np
@@ -73,12 +118,6 @@ def train(labels, *, seed: int = SEED) -> TrainResult:
         model_bytes=booster.model_to_string().encode("utf-8"),
         metrics=metrics,
     )
-
-
-def _temporal_order(resolved_at):
-    """Indices sorted by resolved_at ascending (older first); ties keep input
-    order, so the split is stable."""
-    return sorted(range(len(resolved_at)), key=lambda i: (resolved_at[i], i))
 
 
 def _evaluate(booster, features_val, targets_val):

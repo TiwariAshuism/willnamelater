@@ -27,6 +27,19 @@ type AdminAPI interface {
 	// GET /admin/disputes
 	ListDisputeQueue(ctx context.Context) ([]model.DisputeResponse, error)
 
+	// GET /admin/disputes/:id
+	//
+	// The adjudicator's evidence-blind read: it carries NO heuristic score unless
+	// the score was explicitly revealed for this dispute.
+	ReviewDispute(ctx context.Context, id string) (model.DisputeReviewResponse, error)
+
+	// POST /admin/disputes/:id/reveal-score
+	//
+	// Discloses the heuristic's own composite score to the adjudicator and records
+	// the disclosure on the dispute (score_shown_to_admin). Server-side only: no
+	// client may assert that flag.
+	RevealHeuristicScore(ctx context.Context, id string) (model.DisputeReviewResponse, error)
+
 	// POST /admin/disputes/:id/resolve
 	ResolveDispute(ctx context.Context, id string, req model.ResolveDisputeRequest) (model.DisputeResponse, error)
 

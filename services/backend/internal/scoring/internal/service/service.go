@@ -17,9 +17,12 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/scoring/internal/repository"
 )
 
-// corpusMinSamples is the per-cell sample size at which a (niche, tier) cell has
-// enough real audits to replace its bootstrap band with corpus percentiles.
-const corpusMinSamples = 30
+// corpusMinDistinctInfluencers is the number of DISTINCT INFLUENCERS a (niche,
+// tier) cell needs before its bootstrap band may be replaced by corpus
+// percentiles. It counts PEOPLE, not audits: thirty re-audits of one creator are
+// one sample, and a reference band that other creators are percentiled against
+// cannot be built from one creator no matter how often we audit them.
+const corpusMinDistinctInfluencers = 30
 
 // Service implements the read API (ScoringService), the write path (Score) the
 // audit orchestrator calls, and the cold-start / corpus maintenance jobs.
@@ -159,16 +162,22 @@ func (s *Service) EnsureBootstrap(ctx context.Context) error {
 }
 
 // RecomputeCorpus replaces bootstrap bands with corpus-derived percentiles for
-// every (niche, tier) cell that has reached corpusMinSamples persisted scores,
-// publishing each as a new active source='corpus' benchmark version. The nightly
+// every (niche, tier) cell that has reached corpusMinDistinctInfluencers, and
+// publishes each as a new active source='corpus' benchmark version. The nightly
 // scheduler calls it; it returns the number of cells republished.
+//
+// The published SampleSize is the count of DISTINCT INFLUENCERS in the cell, which
+// is what the benchmark's confidence is then derived from. Cells below the
+// threshold publish nothing and the bootstrap band stands: "not enough real data
+// yet" is a correct, shippable answer, and a band assembled from a handful of
+// creators would be worse than the honest prior it replaced.
 func (s *Service) RecomputeCorpus(ctx context.Context) (int, error) {
-	cells, err := s.repo.CorpusCells(ctx, corpusMinSamples)
+	obs, err := s.repo.CorpusObservations(ctx)
 	if err != nil {
 		return 0, err
 	}
 	var published int
-	for _, c := range cells {
+	for _, c := range engine.CorpusCells(obs, corpusMinDistinctInfluencers) {
 		b := engine.Benchmark{
 			Metric:     engine.MetricEngagementRate,
 			P10:        c.P10,
@@ -178,8 +187,8 @@ func (s *Service) RecomputeCorpus(ctx context.Context) (int, error) {
 			P90:        c.P90,
 			Mean:       c.Mean,
 			Stddev:     c.Stddev,
-			SampleSize: c.SampleSize,
-			Source:     "corpus",
+			SampleSize: c.Influencers,
+			Source:     engine.SourceCorpus,
 		}
 		if err := s.repo.PublishCorpusBenchmark(ctx, c.Niche, c.Tier, b); err != nil {
 			return published, err

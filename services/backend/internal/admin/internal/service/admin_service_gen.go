@@ -12,6 +12,8 @@ import (
 type AdminService interface {
 	FileDispute(ctx context.Context, id string, req model.FileDisputeRequest) (model.DisputeResponse, error)
 	ListDisputeQueue(ctx context.Context) ([]model.DisputeResponse, error)
+	ReviewDispute(ctx context.Context, id string) (model.DisputeReviewResponse, error)
+	RevealHeuristicScore(ctx context.Context, id string) (model.DisputeReviewResponse, error)
 	ResolveDispute(ctx context.Context, id string, req model.ResolveDisputeRequest) (model.DisputeResponse, error)
 	CostDashboard(ctx context.Context) (model.CostDashboardResponse, error)
 	QueueMonitor(ctx context.Context) (model.QueueMonitorResponse, error)

@@ -49,6 +49,48 @@ REACH_FEATURE_ORDER = (
 )
 
 
+# --------------------------------------------------------------------------- #
+# Fraud label evidence (defect E): which observations may become y
+# --------------------------------------------------------------------------- #
+# The Go export stamps each backfilled fraud label with the KIND OF OBSERVATION
+# the admin actually made (``fraud_label_evidence``, closed enum). Only an
+# observation the heuristic could not have made is admissible as ground truth.
+FRAUD_EVIDENCE_TRAINABLE = frozenset({
+    "platform_enforcement_action",
+    "creator_admission",
+    "purchase_receipt_or_panel_invoice",
+    "brand_campaign_conversion_data",
+    "manual_follower_sample_audit",
+})
+
+# The admin reviewed the case and observed NOTHING the heuristic had not already
+# computed. Such a label is the heuristic's own output wearing a human's badge.
+# Training on it and calling the result an independent model is circular: the
+# model learns to reproduce the heuristic, G1 reports a superb score (it is
+# scored against the same echo), and the whole pipeline certifies a mirror.
+# G0-G5 CANNOT SEE THIS — they check model-vs-labels and assume the labels are
+# real. So it is excluded here, at the only place that knows.
+FRAUD_EVIDENCE_HEURISTIC_ECHO = "none_reviewed_heuristic_only"
+
+
+def fraud_label_is_trainable(row) -> bool:
+    """Whether a row's fraud label is an OBSERVATION, admissible as y.
+
+    A row whose ``fraud_label_evidence`` is missing is NOT trainable. Absence of
+    a stated observation is not an observation: the field is not yet emitted by
+    every writer, and defaulting an unknown provenance to "trainable" is exactly
+    how an echo gets in. Such a row is UNLABELLED — neither y=1 nor y=0 — not a
+    negative. (Assumption stated loudly because it means that until the Go side
+    ships ``fraud_label_evidence``, the fraud fold is EMPTY and the fraud model
+    correctly refuses to train. "Insufficient data" is the right answer, not a
+    reason to relax this.)
+    """
+    evidence = row.get("fraud_label_evidence")
+    if not isinstance(evidence, str):
+        return False
+    return evidence.strip() in FRAUD_EVIDENCE_TRAINABLE
+
+
 @dataclass(frozen=True)
 class Stratum:
     """The cohort a held-out row belongs to, for per-tier / per-niche gating."""
@@ -62,7 +104,9 @@ class FraudDataset:
     """Fraud rows: 6-column matrix, binary labels, temporal keys, strata.
 
     Every list is parallel and index-aligned. ``captured_at`` drives the
-    temporal train/held-out split; ``strata`` drives G2.
+    temporal train/held-out split; ``strata`` drives G2; ``influencer_ids`` is
+    the GROUP KEY — the data floor counts distinct values of it and the split
+    never puts one influencer on both sides.
     """
 
     features: list[list[float]]
@@ -70,17 +114,29 @@ class FraudDataset:
     captured_at: list[str]
     strata: list[Stratum]
     audit_job_ids: list[str]
+    influencer_ids: list[str]
+    excluded: dict
 
 
 @dataclass(frozen=True)
 class ReachDataset:
-    """Reach rows: full numeric matrix, integer reach labels, temporal keys."""
+    """Reach rows: full numeric matrix, integer reach labels, temporal keys.
+
+    ``targets`` is the SINGLE per-account MEDIAN reach the Go export derived
+    from live Instagram Graph insights. ``within_account_spread`` is a parallel
+    list of the per-account p10/p90 of that account's own posts WHEN the export
+    supplies them — it is a MEASUREMENT DISCLOSURE, never a training target and
+    never the model's predictive interval (see ``challenger.train_reach_
+    challenger``).
+    """
 
     features: list[list[float]]
     targets: list[float]
     captured_at: list[str]
     strata: list[Stratum]
     audit_job_ids: list[str]
+    influencer_ids: list[str]
+    within_account_spread: list[dict | None]
 
 
 def _num(value) -> float:
@@ -159,20 +215,45 @@ def _stratum(feats: dict) -> Stratum:
     )
 
 
+def _spread(row) -> dict | None:
+    """The account's OWN post-to-post reach spread, when the export states it.
+
+    Returned for DISCLOSURE only. It is deliberately not part of ``targets``:
+    see the ``train_reach_challenger`` docstring for why swapping it in would
+    destroy the model's meaning while every gate kept reporting green.
+    """
+    lo, hi = row.get("reach_label_p10"), row.get("reach_label_p90")
+    if lo is None or hi is None:
+        return None
+    return {"within_account_p10": float(lo), "within_account_p90": float(hi)}
+
+
 def to_fraud_dataset(rows) -> FraudDataset:
     """Project export rows onto the fraud training matrix.
 
-    Only rows that CARRY a fraud label are kept — a model trains solely on its
-    own label. The six frozen fraud keys are always present in a captured
-    vector; each is read verbatim from the stored jsonb (no recomputation).
+    A row becomes a training example only when it carries a fraud label AND that
+    label rests on an OBSERVATION (``fraud_label_is_trainable``). A label with
+    no evidence kind, or with the heuristic-echo kind, is treated as UNLABELLED
+    and dropped — not as a negative. The six frozen fraud keys are read verbatim
+    from the stored jsonb (no recomputation).
     """
     features: list[list[float]] = []
     targets: list[int] = []
     captured_at: list[str] = []
     strata: list[Stratum] = []
     audit_job_ids: list[str] = []
+    influencer_ids: list[str] = []
+    excluded = {"heuristic_echo": 0, "evidence_missing_or_unknown": 0}
     for row in rows:
         if row.get("fraud_label") is None:
+            continue
+        if not fraud_label_is_trainable(row):
+            key = (
+                "heuristic_echo"
+                if row.get("fraud_label_evidence") == FRAUD_EVIDENCE_HEURISTIC_ECHO
+                else "evidence_missing_or_unknown"
+            )
+            excluded[key] += 1
             continue
         feats = row.get("features") or {}
         features.append([_num(feats.get(name)) for name in FEATURE_ORDER])
@@ -180,20 +261,26 @@ def to_fraud_dataset(rows) -> FraudDataset:
         captured_at.append(str(row.get("captured_at") or ""))
         strata.append(_stratum(feats))
         audit_job_ids.append(str(row.get("audit_job_id") or ""))
-    return FraudDataset(features, targets, captured_at, strata, audit_job_ids)
+        influencer_ids.append(str(row.get("influencer_id") or ""))
+    return FraudDataset(
+        features, targets, captured_at, strata, audit_job_ids, influencer_ids, excluded
+    )
 
 
 def to_reach_dataset(rows) -> ReachDataset:
     """Project export rows onto the reach training matrix.
 
-    Only rows that carry a real ``reach_label`` (from Instagram Insights) are
-    kept. Missing features pass through as ``NaN`` — native LightGBM missing.
+    Only rows that carry a real ``reach_label`` (the single per-account MEDIAN
+    reach derived from Instagram Insights) are kept, and that median is the ONLY
+    target. Missing features pass through as ``NaN`` — native LightGBM missing.
     """
     features: list[list[float]] = []
     targets: list[float] = []
     captured_at: list[str] = []
     strata: list[Stratum] = []
     audit_job_ids: list[str] = []
+    influencer_ids: list[str] = []
+    spread: list[dict | None] = []
     for row in rows:
         if row.get("reach_label") is None:
             continue
@@ -203,4 +290,8 @@ def to_reach_dataset(rows) -> ReachDataset:
         captured_at.append(str(row.get("captured_at") or ""))
         strata.append(_stratum(feats))
         audit_job_ids.append(str(row.get("audit_job_id") or ""))
-    return ReachDataset(features, targets, captured_at, strata, audit_job_ids)
+        influencer_ids.append(str(row.get("influencer_id") or ""))
+        spread.append(_spread(row))
+    return ReachDataset(
+        features, targets, captured_at, strata, audit_job_ids, influencer_ids, spread
+    )

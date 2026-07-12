@@ -76,7 +76,7 @@ func sampleSnapshot() connector.Snapshot {
 
 func TestScoreFraudEncodesRequest(t *testing.T) {
 	snap := sampleSnapshot()
-	want := BuildFraudRequest(snap)
+	want := BuildFraudRequest("11111111-1111-1111-1111-111111111111", snap)
 	wantBody, err := json.Marshal(want)
 	if err != nil {
 		t.Fatalf("marshal want: %v", err)
@@ -132,7 +132,7 @@ func TestScoreFraudNullScoreIsNotZero(t *testing.T) {
 	}`}
 	client := New("http://ml.internal", doer)
 
-	resp, err := client.ScoreFraud(context.Background(), BuildFraudRequest(sampleSnapshot()))
+	resp, err := client.ScoreFraud(context.Background(), BuildFraudRequest("11111111-1111-1111-1111-111111111111", sampleSnapshot()))
 	if err != nil {
 		t.Fatalf("ScoreFraud: %v", err)
 	}
@@ -146,7 +146,7 @@ func TestScoreFraudNullScoreIsNotZero(t *testing.T) {
 
 func TestBuildFraudRequestMapsSnapshot(t *testing.T) {
 	snap := sampleSnapshot()
-	req := BuildFraudRequest(snap)
+	req := BuildFraudRequest("11111111-1111-1111-1111-111111111111", snap)
 
 	if req.Account.Handle != "@example" {
 		t.Errorf("handle = %q", req.Account.Handle)
@@ -190,7 +190,7 @@ func TestBuildFraudRequestNoFollowingMetricDefaultsZero(t *testing.T) {
 		Handle:   "h",
 		Metrics:  []connector.MetricPoint{{Name: "followers", Value: 5, At: time.Unix(0, 0).UTC()}},
 	}
-	req := BuildFraudRequest(snap)
+	req := BuildFraudRequest("11111111-1111-1111-1111-111111111111", snap)
 	if req.Account.FollowingCount != 0 {
 		t.Errorf("following_count = %d, want 0 when no 'following' metric", req.Account.FollowingCount)
 	}
@@ -276,8 +276,39 @@ func TestClassifyCommentsDecodesResponse(t *testing.T) {
 	if len(resp.Classifications) != 1 || resp.Classifications[0].Label != CommentLabelGeneric {
 		t.Errorf("classifications = %+v, want one 'generic'", resp.Classifications)
 	}
-	if resp.LowQualityRatio != 1.0 {
+	if resp.LowQualityRatio == nil || *resp.LowQualityRatio != 1.0 {
 		t.Errorf("low_quality_ratio = %v, want 1.0", resp.LowQualityRatio)
+	}
+}
+
+// A null rate — which the ml service returns below its sample floor — must decode
+// to nil, NEVER to 0.0. A 0.0 would read as "0% low-quality comments", which is a
+// measurement nobody took: the classifier is a rule set with an unmeasured error
+// rate, and below the floor it deliberately declines to state a percentage.
+func TestClassifyCommentsNullRateIsNotZero(t *testing.T) {
+	doer := &fakeDoer{status: 200, body: `{
+		"classifications": [],
+		"low_quality_ratio": null,
+		"analyzed_count": 3,
+		"low_quality_count": 1,
+		"sufficient_sample": false,
+		"min_sample": 50,
+		"confidence": 0.0,
+		"model_version": "heuristic-comments-v1",
+		"estimate": true,
+		"generated_at": "2026-01-01T00:00:00Z"
+	}`}
+	client := New("http://ml", doer)
+
+	resp, err := client.ClassifyComments(context.Background(), CommentsClassifyRequest{})
+	if err != nil {
+		t.Fatalf("ClassifyComments: %v", err)
+	}
+	if resp.LowQualityRatio != nil {
+		t.Fatalf("a suppressed rate must decode to nil, got %v", *resp.LowQualityRatio)
+	}
+	if resp.SufficientSample || resp.AnalyzedCount != 3 || resp.LowQualityCount != 1 {
+		t.Fatalf("the raw counts must survive suppression: %+v", resp)
 	}
 }
 

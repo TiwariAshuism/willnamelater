@@ -33,12 +33,21 @@ type Repository interface {
 	CreateDispute(ctx context.Context, params model.CreateDisputeParams) (model.Dispute, error)
 	// ListOpenDisputes returns the review queue: every open dispute, oldest first.
 	ListOpenDisputes(ctx context.Context) ([]model.Dispute, error)
-	// ListDecidedDisputes returns every resolved or rejected dispute for the
-	// training-label export, newest decision first.
+	// ListDecidedDisputes returns every resolved or rejected dispute, newest
+	// decision first — including the ones decided on the heuristic alone. The
+	// training-label export filters those out itself (ExportLabels); they stay in
+	// the database because the dispute outcome is real and the customer is owed it.
 	ListDecidedDisputes(ctx context.Context) ([]model.Dispute, error)
-	// ResolveDispute records a decision on an open dispute. Resolving a dispute
-	// that does not exist is a not-found error; resolving one already decided is a
-	// conflict.
+	// DisputeByID loads one dispute for the adjudicator's review read.
+	DisputeByID(ctx context.Context, id uuid.UUID) (model.Dispute, error)
+	// MarkScoreShown records that the heuristic's score was disclosed to the
+	// adjudicator. It is the only writer of score_shown_to_admin, and it refuses a
+	// dispute that is already decided (a conflict): the flag describes how a
+	// decision was reached and cannot be back-dated onto one.
+	MarkScoreShown(ctx context.Context, id uuid.UUID) (model.Dispute, error)
+	// ResolveDispute records a decision, and the evidence it rests on, on an open
+	// dispute. Resolving a dispute that does not exist is a not-found error;
+	// resolving one already decided is a conflict.
 	ResolveDispute(ctx context.Context, params model.ResolveDisputeParams) (model.Dispute, error)
 }
 
@@ -124,9 +133,115 @@ func (s *Service) ListDisputeQueue(ctx context.Context) ([]model.DisputeResponse
 	return resp, nil
 }
 
-// ResolveDispute records an admin's decision on an open dispute. The decision is
-// the labelling act: it becomes the dispute's terminal status and, downstream,
-// the supervised label the training export carries. It is admin-only.
+// ReviewDispute returns one dispute for adjudication, EVIDENCE-BLIND: the
+// response carries no heuristic score. An adjudicator shown the heuristic's own
+// risk score and then asked whether the heuristic was right is not producing a
+// label, they are ratifying one, and a model fit on ratifications learns only
+// that humans agree with it.
+//
+// The score is disclosed only once RevealHeuristicScore has been called for this
+// dispute — and once it has, the disclosure is on the row, so the read keeps
+// showing it. Hiding it again would not un-see it; it would only hide the
+// contamination. It is admin-only.
+func (s *Service) ReviewDispute(ctx context.Context, id string) (model.DisputeReviewResponse, error) {
+	if _, err := s.guard.RequireAdmin(ctx); err != nil {
+		return model.DisputeReviewResponse{}, err
+	}
+
+	disputeID, err := uuid.Parse(id)
+	if err != nil {
+		return model.DisputeReviewResponse{}, errInvalidDisputeID()
+	}
+
+	dispute, err := s.repo.DisputeByID(ctx, disputeID)
+	if err != nil {
+		return model.DisputeReviewResponse{}, err
+	}
+
+	resp := model.DisputeReviewResponse{Dispute: model.ToDisputeResponse(dispute)}
+	if !dispute.ScoreShownToAdmin {
+		return resp, nil
+	}
+
+	// Already disclosed for this dispute, by an earlier explicit reveal that is on
+	// the record. Attach it.
+	score, err := s.heuristicScore(ctx, dispute.AuditJobID)
+	if err != nil {
+		return model.DisputeReviewResponse{}, err
+	}
+	resp.HeuristicScore = score
+	return resp, nil
+}
+
+// RevealHeuristicScore discloses the heuristic's composite score and flags to the
+// adjudicator, and RECORDS the disclosure on the dispute (score_shown_to_admin).
+// It is the only way the score reaches a review screen, and the flag is written
+// server-side — a client's assertion about what a human looked at is worth
+// nothing as evidence.
+//
+// The disclosure is recorded only when there is actually a score to disclose: an
+// audit that produced no fraud estimate has nothing to show, and stamping the row
+// would enter a disclosure that never happened. Revealing against an
+// already-decided dispute is a conflict (the repository refuses it): the flag
+// describes how a decision was reached and cannot be back-dated onto one. It is
+// admin-only.
+func (s *Service) RevealHeuristicScore(ctx context.Context, id string) (model.DisputeReviewResponse, error) {
+	if _, err := s.guard.RequireAdmin(ctx); err != nil {
+		return model.DisputeReviewResponse{}, err
+	}
+
+	disputeID, err := uuid.Parse(id)
+	if err != nil {
+		return model.DisputeReviewResponse{}, errInvalidDisputeID()
+	}
+
+	dispute, err := s.repo.DisputeByID(ctx, disputeID)
+	if err != nil {
+		return model.DisputeReviewResponse{}, err
+	}
+
+	score, err := s.heuristicScore(ctx, dispute.AuditJobID)
+	if err != nil {
+		return model.DisputeReviewResponse{}, err
+	}
+	if score == nil {
+		// Nothing was observed by the heuristic, so nothing is disclosed and the row
+		// is left alone. The adjudicator adjudicates blind because there is nothing
+		// to be blind to.
+		return model.DisputeReviewResponse{Dispute: model.ToDisputeResponse(dispute)}, nil
+	}
+
+	stamped, err := s.repo.MarkScoreShown(ctx, disputeID)
+	if err != nil {
+		return model.DisputeReviewResponse{}, err
+	}
+	return model.DisputeReviewResponse{
+		Dispute:        model.ToDisputeResponse(stamped),
+		HeuristicScore: score,
+	}, nil
+}
+
+// heuristicScore loads the audit's stored fraud estimate, or nil when the audit
+// produced none. It is the heuristic's OWN output, which is why every path that
+// hands it to a human goes through the recorded reveal.
+func (s *Service) heuristicScore(ctx context.Context, auditJobID uuid.UUID) (*model.FraudFeatures, error) {
+	view, found, err := s.fraud.FraudResultOf(ctx, auditJobID)
+	if err != nil {
+		return nil, err
+	}
+	if !found {
+		return nil, nil
+	}
+	features := model.ToFraudFeatures(view)
+	return &features, nil
+}
+
+// ResolveDispute records an admin's decision on an open dispute, together with
+// the evidence the decision actually rests on. The decision alone is not a label:
+// the dispute exists only because the heuristic flagged the account, so a bare
+// "rejected" says no more than "an admin declined to overturn the flag". What
+// makes it a label — or refuses to — is LabelEvidence, so it is required and
+// validated against the closed set here. It is admin-only.
 func (s *Service) ResolveDispute(ctx context.Context, id string, req model.ResolveDisputeRequest) (model.DisputeResponse, error) {
 	adminID, err := s.guard.RequireAdmin(ctx)
 	if err != nil {
@@ -135,7 +250,7 @@ func (s *Service) ResolveDispute(ctx context.Context, id string, req model.Resol
 
 	disputeID, err := uuid.Parse(id)
 	if err != nil {
-		return model.DisputeResponse{}, errs.New(errs.KindInvalid, "admin.invalid_dispute_id", "dispute id is not a valid uuid")
+		return model.DisputeResponse{}, errInvalidDisputeID()
 	}
 
 	decision := model.Decision(req.Decision)
@@ -143,34 +258,58 @@ func (s *Service) ResolveDispute(ctx context.Context, id string, req model.Resol
 		return model.DisputeResponse{}, errs.New(errs.KindInvalid, "admin.invalid_decision", "decision must be 'upheld' or 'rejected'")
 	}
 
+	// An unknown kind, and an omitted one, are both rejected. "I did not say" is
+	// not an evidence kind: an adjudicator who observed nothing beyond the flag has
+	// a first-class, honest answer available (none_reviewed_heuristic_only), and
+	// saying so keeps the row out of the training-label export instead of letting
+	// silence smuggle it in.
+	evidence := model.LabelEvidence(req.LabelEvidence)
+	if !evidence.Valid() {
+		return model.DisputeResponse{}, errs.New(errs.KindInvalid, "admin.invalid_label_evidence",
+			"label_evidence must state what was observed: one of platform_enforcement_action, "+
+				"creator_admission, purchase_receipt_or_panel_invoice, brand_campaign_conversion_data, "+
+				"manual_follower_sample_audit, none_reviewed_heuristic_only")
+	}
+
 	dispute, err := s.repo.ResolveDispute(ctx, model.ResolveDisputeParams{
-		ID:         disputeID,
-		Status:     decision.Status(),
-		Resolution: req.Notes,
-		ResolvedBy: adminID,
+		ID:            disputeID,
+		Status:        decision.Status(),
+		Resolution:    req.Notes,
+		ResolvedBy:    adminID,
+		LabelEvidence: evidence,
 	})
 	if err != nil {
 		return model.DisputeResponse{}, err
 	}
 
 	// Backfill the supervised fraud label onto the audit's feature-store row (the
-	// ml labelling loop). Best-effort: the decision is already recorded, so a sink
-	// failure is logged and never fails the resolution.
-	s.recordLabel(ctx, dispute.AuditJobID, decision.FraudLabel())
+	// ml labelling loop). The evidence travels with it: mlops, not this module,
+	// owns what enters a fold, and it cannot make that call from the bool alone.
+	// Best-effort: the decision is already recorded, so a sink failure is logged
+	// and never fails the resolution.
+	s.recordLabel(ctx, dispute.AuditJobID, decision.FraudLabel(), evidence)
 
 	return model.ToDisputeResponse(dispute), nil
 }
 
-// recordLabel backfills the dispute's supervised fraud label through the optional
-// TrainingLabelSink. A nil sink is a no-op; any error is logged and swallowed.
-func (s *Service) recordLabel(ctx context.Context, auditJobID uuid.UUID, fraudulent bool) {
+// recordLabel backfills the dispute's supervised fraud label, and the evidence it
+// rests on, through the optional TrainingLabelSink. A nil sink is a no-op; any
+// error is logged and swallowed.
+func (s *Service) recordLabel(ctx context.Context, auditJobID uuid.UUID, fraudulent bool, evidence model.LabelEvidence) {
 	if s.labels == nil {
 		return
 	}
-	if err := s.labels.RecordDisputeLabel(ctx, auditJobID, fraudulent); err != nil {
+	if err := s.labels.RecordDisputeLabel(ctx, auditJobID, fraudulent, evidence); err != nil {
 		slog.WarnContext(ctx, "ml training-label backfill failed (dispute resolution unaffected)",
-			slog.String("audit_job_id", auditJobID.String()), slog.Any("error", err))
+			slog.String("audit_job_id", auditJobID.String()),
+			slog.String("label_evidence", string(evidence)), slog.Any("error", err))
 	}
+}
+
+// errInvalidDisputeID is the single invalid-input error for a dispute id that is
+// not a uuid.
+func errInvalidDisputeID() error {
+	return errs.New(errs.KindInvalid, "admin.invalid_dispute_id", "dispute id is not a valid uuid")
 }
 
 // CostDashboard returns the aggregate LLM generation cost, with the USD and
@@ -225,11 +364,22 @@ func (s *Service) QueueMonitor(ctx context.Context) (model.QueueMonitorResponse,
 	return model.QueueMonitorResponse{Queues: snapshots}, nil
 }
 
-// ExportLabels projects every decided dispute into a supervised training example
-// for services/ml/training. Each example carries the admin's decision as its
-// label and, when the disputed audit produced a stored fraud estimate, that
-// estimate as its features — never a fabricated all-zero vector when the estimate
-// is absent. It is admin-only.
+// ExportLabels projects decided disputes into supervised training examples for
+// services/ml/training. Each example carries the admin's decision as its label,
+// the evidence that decision rests on, and — when the disputed audit produced a
+// stored fraud estimate — that estimate as its features, never a fabricated
+// all-zero vector when the estimate is absent.
+//
+// A dispute decided WITHOUT an observation is not exported. Its evidence kind
+// (none_reviewed_heuristic_only, and equally an evidence nobody ever recorded)
+// says the adjudicator saw nothing the heuristic had not already computed, so the
+// "label" is the heuristic's own output handed back to it. Training on it teaches
+// the model to agree with itself, and no downstream gate can see the problem: they
+// all check the model against the labels and assume the labels are real. The rows
+// stay in the database — the dispute outcome is a real decision the customer is
+// owed — they simply never leave here as y.
+//
+// It is admin-only.
 func (s *Service) ExportLabels(ctx context.Context) (model.LabelExportResponse, error) {
 	if _, err := s.guard.RequireAdmin(ctx); err != nil {
 		return model.LabelExportResponse{}, err
@@ -241,11 +391,19 @@ func (s *Service) ExportLabels(ctx context.Context) (model.LabelExportResponse, 
 	}
 
 	labels := make([]model.TrainingLabel, 0, len(disputes))
+	excluded := 0
 	for _, d := range disputes {
+		if !d.LabelEvidence.Observable() {
+			excluded++
+			continue
+		}
+
 		label := model.TrainingLabel{
-			DisputeID:  d.ID.String(),
-			AuditJobID: d.AuditJobID.String(),
-			Label:      d.Status == model.StatusRejected,
+			DisputeID:         d.ID.String(),
+			AuditJobID:        d.AuditJobID.String(),
+			Label:             d.Status == model.StatusRejected,
+			LabelEvidence:     string(d.LabelEvidence),
+			ScoreShownToAdmin: d.ScoreShownToAdmin,
 		}
 		if d.ResolvedAt != nil {
 			label.ResolvedAt = *d.ResolvedAt
@@ -257,20 +415,12 @@ func (s *Service) ExportLabels(ctx context.Context) (model.LabelExportResponse, 
 		}
 		if found {
 			label.HasFeatures = true
-			label.Features = model.FraudFeatures{
-				Present:                  view.Present,
-				RiskScore:                view.RiskScore,
-				EngagementAnomaly:        view.EngagementAnomaly,
-				CliqueCount:              view.CliqueCount,
-				CliqueMembershipFraction: view.CliqueMembershipFraction,
-				Confidence:               view.Confidence,
-				ModelVersion:             view.ModelVersion,
-			}
+			label.Features = model.ToFraudFeatures(view)
 		}
 		labels = append(labels, label)
 	}
 
-	return model.LabelExportResponse{Count: len(labels), Labels: labels}, nil
+	return model.LabelExportResponse{Count: len(labels), Excluded: excluded, Labels: labels}, nil
 }
 
 // toCostDashboard maps the port-side cost aggregate onto the dashboard DTO,

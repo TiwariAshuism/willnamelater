@@ -21,7 +21,8 @@ import (
 
 // featureRowColumns is the training_feature_row projection the export shares.
 const featureRowColumns = "audit_job_id::text, influencer_id::text, platform, features_jsonb, " +
-	"fraud_label, fraud_label_source, reach_label, reach_label_source, quality_ok, quality_reasons, " +
+	"fraud_label, fraud_label_source, fraud_label_evidence, reach_label, reach_label_source, reach_is_organic, " +
+	"snapshot_sources, quality_ok, quality_reasons, " +
 	"model_version_at_capture, verification_tier, captured_at"
 
 // modelVersionColumns is the ml_model_version projection reads share.
@@ -30,8 +31,8 @@ const modelVersionColumns = "id::text, model_name, version, role, s3_key, manife
 	"feature_row_count, created_at, promoted_at, archived_at"
 
 // canaryColumns is the ml_canary_account projection reads share.
-const canaryColumns = "id::text, model_name, label, features_jsonb, expected_label, " +
-	"expected_reach_min, expected_reach_max, source, active, created_at"
+const canaryColumns = "id::text, model_name, audit_job_id::text, label, features_jsonb, expected_label, " +
+	"expected_reach_min, expected_reach_max, provenance_kind, active, created_at"
 
 // rowScanner is the read surface shared by pgx.Row and pgx.Rows.
 type rowScanner interface {
@@ -59,14 +60,17 @@ func New(pool *pgxpool.Pool) *PostgresRepository {
 func (r *PostgresRepository) UpsertFeatureRow(ctx context.Context, row model.FeatureRow) error {
 	const q = `INSERT INTO training_feature_row
 		(audit_job_id, influencer_id, platform, features_jsonb, reach_label, reach_label_source,
+		 reach_is_organic, snapshot_sources,
 		 quality_ok, quality_reasons, model_version_at_capture, verification_tier, captured_at)
-		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 		ON CONFLICT (audit_job_id) DO UPDATE SET
 			influencer_id            = EXCLUDED.influencer_id,
 			platform                 = EXCLUDED.platform,
 			features_jsonb           = EXCLUDED.features_jsonb,
 			reach_label              = COALESCE(EXCLUDED.reach_label, training_feature_row.reach_label),
 			reach_label_source       = COALESCE(EXCLUDED.reach_label_source, training_feature_row.reach_label_source),
+			reach_is_organic         = COALESCE(EXCLUDED.reach_is_organic, training_feature_row.reach_is_organic),
+			snapshot_sources         = EXCLUDED.snapshot_sources,
 			quality_ok               = EXCLUDED.quality_ok,
 			quality_reasons          = EXCLUDED.quality_reasons,
 			model_version_at_capture = EXCLUDED.model_version_at_capture,
@@ -77,9 +81,14 @@ func (r *PostgresRepository) UpsertFeatureRow(ctx context.Context, row model.Fea
 	if reasons == nil {
 		reasons = []string{}
 	}
+	sources := row.SnapshotSources
+	if sources == nil {
+		sources = []string{}
+	}
 	_, err := r.pool.Exec(ctx, q,
 		row.AuditJobID, row.InfluencerID, row.Platform, string(row.Features),
-		row.ReachLabel, row.ReachLabelSource, row.QualityOK, reasons,
+		row.ReachLabel, row.ReachLabelSource, row.ReachOrganic, sources,
+		row.QualityOK, reasons,
 		row.ModelVersionAtCapture, row.VerificationTier, row.CapturedAt)
 	if err != nil {
 		return errs.Wrap(err, errs.KindInternal, "mlops.feature_upsert_failed", "could not write the feature row")
@@ -87,22 +96,46 @@ func (r *PostgresRepository) UpsertFeatureRow(ctx context.Context, row model.Fea
 	return nil
 }
 
+// GetFeatureRow loads one captured row by its audit job. found is false, no error,
+// when the audit has no row. It is what the canary endpoint reads the frozen
+// feature vector from, so that no client ever supplies one.
+func (r *PostgresRepository) GetFeatureRow(ctx context.Context, auditJobID uuid.UUID) (model.FeatureRow, bool, error) {
+	const q = "SELECT " + featureRowColumns + " FROM training_feature_row WHERE audit_job_id = $1"
+	row, err := scanFeatureRow(r.pool.QueryRow(ctx, q, auditJobID))
+	if err != nil {
+		if notFound(err) {
+			return model.FeatureRow{}, false, nil
+		}
+		return model.FeatureRow{}, false, errs.Wrap(err, errs.KindInternal, "mlops.feature_read_failed", "could not read the feature row")
+	}
+	return row, true, nil
+}
+
 // SetFraudLabel backfills the supervised fraud target on a captured row. When no
 // row exists (the audit predates the feature store) it affects no rows and
 // returns nil, so a dispute decision on an old audit is a harmless no-op.
-func (r *PostgresRepository) SetFraudLabel(ctx context.Context, auditJobID uuid.UUID, label bool, source string) error {
-	const q = "UPDATE training_feature_row SET fraud_label = $2, fraud_label_source = $3 WHERE audit_job_id = $1"
-	if _, err := r.pool.Exec(ctx, q, auditJobID, label, source); err != nil {
+func (r *PostgresRepository) SetFraudLabel(ctx context.Context, auditJobID uuid.UUID, label bool, source, evidence string) error {
+	// The evidence is written alongside the label because the training_eligible
+	// generated column keys on it: a label with no observation behind it is a
+	// heuristic echo and must never enter a training fold.
+	const q = "UPDATE training_feature_row SET fraud_label = $2, fraud_label_source = $3, " +
+		"fraud_label_evidence = $4 WHERE audit_job_id = $1"
+	if _, err := r.pool.Exec(ctx, q, auditJobID, label, source, evidence); err != nil {
 		return errs.Wrap(err, errs.KindInternal, "mlops.label_backfill_failed", "could not backfill the fraud label")
 	}
 	return nil
 }
 
-// ListFeatureRows returns feature rows oldest-first for the trainer's export.
+// ListFeatureRows returns feature rows oldest-first for the trainer's export. The
+// default filter is training_eligible, NOT quality_ok: training_eligible is the
+// generated column that drops the fraud-score-derived quality reason for a
+// human-labelled row, so the disputed accounts — the entire positive class — are
+// no longer censored out of the export by our own heuristic. It mirrors
+// model.TrainingEligible.
 func (r *PostgresRepository) ListFeatureRows(ctx context.Context, filter model.FeatureRowFilter) ([]model.FeatureRow, error) {
 	const q = "SELECT " + featureRowColumns + ` FROM training_feature_row
 		WHERE ($1::timestamptz IS NULL OR captured_at >= $1)
-		  AND (NOT $2::boolean OR quality_ok)
+		  AND (NOT $2::boolean OR training_eligible)
 		ORDER BY captured_at ASC, audit_job_id ASC
 		LIMIT $3`
 
@@ -110,7 +143,7 @@ func (r *PostgresRepository) ListFeatureRows(ctx context.Context, filter model.F
 	if !filter.Since.IsZero() {
 		since = &filter.Since
 	}
-	rows, err := r.pool.Query(ctx, q, since, filter.QualityOnly, filter.Limit)
+	rows, err := r.pool.Query(ctx, q, since, filter.TrainableOnly, filter.Limit)
 	if err != nil {
 		return nil, errs.Wrap(err, errs.KindInternal, "mlops.feature_list_failed", "could not list feature rows")
 	}
@@ -190,6 +223,18 @@ func (r *PostgresRepository) GetModelVersion(ctx context.Context, modelName, ver
 		return model.Version{}, false, errs.Wrap(err, errs.KindInternal, "mlops.version_read_failed", "could not read the model version")
 	}
 	return mv, true, nil
+}
+
+// HasChampion reports whether the model already has a serving champion. The
+// promote endpoint needs it to tell a FIRST champion (nothing to roll back to, so
+// an empty canary set is refused) from an ordinary succession.
+func (r *PostgresRepository) HasChampion(ctx context.Context, modelName string) (bool, error) {
+	const q = "SELECT EXISTS (SELECT 1 FROM ml_model_version WHERE model_name = $1 AND role = 'champion')"
+	var exists bool
+	if err := r.pool.QueryRow(ctx, q, modelName).Scan(&exists); err != nil {
+		return false, errs.Wrap(err, errs.KindInternal, "mlops.champion_read_failed", "could not read the current champion")
+	}
+	return exists, nil
 }
 
 // PromoteVersion flips registry roles in a single transaction: the previous
@@ -274,17 +319,25 @@ func (r *PostgresRepository) ListCanaries(ctx context.Context, modelName string,
 	return out, nil
 }
 
-// CreateCanary inserts one manually-verified ground-truth canary.
+// CreateCanary inserts one ground-truth canary anchored to a real audit. The
+// feature vector is the one the service copied out of that audit's feature row.
+// A second canary for the same (model, audit) violates the table's uniqueness
+// invariant and comes back as a conflict, not a 500.
 func (r *PostgresRepository) CreateCanary(ctx context.Context, c model.Canary) (model.Canary, error) {
 	const q = `INSERT INTO ml_canary_account
-		(model_name, label, features_jsonb, expected_label, expected_reach_min, expected_reach_max, source, active)
-		VALUES ($1, $2, $3::jsonb, $4, $5, $6, $7, $8)
+		(model_name, audit_job_id, label, features_jsonb, expected_label, expected_reach_min,
+		 expected_reach_max, provenance_kind, active)
+		VALUES ($1, $2, $3, $4::jsonb, $5, $6, $7, $8, $9)
 		RETURNING ` + canaryColumns
 
 	out, err := scanCanary(r.pool.QueryRow(ctx, q,
-		c.ModelName, c.Label, string(c.Features), c.ExpectedLabel,
-		c.ExpectedReachMin, c.ExpectedReachMax, c.Source, c.Active))
+		c.ModelName, c.AuditJobID, c.Label, string(c.Features), c.ExpectedLabel,
+		c.ExpectedReachMin, c.ExpectedReachMax, c.ProvenanceKind, c.Active))
 	if err != nil {
+		if uniqueViolation(err) {
+			return model.Canary{}, errs.Wrap(err, errs.KindConflict, "mlops.canary_exists",
+				"that audit is already a canary for this model")
+		}
 		return model.Canary{}, errs.Wrap(err, errs.KindInternal, "mlops.canary_create_failed", "could not create the canary")
 	}
 	return out, nil
@@ -317,7 +370,8 @@ func scanFeatureRow(row rowScanner) (model.FeatureRow, error) {
 		features   []byte
 	)
 	if err := row.Scan(&auditJobID, &influencer, &r.Platform, &features,
-		&r.FraudLabel, &r.FraudLabelSource, &r.ReachLabel, &r.ReachLabelSource,
+		&r.FraudLabel, &r.FraudLabelSource, &r.FraudLabelEvidence, &r.ReachLabel, &r.ReachLabelSource,
+		&r.ReachOrganic, &r.SnapshotSources,
 		&r.QualityOK, &r.QualityReasons, &r.ModelVersionAtCapture, &r.VerificationTier, &r.CapturedAt); err != nil {
 		return model.FeatureRow{}, err
 	}
@@ -366,19 +420,25 @@ func scanModelVersion(row rowScanner) (model.Version, error) {
 // scanCanary reads one ml_canary_account into a domain Canary.
 func scanCanary(row rowScanner) (model.Canary, error) {
 	var (
-		c        model.Canary
-		id       string
-		features []byte
+		c          model.Canary
+		id         string
+		auditJobID string
+		features   []byte
 	)
-	if err := row.Scan(&id, &c.ModelName, &c.Label, &features, &c.ExpectedLabel,
-		&c.ExpectedReachMin, &c.ExpectedReachMax, &c.Source, &c.Active, &c.CreatedAt); err != nil {
+	if err := row.Scan(&id, &c.ModelName, &auditJobID, &c.Label, &features, &c.ExpectedLabel,
+		&c.ExpectedReachMin, &c.ExpectedReachMax, &c.ProvenanceKind, &c.Active, &c.CreatedAt); err != nil {
 		return model.Canary{}, err
 	}
 	parsed, err := uuid.Parse(id)
 	if err != nil {
 		return model.Canary{}, err
 	}
+	audit, err := uuid.Parse(auditJobID)
+	if err != nil {
+		return model.Canary{}, err
+	}
 	c.ID = parsed
+	c.AuditJobID = audit
 	c.Features = features
 	return c, nil
 }

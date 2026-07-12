@@ -60,3 +60,45 @@ def test_reach_below_floor_writes_no_artifact(tmp_path, monkeypatch):
     assert rc == 0
     assert not (tmp_path / "manifest.json").exists()
     assert ModelRegistry(tmp_path).active_version() == HEURISTIC_VERSION
+
+
+def test_reach_200_rows_from_20_influencers_trains_nothing(tmp_path, monkeypatch):
+    """End-to-end: the re-audited-panel dataset must not produce a challenger.
+
+    20 creators re-audited monthly for 10 months is 200 rows and 20 accounts.
+    Under a ROW floor of 200 the orchestrator would train, validate against a
+    held-out slice containing those same 20 creators, and register a model whose
+    G1 score is a measure of memorization. It must instead train nothing and
+    leave the registry on 'heuristic' — and it needs no LightGBM to say so,
+    because the floor returns before any training.
+    """
+    rows = _reach_rows(200)
+    for i, row in enumerate(rows):
+        row["influencer_id"] = f"inf{i % 20}"
+    monkeypatch.setattr(retrain, "fetch_feature_rows", lambda *a, **k: rows)
+
+    rc = retrain.run_reach(_args(tmp_path, "reach"))
+    assert rc == 0
+    assert not (tmp_path / "manifest.json").exists()
+    assert not (tmp_path / "shadow").exists()
+    assert ModelRegistry(tmp_path).active_version() == HEURISTIC_VERSION
+
+
+def test_fraud_heuristic_echo_labels_train_nothing(tmp_path, monkeypatch):
+    """A whole export of heuristic-echo labels is an export of NO ground truth.
+
+    Enough rows and enough distinct creators to clear every count — but every
+    label records that the reviewer observed nothing the heuristic had not
+    already computed. Training on them would distil the heuristic and register it
+    as an independent model. The fold is empty and nothing is trained.
+    """
+    rows = _fraud_rows(300)
+    for i, row in enumerate(rows):
+        row["influencer_id"] = f"inf{i}"
+        row["fraud_label_evidence"] = "none_reviewed_heuristic_only"
+    monkeypatch.setattr(retrain, "fetch_feature_rows", lambda *a, **k: rows)
+
+    rc = retrain.run_fraud(_args(tmp_path, "fraud"))
+    assert rc == 0
+    assert not (tmp_path / "manifest.json").exists()
+    assert ModelRegistry(tmp_path).active_version() == HEURISTIC_VERSION

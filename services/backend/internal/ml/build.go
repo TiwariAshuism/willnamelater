@@ -32,8 +32,9 @@ const (
 // module, not the connector snapshot, so the caller sets it when a sourced curve
 // is available. Nil marshals to JSON null, which the service reads as "no
 // benchmark".
-func BuildFraudRequest(snap connector.Snapshot) FraudScoreRequest {
+func BuildFraudRequest(auditJobID string, snap connector.Snapshot) FraudScoreRequest {
 	req := FraudScoreRequest{
+		AuditRef: auditJobID,
 		Account: AccountSnapshot{
 			Handle:         snap.Handle,
 			Platform:       Platform(snap.Platform),

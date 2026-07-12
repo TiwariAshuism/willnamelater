@@ -74,12 +74,15 @@ type FraudBlock struct {
 // ScoreBlock is the composite score presented in the report. Available is false
 // for a fully failed audit that produced no score.
 type ScoreBlock struct {
-	Available      bool    `json:"available"`
-	Overall        float64 `json:"overall"`
-	Authenticity   float64 `json:"authenticity"`
-	Niche          string  `json:"niche,omitempty"`
-	Tier           string  `json:"tier,omitempty"`
-	BenchmarkLabel string  `json:"benchmark_label,omitempty"`
+	Available bool    `json:"available"`
+	Overall   float64 `json:"overall"`
+	// Authenticity is nil when the authenticity dimension rests on NO measurement.
+	// The engine's neutral 50 means "we don't know"; printing it would certify an
+	// account nobody examined, so the deliverable says "not assessed" instead.
+	Authenticity   *float64 `json:"authenticity,omitempty"`
+	Niche          string   `json:"niche,omitempty"`
+	Tier           string   `json:"tier,omitempty"`
+	BenchmarkLabel string   `json:"benchmark_label,omitempty"`
 	// VerificationTier is the trust tier ("verified"/"estimated"/"unverified")
 	// derived from the provenance of the data behind the score.
 	VerificationTier string     `json:"verification_tier,omitempty"`
@@ -234,7 +237,7 @@ const reportHTML = `<!doctype html>
   {{if .Score.Available}}
   <div class="score-hero">
     <div><div class="lbl">Influence Score</div><div class="big">{{pct .Score.Overall}}</div></div>
-    <div><div class="lbl">Authenticity</div><div class="big">{{pct .Score.Authenticity}}</div></div>
+    <div><div class="lbl">Authenticity</div><div class="big">{{scoreP .Score.Authenticity}}</div></div>
   </div>
   {{if .Score.Niche}}<p class="sub">{{.Score.Niche}}{{if .Score.Tier}} &middot; {{.Score.Tier}} tier{{end}}</p>{{end}}
   {{if .Score.BenchmarkLabel}}<p class="note">Benchmarks: {{.Score.BenchmarkLabel}}. Fraud figures are estimates, not measured percentages.</p>{{end}}

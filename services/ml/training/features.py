@@ -30,17 +30,25 @@ FEATURE_ORDER_VERSION = 2
 
 
 def to_dataset(labels):
-    """Project training labels onto ``(X, y, resolved_at)``.
+    """Project training labels onto ``(X, y, resolved_at, influencer_ids)``.
 
     Only rows the audit could actually feature are kept: ``has_features`` must be
     true AND the stored estimate must be ``present``. Rows without features are
     DROPPED, never zero-filled — an all-zero vector would teach the model that
     "no signal" is a specific point in feature space, which is false. ``y`` is 1
     for a fraudulent label (dispute rejected), 0 for legitimate (upheld).
+
+    ``influencer_ids`` is the GROUP KEY. It is carried (rather than derived later)
+    because both the data floor and the train/held-out split are taken over
+    CREATORS, not rows: the same creator is re-audited on a schedule, so rows are
+    not independent examples. An export without an influencer_id yields blanks,
+    which count as zero distinct creators — i.e. below the floor, train nothing.
+    That is the correct, honest failure: we cannot prove the rows are independent.
     """
     features: list[list[float]] = []
     targets: list[int] = []
     resolved_at: list[str] = []
+    influencer_ids: list[str] = []
     for row in labels:
         if not row.get("has_features"):
             continue
@@ -50,4 +58,5 @@ def to_dataset(labels):
         features.append([float(feats.get(name, 0.0)) for name in FEATURE_ORDER])
         targets.append(1 if row.get("label") else 0)
         resolved_at.append(str(row.get("resolved_at") or ""))
-    return features, targets, resolved_at
+        influencer_ids.append(str(row.get("influencer_id") or ""))
+    return features, targets, resolved_at, influencer_ids

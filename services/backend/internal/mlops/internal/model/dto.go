@@ -27,19 +27,25 @@ type FeatureRowExportResponse struct {
 // verbatim (JSON nulls preserved). The nil-able label fields are omitted when
 // absent so the trainer never reads a fabricated value.
 type FeatureRowItem struct {
-	AuditJobID            string          `json:"audit_job_id"`
-	InfluencerID          string          `json:"influencer_id"`
-	Platform              string          `json:"platform"`
-	Features              json.RawMessage `json:"features"`
-	FraudLabel            *bool           `json:"fraud_label"`
-	FraudLabelSource      string          `json:"fraud_label_source,omitempty"`
-	ReachLabel            *int64          `json:"reach_label"`
-	ReachLabelSource      string          `json:"reach_label_source,omitempty"`
-	QualityOK             bool            `json:"quality_ok"`
-	QualityReasons        []string        `json:"quality_reasons"`
-	ModelVersionAtCapture string          `json:"model_version_at_capture"`
-	VerificationTier      string          `json:"verification_tier"`
-	CapturedAt            time.Time       `json:"captured_at"`
+	AuditJobID       string          `json:"audit_job_id"`
+	InfluencerID     string          `json:"influencer_id"`
+	Platform         string          `json:"platform"`
+	Features         json.RawMessage `json:"features"`
+	FraudLabel       *bool           `json:"fraud_label"`
+	FraudLabelSource string          `json:"fraud_label_source,omitempty"`
+	// FraudLabelEvidence is what the adjudicator OBSERVED outside the heuristic's own
+	// output. The trainer MUST filter folds on it: a null or "none_reviewed_heuristic_only"
+	// evidence marks a heuristic echo, which may never become y (see TrainingEligible).
+	FraudLabelEvidence    string    `json:"fraud_label_evidence,omitempty"`
+	ReachLabel            *int64    `json:"reach_label"`
+	ReachLabelSource      string    `json:"reach_label_source,omitempty"`
+	ReachIsOrganic        *bool     `json:"reach_is_organic"`
+	QualityOK             bool      `json:"quality_ok"`
+	QualityReasons        []string  `json:"quality_reasons"`
+	TrainingEligible      bool      `json:"training_eligible"`
+	ModelVersionAtCapture string    `json:"model_version_at_capture"`
+	VerificationTier      string    `json:"verification_tier"`
+	CapturedAt            time.Time `json:"captured_at"`
 }
 
 // --- register (POST /admin/mlops/models) ---------------------------------
@@ -119,16 +125,19 @@ type CanaryListResponse struct {
 	Canaries []CanaryItem `json:"canaries"`
 }
 
-// CanaryItem is one canary in the list / create response.
+// CanaryItem is one canary in the list / create response. Features is the frozen
+// vector the SERVER copied from the source audit's feature row; AuditJobID is the
+// audit it is anchored to.
 type CanaryItem struct {
 	ID               string          `json:"id"`
 	ModelName        string          `json:"model_name"`
+	AuditJobID       string          `json:"audit_job_id"`
 	Label            string          `json:"label"`
 	Features         json.RawMessage `json:"features"`
 	ExpectedLabel    *bool           `json:"expected_label,omitempty"`
 	ExpectedReachMin *int64          `json:"expected_reach_min,omitempty"`
 	ExpectedReachMax *int64          `json:"expected_reach_max,omitempty"`
-	Source           string          `json:"source"`
+	ProvenanceKind   string          `json:"provenance_kind"`
 	Active           bool            `json:"active"`
 	CreatedAt        time.Time       `json:"created_at"`
 }
@@ -138,27 +147,35 @@ type CanaryResponse struct {
 	Canary CanaryItem `json:"canary"`
 }
 
-// CreateCanaryRequest inserts one manually-verified ground-truth canary. Features
-// is the frozen feature vector for the account; ExpectedLabel is set for a fraud
-// canary, the reach band for a reach canary.
+// CreateCanaryRequest inserts one ground-truth canary from a REAL audit.
+//
+// There is deliberately no features field. The canary set is the one artifact
+// whose job is to catch a fabricating model, so its vectors may not be typed by
+// the hand that also runs the model: the server copies the frozen vector out of
+// training_feature_row for AuditJobID, and refuses an audit whose data came from a
+// creator-uploaded CSV. ProvenanceKind is a closed enum (model.ValidProvenanceKind),
+// not prose — "it looked fine to me" is not a member of it.
 type CreateCanaryRequest struct {
-	ModelName        string          `json:"model_name" binding:"required"`
-	Label            string          `json:"label" binding:"required"`
-	Features         json.RawMessage `json:"features" binding:"required"`
-	ExpectedLabel    *bool           `json:"expected_label"`
-	ExpectedReachMin *int64          `json:"expected_reach_min"`
-	ExpectedReachMax *int64          `json:"expected_reach_max"`
-	Source           string          `json:"source" binding:"required"`
+	ModelName      string `json:"model_name" binding:"required"`
+	AuditJobID     string `json:"audit_job_id" binding:"required"`
+	Label          string `json:"label" binding:"required"`
+	ProvenanceKind string `json:"provenance_kind" binding:"required"`
+	// The expectation: a fraud canary carries ExpectedLabel, a reach canary the band.
+	ExpectedLabel    *bool  `json:"expected_label"`
+	ExpectedReachMin *int64 `json:"expected_reach_min"`
+	ExpectedReachMax *int64 `json:"expected_reach_max"`
 }
 
 // --- prediction-log ingest (POST /ml/predictions) -----------------------
 
-// PredictionLogRequest is one shadow score the ml server logs. AuditJobID and
-// ChallengerVersion/ChallengerScore are nil-able; ScoredAt defaults to now when
-// unset.
+// PredictionLogRequest is one shadow score the ml server logs. AuditJobID is
+// REQUIRED: features_hash is a one-way sha256, so without the audit job the row
+// can never be joined back to an outcome and the shadow window is unresolvable
+// forever. ChallengerVersion/ChallengerScore are nil-able; ScoredAt defaults to
+// now when unset.
 type PredictionLogRequest struct {
 	ModelName         string     `json:"model_name" binding:"required"`
-	AuditJobID        *string    `json:"audit_job_id"`
+	AuditJobID        string     `json:"audit_job_id" binding:"required"`
 	ChampionVersion   string     `json:"champion_version" binding:"required"`
 	ChampionScore     float64    `json:"champion_score"`
 	ChallengerVersion *string    `json:"challenger_version"`

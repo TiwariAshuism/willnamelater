@@ -3,6 +3,7 @@ package engine
 import (
 	"errors"
 	"math"
+	"strings"
 	"testing"
 	"time"
 
@@ -109,10 +110,10 @@ func TestAudienceSizeSubscore(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name      string
-		followers int64
-		wantVal   float64
-		wantConf  float64
+		name        string
+		followers   int64
+		wantVal     float64
+		wantSupport float64
 	}{
 		{"none", 0, 0, 0},
 		{"floor", 1_000, 0, audienceSizeConfidence},
@@ -128,8 +129,8 @@ func TestAudienceSizeSubscore(t *testing.T) {
 			if !approx(got.Value, tt.wantVal) {
 				t.Fatalf("value = %v, want %v", got.Value, tt.wantVal)
 			}
-			if !approx(got.Confidence, tt.wantConf) {
-				t.Fatalf("confidence = %v, want %v", got.Confidence, tt.wantConf)
+			if !approx(got.Support, tt.wantSupport) {
+				t.Fatalf("support = %v, want %v", got.Support, tt.wantSupport)
 			}
 		})
 	}
@@ -147,10 +148,10 @@ func TestAuthenticitySubscore(t *testing.T) {
 	t.Parallel()
 
 	tests := []struct {
-		name     string
-		in       contract.FraudInput
-		wantVal  float64
-		wantConf float64
+		name        string
+		in          contract.FraudInput
+		wantVal     float64
+		wantSupport float64
 	}{
 		{"absent is neutral", contract.FraudInput{Present: false}, 50, 0},
 		{
@@ -221,39 +222,168 @@ func TestAuthenticitySubscore(t *testing.T) {
 			if !approx(got.Value, tt.wantVal) {
 				t.Fatalf("value = %v, want %v", got.Value, tt.wantVal)
 			}
-			if !approx(got.Confidence, tt.wantConf) {
-				t.Fatalf("confidence = %v, want %v", got.Confidence, tt.wantConf)
+			if !approx(got.Support, tt.wantSupport) {
+				t.Fatalf("support = %v, want %v", got.Support, tt.wantSupport)
 			}
 		})
 	}
 }
 
-// TestConfidenceRisesWithSamples is the low-confidence-at-low-n property: the
-// engagement subscore's confidence increases monotonically with benchmark
-// sample size and is low at the bootstrap sample size.
-func TestConfidenceRisesWithSamples(t *testing.T) {
-	t.Parallel()
-
-	snap := connector.Snapshot{
+// engagedSnapshot is a snapshot with posts and a follower base, so the engagement
+// subscore has something to place against a benchmark.
+func engagedSnapshot() connector.Snapshot {
+	return connector.Snapshot{
 		Platform:  connector.PlatformYouTube,
 		Followers: 50_000,
 		Posts:     []connector.Post{{Likes: 1_000, Comments: 50}},
 	}
+}
+
+// TestConfidenceRisesWithSamples is the low-confidence-at-low-n property, and it
+// now applies ONLY to a corpus benchmark: confidence rises with the number of
+// DISTINCT INFLUENCERS actually observed in the cell. A sample count is a
+// confidence's only legitimate source.
+func TestConfidenceRisesWithSamples(t *testing.T) {
+	t.Parallel()
+
+	snap := engagedSnapshot()
 	b := benchFor(t, tierMicro)
+	b.Source = SourceCorpus
 
 	prev := -1.0
 	for _, n := range []int{1, 10, 30, 100, 1_000, 10_000} {
 		b.SampleSize = n
-		got := engagementSubscore([]connector.Snapshot{snap}, snap.Followers, b).Confidence
-		if got <= prev {
-			t.Fatalf("confidence did not rise at n=%d: %v <= %v", n, got, prev)
+		got := engagementSubscore([]connector.Snapshot{snap}, snap.Followers, b)
+		if got.Support <= prev {
+			t.Fatalf("confidence did not rise at n=%d: %v <= %v", n, got.Support, prev)
 		}
-		prev = got
+		if got.SupportKind != contract.SupportConfidence || got.Basis != contract.BasisCorpus {
+			t.Fatalf("corpus subscore = (%q,%q), want (corpus, confidence)", got.Basis, got.SupportKind)
+		}
+		prev = got.Support
+	}
+}
+
+// TestBootstrapBandCountsNoSamples is the FABRICATED-n guarantee. A bootstrap band
+// rests on ZERO observations, so:
+//
+//   - its SampleSize is 0 (persisted NULL), not a nominal 10; and
+//   - the subscore built on it takes the named BootstrapPriorSupport constant,
+//     stamped SupportPrior — it is NOT run through confidenceForSamples, which would
+//     turn an invented sample count into a customer-facing "confidence".
+//
+// The old code set bootstrapSampleSize = 10 and shipped confidenceForSamples(10) ≈
+// 0.25 as a measured confidence. The 0.25 survives; the fake n does not.
+func TestBootstrapBandCountsNoSamples(t *testing.T) {
+	t.Parallel()
+
+	snap := engagedSnapshot()
+	for _, bb := range BootstrapBenchmarks() {
+		bb := bb
+		t.Run(bb.Tier, func(t *testing.T) {
+			t.Parallel()
+			if bb.Benchmark.SampleSize != 0 {
+				t.Fatalf("bootstrap sample size = %d, want 0: no observations exist behind a reference band",
+					bb.Benchmark.SampleSize)
+			}
+			if bb.Benchmark.Source != SourceBootstrap {
+				t.Fatalf("source = %q, want bootstrap", bb.Benchmark.Source)
+			}
+
+			got := engagementSubscore([]connector.Snapshot{snap}, snap.Followers, bb.Benchmark)
+			if !approx(got.Support, BootstrapPriorSupport) {
+				t.Fatalf("support = %v, want the named prior %v", got.Support, BootstrapPriorSupport)
+			}
+			if got.SupportKind != contract.SupportPrior {
+				t.Fatalf("support kind = %q, want %q — a prior must never be dressed as a measurement",
+					got.SupportKind, contract.SupportPrior)
+			}
+			if got.Basis != contract.BasisClosedForm {
+				t.Fatalf("basis = %q, want closed_form: a reference ladder is arithmetic, not a corpus percentile", got.Basis)
+			}
+			// And the prior is genuinely low: the band must never look like evidence.
+			if got.Support >= 0.3 {
+				t.Fatalf("bootstrap prior = %v, want < 0.3 (low)", got.Support)
+			}
+		})
+	}
+}
+
+// TestSubscoreBasisIsAlwaysStamped pins defect C: every subscore must declare what
+// produced it and what its support number means, so a customer can tell a
+// closed-form proxy from a corpus percentile from a trained model.
+func TestSubscoreBasisIsAlwaysStamped(t *testing.T) {
+	t.Parallel()
+
+	in := baseInput()
+	got, err := Compute(in)
+	if err != nil {
+		t.Fatalf("compute: %v", err)
+	}
+	subs := map[string]contract.Subscore{
+		"reach":        got.Reach,
+		"engagement":   got.EngagementQuality,
+		"authenticity": got.Authenticity,
+		"consistency":  got.Consistency,
+		"content":      got.ContentQuality,
+	}
+	validBasis := map[string]bool{contract.BasisClosedForm: true, contract.BasisCorpus: true}
+	validKind := map[string]bool{
+		contract.SupportCoverage:   true,
+		contract.SupportPrior:      true,
+		contract.SupportConfidence: true,
+		contract.SupportNone:       true,
+	}
+	for name, s := range subs {
+		if !validBasis[s.Basis] && !strings.HasPrefix(s.Basis, contract.BasisModelPrefix) {
+			t.Fatalf("%s basis = %q, want closed_form | corpus | model:<version>", name, s.Basis)
+		}
+		if !validKind[s.SupportKind] {
+			t.Fatalf("%s support kind = %q, want coverage | prior | confidence | none", name, s.SupportKind)
+		}
 	}
 
-	b.SampleSize = bootstrapSampleSize
-	if c := engagementSubscore([]connector.Snapshot{snap}, snap.Followers, b).Confidence; c >= 0.3 {
-		t.Fatalf("bootstrap confidence = %v, want < 0.3 (low)", c)
+	// The content subscore's support is postCount/10 — DATA COVERAGE. Three posts in
+	// baseInput means 0.3 of the coverage the proxy can use, and it must say so
+	// rather than call the number a confidence.
+	if got.ContentQuality.SupportKind != contract.SupportCoverage {
+		t.Fatalf("content support kind = %q, want coverage — postCount/10 is not a confidence",
+			got.ContentQuality.SupportKind)
+	}
+	if !approx(got.ContentQuality.Support, 0.3) {
+		t.Fatalf("content coverage = %v, want 0.3 (3 of 10 posts)", got.ContentQuality.Support)
+	}
+	// Ten posts saturate coverage at 1.0 — and the proxy is exactly as unvalidated as
+	// it was at one post. Full coverage is not a claim of correctness.
+	many := make([]connector.Post, 10)
+	for i := range many {
+		many[i] = connector.Post{Likes: 100, Comments: 5}
+	}
+	saturated := contentSubscore([]connector.Snapshot{{Posts: many}})
+	if !approx(saturated.Support, 1) || saturated.SupportKind != contract.SupportCoverage {
+		t.Fatalf("saturated content = %+v, want coverage 1.0", saturated)
+	}
+}
+
+// TestAuthenticityBasisNamesTheModel pins that a promoted champion's output is
+// labelled with its model version, so it is never mistaken for the arithmetic blend
+// it supersedes (or the other way round).
+func TestAuthenticityBasisNamesTheModel(t *testing.T) {
+	t.Parallel()
+
+	refined := authenticitySubscore(contract.FraudInput{
+		Present: true, Confidence: 0.9, RefinedScore: ptr(75.0), ModelVersion: "fraud-2026-06-01",
+	})
+	if refined.Basis != "model:fraud-2026-06-01" {
+		t.Fatalf("basis = %q, want model:fraud-2026-06-01", refined.Basis)
+	}
+	if refined.SupportKind != contract.SupportConfidence {
+		t.Fatalf("support kind = %q, want confidence", refined.SupportKind)
+	}
+
+	heuristic := authenticitySubscore(contract.FraudInput{Present: true, RiskScore: ptr(10.0), Confidence: 0.8})
+	if heuristic.Basis != contract.BasisClosedForm {
+		t.Fatalf("heuristic basis = %q, want closed_form — an arithmetic blend is not a model", heuristic.Basis)
 	}
 }
 
@@ -263,7 +393,7 @@ func TestConfidenceRisesWithSamples(t *testing.T) {
 // of raw Values with confidence tracked in a parallel number that never touched
 // the score.
 func effective(s contract.Subscore) float64 {
-	return neutralScore + s.Confidence*(s.Value-neutralScore)
+	return neutralScore + s.Support*(s.Value-neutralScore)
 }
 
 // TestComputeIsolatesEachWeight sets one weight to 1 and the rest to 0, so the
@@ -357,8 +487,8 @@ func TestComputeDropsZeroConfidenceSubscore(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
-	if got.Authenticity.Confidence != 0 {
-		t.Fatalf("authenticity confidence = %v, want 0 (unmeasured)", got.Authenticity.Confidence)
+	if got.Authenticity.Support != 0 {
+		t.Fatalf("authenticity support = %v, want 0 (unmeasured)", got.Authenticity.Support)
 	}
 
 	want := effective(got.Reach) // 50 + 0.5*(100-50) = 75
@@ -457,7 +587,7 @@ func TestConsistencyNeedsData(t *testing.T) {
 	t.Parallel()
 
 	bare := []connector.Snapshot{{Platform: connector.PlatformYouTube, Followers: 10_000}}
-	if s := consistencySubscore(bare); s.Confidence != 0 || !approx(s.Value, 50) {
+	if s := consistencySubscore(bare); s.Support != 0 || !approx(s.Value, 50) {
 		t.Fatalf("bare consistency = %+v, want neutral zero-confidence", s)
 	}
 
@@ -473,8 +603,8 @@ func TestConsistencyNeedsData(t *testing.T) {
 		},
 	}}
 	s := consistencySubscore(steady)
-	if s.Confidence <= 0 {
-		t.Fatalf("steady consistency confidence = %v, want > 0", s.Confidence)
+	if s.Support <= 0 {
+		t.Fatalf("steady consistency coverage = %v, want > 0", s.Support)
 	}
 	if s.Value < 90 {
 		t.Fatalf("steady growth should score high, got %v", s.Value)
@@ -511,7 +641,7 @@ func TestContentDepthRewardsInteraction(t *testing.T) {
 	if contentSubscore(deep).Value <= contentSubscore(shallow).Value {
 		t.Fatalf("deep interaction should outscore shallow")
 	}
-	if s := contentSubscore(nil); s.Confidence != 0 {
+	if s := contentSubscore(nil); s.Support != 0 {
 		t.Fatalf("no posts should be zero-confidence, got %+v", s)
 	}
 }

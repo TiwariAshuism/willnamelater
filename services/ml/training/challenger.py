@@ -192,15 +192,64 @@ def train_fraud_challenger(
 def train_reach_challenger(
     features, targets, feature_order, *, seed: int = SEED, rounds: int = 100
 ) -> ReachChallenger:
-    """Fit the P10 / P50 / P90 reach quantile regressors on the given slice."""
+    """Fit the P10 / P50 / P90 reach quantile regressors on the given slice.
+
+    **All three heads train with pinball loss on the SAME SINGLE label: the
+    account's median reach.** The band they produce is therefore CROSS-ACCOUNT
+    PREDICTIVE UNCERTAINTY — "given what we can see about an account like this,
+    the reach we expect lands in [p10, p90]". That is the only quantity a brand
+    can act on, because a brand is deciding about an account it has not booked.
+
+    It is tempting to instead train each head on that account's OWN observed
+    p10 / p50 / p90 across its posts. **Do not.** Those are two different
+    quantities, and swapping them is silent:
+
+    - Per-account quantiles measure WITHIN-ACCOUNT POST SPREAD (how much this
+      creator's posts vary), which is systematically NARROWER than the
+      uncertainty of a prediction about an unseen account.
+    - The swap makes the interval look tight and confident. G1's coverage check
+      cannot catch it: the model is then well calibrated for the wrong question,
+      so coverage lands inside the band and the gate goes green while the
+      shipped interval understates the real risk to the buyer.
+
+    Within-account spread may be persisted and reported SEPARATELY as a
+    MEASUREMENT DISCLOSURE ("this creator's own posts ranged X-Y") — it is
+    carried on ``ReachDataset.within_account_spread`` and surfaced in the
+    validation report under ``measurement_disclosure``. It must NEVER be
+    presented as the model's predictive interval.
+
+    ``targets`` must therefore be a flat sequence of scalars. A per-row triple
+    is rejected rather than quietly reshaped.
+    """
     import lightgbm as lgb
 
-    dtrain = lgb.Dataset(_as_matrix(features), label=list(targets))
+    labels = _scalar_labels(targets)
+    dtrain = lgb.Dataset(_as_matrix(features), label=labels)
     boosters_by_q = {}
     for q in REACH_QUANTILES:
         params = {**_REACH_PARAMS, "alpha": q, "seed": seed}
         boosters_by_q[q] = lgb.train(params, dtrain, num_boost_round=rounds)
     return ReachChallenger(boosters_by_q, feature_order)
+
+
+def _scalar_labels(targets) -> list[float]:
+    """Reject any attempt to hand the quantile heads per-row (p10, p50, p90).
+
+    This is a structural guard, not a type nicety: a caller that passes triples
+    here would train the heads on within-account spread and ship it as the
+    model's predictive interval, and no gate downstream can tell the difference.
+    """
+    labels: list[float] = []
+    for i, t in enumerate(targets):
+        if isinstance(t, (list, tuple, dict, set)):
+            raise TypeError(
+                "reach targets must be the SINGLE median reach label per row; got a "
+                f"sequence at index {i}. Training the P10/P90 heads on per-account "
+                "quantiles swaps cross-account predictive uncertainty for "
+                "within-account post spread — see train_reach_challenger.__doc__."
+            )
+        labels.append(float(t))
+    return labels
 
 
 def reach_bands(preds: list[ReachPrediction]):

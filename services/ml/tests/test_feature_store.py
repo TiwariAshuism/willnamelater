@@ -7,11 +7,16 @@ business data — they exercise the projection mechanics only.
 import math
 
 from training.feature_store import (
+    FRAUD_EVIDENCE_HEURISTIC_ECHO,
     REACH_FEATURE_ORDER,
     to_fraud_dataset,
     to_reach_dataset,
 )
 from training.features import FEATURE_ORDER
+
+# A label kind the heuristic could not have produced on its own — an admin who
+# saw the platform actually take the account down observed something new.
+OBSERVED = "platform_enforcement_action"
 
 
 def _row(**over):
@@ -38,11 +43,52 @@ def _row(**over):
 
 
 def test_fraud_dataset_keeps_only_rows_with_a_fraud_label():
-    rows = [_row(fraud_label=True), _row(fraud_label=None), _row(fraud_label=False)]
+    rows = [
+        _row(fraud_label=True, fraud_label_evidence=OBSERVED),
+        _row(fraud_label=None, fraud_label_evidence=OBSERVED),
+        _row(fraud_label=False, fraud_label_evidence=OBSERVED),
+    ]
     ds = to_fraud_dataset(rows)
     assert ds.targets == [1, 0]
     assert len(ds.features) == 2
     assert len(ds.features[0]) == len(FEATURE_ORDER)
+
+
+def test_heuristic_echo_labels_never_become_y():
+    """`none_reviewed_heuristic_only` means the admin observed NOTHING the
+    heuristic had not already computed. Such a label IS the heuristic's output,
+    and training on it produces a distillation that every gate then certifies as
+    an independent model. It is UNLABELLED — not a positive, and not a negative.
+    """
+    rows = [
+        _row(fraud_label=True, fraud_label_evidence=FRAUD_EVIDENCE_HEURISTIC_ECHO),
+        _row(fraud_label=False, fraud_label_evidence=FRAUD_EVIDENCE_HEURISTIC_ECHO),
+        _row(fraud_label=True, fraud_label_evidence=OBSERVED),
+    ]
+    ds = to_fraud_dataset(rows)
+    assert ds.targets == [1]  # only the observed row survives
+    assert ds.excluded["heuristic_echo"] == 2  # and the echoes are counted, not y=0
+
+
+def test_missing_evidence_is_not_trainable():
+    # Absence of a stated observation is not an observation. A label with no
+    # evidence kind (or an unknown one) is UNLABELLED, never a negative.
+    rows = [
+        _row(fraud_label=True),                                  # field absent
+        _row(fraud_label=False, fraud_label_evidence=None),      # explicitly null
+        _row(fraud_label=True, fraud_label_evidence="vibes"),    # not in the enum
+    ]
+    ds = to_fraud_dataset(rows)
+    assert ds.targets == []
+    assert ds.features == []
+    assert ds.excluded["evidence_missing_or_unknown"] == 3
+
+
+def test_fraud_dataset_carries_the_influencer_group_key():
+    ds = to_fraud_dataset(
+        [_row(fraud_label=True, fraud_label_evidence=OBSERVED, influencer_id="inf-9")]
+    )
+    assert ds.influencer_ids == ["inf-9"]
 
 
 def test_reach_dataset_keeps_only_rows_with_a_reach_label():
@@ -51,6 +97,22 @@ def test_reach_dataset_keeps_only_rows_with_a_reach_label():
     assert ds.targets == [15234.0]
     assert len(ds.features) == 1
     assert len(ds.features[0]) == len(REACH_FEATURE_ORDER)
+    assert ds.influencer_ids == ["i1"]
+
+
+def test_within_account_spread_is_a_disclosure_never_a_target():
+    """The reach target is the SINGLE median, even when the export states the
+    account's own p10/p90. Training the quantile heads on those would swap
+    cross-account predictive uncertainty for within-account post spread — a
+    silently narrower interval that G1's coverage check cannot catch.
+    """
+    ds = to_reach_dataset([
+        _row(reach_label=15234, reach_label_p10=9000, reach_label_p90=21000),
+    ])
+    assert ds.targets == [15234.0]  # the median, and only the median
+    assert ds.within_account_spread == [
+        {"within_account_p10": 9000.0, "within_account_p90": 21000.0}
+    ]
 
 
 def test_missing_feature_becomes_nan_never_zero():
@@ -61,6 +123,8 @@ def test_missing_feature_becomes_nan_never_zero():
 
 
 def test_strata_default_unknown_when_absent():
-    ds = to_fraud_dataset([_row(fraud_label=True, features={"niche": None})])
+    ds = to_fraud_dataset([
+        _row(fraud_label=True, fraud_label_evidence=OBSERVED, features={"niche": None})
+    ])
     assert ds.strata[0].tier == "unknown"
     assert ds.strata[0].niche == "unknown"

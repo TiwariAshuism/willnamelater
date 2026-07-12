@@ -12,6 +12,7 @@ package contract
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -100,13 +101,104 @@ func DeriveVerificationTier(snaps []connector.Snapshot) string {
 	return VerificationVerified
 }
 
-// Subscore is one component of the composite: its value on a 0..100 scale and
-// the confidence in [0,1] that qualifies it. Confidence stays low while the
-// evidence behind the value is thin — a bootstrap benchmark with few samples, a
-// missing fraud pass, or too few posts to judge cadence.
+// The Basis names WHAT PRODUCED a subscore's value, so a reader can tell an
+// arithmetic proxy apart from a real percentile against a reference population
+// and from a trained model's output. Without it every subscore looks alike on the
+// wire, and a closed-form formula reads as if it were a measurement.
+const (
+	// BasisClosedForm: the value is arithmetic over the audit's own data (a log
+	// scale over follower count, a ratio of comments to likes, a ladder against
+	// fixed reference constants). It is a PROXY. Nothing about it has been
+	// validated against an outcome.
+	BasisClosedForm = "closed_form"
+	// BasisCorpus: the value is the observed metric's percentile within a
+	// reference population aggregated from real, distinct, live-API-sourced
+	// audits.
+	BasisCorpus = "corpus"
+	// BasisModelPrefix prefixes a trained model's basis; ModelBasis builds it.
+	BasisModelPrefix = "model:"
+)
+
+// ModelBasis renders the basis of a subscore produced by a trained model at a
+// given version, e.g. "model:fraud-2026-06-01". An unversioned champion is
+// labelled "model:unversioned" rather than being passed off as closed form: the
+// reader still learns a model produced the number.
+func ModelBasis(version string) string {
+	if version == "" {
+		return BasisModelPrefix + "unversioned"
+	}
+	return BasisModelPrefix + version
+}
+
+// The SupportKind names WHAT KIND OF CLAIM a subscore's Support number makes.
+// The three are NOT interchangeable, and collapsing them into one word
+// ("confidence") is how a data-coverage count comes to be read as a statement
+// about accuracy:
+const (
+	// SupportCoverage: the share of the data the closed-form proxy wanted that we
+	// actually had (e.g. posts observed / posts needed). It says NOTHING about
+	// whether the proxy tracks anything real — ten posts make the coverage full
+	// and leave the proxy exactly as unvalidated as it was at one.
+	SupportCoverage = "coverage"
+	// SupportPrior: a documented constant discount resting on NO observations at
+	// all — a reference band, or a known-weak proxy deliberately held down. It is
+	// a judgement we wrote into the code, not a measurement.
+	SupportPrior = "prior"
+	// SupportConfidence: a genuine statistical claim — the sample size of a
+	// reference population actually observed, or a model's own calibrated
+	// confidence. This is the ONLY kind that may be read as "how sure are we".
+	SupportConfidence = "confidence"
+	// SupportNone: the component was not measured. Support is 0 and the component
+	// is dropped from the composite with its weight renormalized away.
+	SupportNone = "none"
+)
+
+// Subscore is one component of the composite: its value on a 0..100 scale, the
+// Basis that produced it, and a Support in [0,1] whose MEANING is given by
+// SupportKind.
+//
+// Support (not "confidence") is the single number the composite shrinks the value
+// toward neutral by, and a Support of 0 drops the component entirely. It replaces
+// a field called Confidence that conflated three different things — most starkly
+// the content subscore, whose "confidence" was literally postCount/10: a count of
+// how much data we had, saturating at ten posts, asserting nothing whatsoever
+// about whether the proxy predicts anything. Read SupportKind before reading
+// Support.
+//
+// A Subscore decoded from a row persisted before this type existed carries its
+// legacy confidence in Support with an EMPTY Basis and SupportKind — unrecorded,
+// rather than back-filled with a label nobody actually stamped (see UnmarshalJSON).
 type Subscore struct {
-	Value      float64 `json:"value"`
-	Confidence float64 `json:"confidence"`
+	Value       float64 `json:"value"`
+	Basis       string  `json:"basis,omitempty"`
+	Support     float64 `json:"support"`
+	SupportKind string  `json:"support_kind,omitempty"`
+}
+
+// UnmarshalJSON decodes a subscore, accepting the legacy {"value","confidence"}
+// shape written before basis and support kind existed. The legacy number moves
+// into Support and the basis/kind stay EMPTY: the row genuinely does not record
+// what produced the value or what the number meant, and guessing a label here
+// would invent provenance that was never observed.
+func (s *Subscore) UnmarshalJSON(b []byte) error {
+	var raw struct {
+		Value       float64  `json:"value"`
+		Basis       string   `json:"basis"`
+		Support     *float64 `json:"support"`
+		SupportKind string   `json:"support_kind"`
+		Confidence  *float64 `json:"confidence"` // legacy
+	}
+	if err := json.Unmarshal(b, &raw); err != nil {
+		return err
+	}
+	*s = Subscore{Value: raw.Value, Basis: raw.Basis, SupportKind: raw.SupportKind}
+	switch {
+	case raw.Support != nil:
+		s.Support = *raw.Support
+	case raw.Confidence != nil:
+		s.Support = *raw.Confidence
+	}
+	return nil
 }
 
 // Score is the computed influence + authenticity result for one audit. Overall
@@ -126,7 +218,11 @@ type Score struct {
 	Consistency       Subscore
 	ContentQuality    Subscore
 
-	// OverallConfidence is the weight-blended confidence across the subscores.
+	// OverallConfidence is the weight-blended SUPPORT across the subscores. It
+	// mixes support kinds (coverage, prior, confidence), so it is a summary of how
+	// much stands behind the composite, NOT a statistical confidence in it. The
+	// per-subscore Basis/SupportKind are the honest reading; this number exists
+	// because the score API has carried a single "confidence" field since v1.
 	OverallConfidence float64
 
 	WeightsVersion   int
