@@ -327,6 +327,37 @@ func (r reportAuditReader) AuditView(ctx context.Context, auditID string) (repor
 	}, nil
 }
 
+// reportCaller adapts the authenticated caller onto the report module's CallerID
+// port. The report module needs the caller's identity (not just a caller-scoped
+// read) to enforce the creator-ownership gate on publish and share: the user who
+// REQUESTED an audit and the creator who OWNS the audited account are different
+// people, and only the latter may direct their Instagram Graph data anywhere.
+type reportCaller struct{}
+
+func (reportCaller) CallerID(ctx context.Context) (uuid.UUID, error) {
+	id, ok := auth.UserID(ctx)
+	if !ok {
+		return uuid.Nil, errs.New(errs.KindUnauthorized, "app.unauthenticated", "authentication is required")
+	}
+	return id, nil
+}
+
+// reportOwnerReader adapts influencer.AuditProfileOf onto the report module's
+// OwnerReader port, exposing just the connected-account owner. This is the
+// linchpin of the Meta Platform Terms §3.c gate: a report built from a creator's
+// Graph Insights may only be published or shared on that creator's own direction,
+// so the report service compares the caller against this owner. A profile nobody
+// has connected has a nil owner and cannot be published or shared at all.
+type reportOwnerReader struct{ i *influencer.Module }
+
+func (r reportOwnerReader) ConnectedOwnerOf(ctx context.Context, influencerID uuid.UUID) (reportport.ConnectedOwner, error) {
+	profile, err := r.i.AuditProfileOf(ctx, influencerID)
+	if err != nil {
+		return reportport.ConnectedOwner{}, err
+	}
+	return reportport.ConnectedOwner{OwnerUserID: profile.OwnerUserID}, nil
+}
+
 // reportScoreReader adapts scoring.Module.ReportView onto the report module's
 // ScoreReader port. A not-found score (a fully failed audit, or an influencer
 // never scored) is not an error to the report: it is disclosed as an absent

@@ -19,6 +19,29 @@ type PublishResult struct {
 	ExpiresAt string `json:"expires_at,omitempty"`
 }
 
+// ShareRequest is the body of POST /audits/:id/report/share: a creator's express
+// direction to disclose their published report to a named third party for a
+// stated purpose. Both fields are required — Meta Platform Terms §3.c authorizes
+// sharing only "with the third party for the purposes as specified in the User's
+// direction", so an unnamed recipient or an unstated purpose is not a direction
+// we can act on.
+type ShareRequest struct {
+	// Recipient names the brand or agency the report may be disclosed to.
+	Recipient string `json:"recipient"`
+	// Purpose states what the recipient may use the report for.
+	Purpose string `json:"purpose"`
+}
+
+// ShareResult is the receipt for a recorded share grant: the evidence trail that
+// the creator directed this disclosure. The grant is time-bounded and the creator
+// can withdraw it at any time.
+type ShareResult struct {
+	GrantID   string `json:"grant_id"`
+	Recipient string `json:"recipient"`
+	Purpose   string `json:"purpose"`
+	ExpiresAt string `json:"expires_at"`
+}
+
 // PublicBadge is the unauthenticated projection served at GET /reports/:slug. It
 // is a deliberately-limited snapshot captured at publish time — the headline
 // score and its context, never the private advisory narrative or the account

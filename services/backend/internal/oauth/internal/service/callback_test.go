@@ -57,6 +57,10 @@ func (f fakeIdentity) UserID(context.Context) (uuid.UUID, error) { return f.user
 type fakeTokenStore struct {
 	upserts int
 	stored  []model.EncryptedToken
+	// forgotten records the (platform, providerUserID) a deletion callback erased.
+	forgotten  [][2]string
+	forgetUser uuid.UUID
+	forgetOK   bool
 }
 
 func (f *fakeTokenStore) Upsert(_ context.Context, tok model.EncryptedToken) error {
@@ -71,6 +75,11 @@ func (f *fakeTokenStore) ListByUser(context.Context, uuid.UUID) ([]model.Connect
 
 func (f *fakeTokenStore) DeleteByUserPlatform(context.Context, uuid.UUID, string) (int64, error) {
 	return 0, nil
+}
+
+func (f *fakeTokenStore) DeleteByProviderUser(_ context.Context, platform, providerUserID string) (uuid.UUID, bool, error) {
+	f.forgotten = append(f.forgotten, [2]string{platform, providerUserID})
+	return f.forgetUser, f.forgetOK, nil
 }
 
 func (f *fakeTokenStore) ListSealed(context.Context, uuid.UUID) ([]model.EncryptedToken, error) {

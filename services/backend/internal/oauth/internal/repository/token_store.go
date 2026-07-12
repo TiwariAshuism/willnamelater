@@ -28,7 +28,7 @@ const pgUniqueViolation = "23505"
 // layer. There is deliberately no plaintext token column, so none is written or
 // read here.
 const (
-	insertColumns     = "user_id, platform, provider_account_id, access_token_enc, refresh_token_enc, dek_wrapped, scopes, access_expires_at"
+	insertColumns     = "user_id, platform, provider_account_id, provider_user_id, access_token_enc, refresh_token_enc, dek_wrapped, scopes, access_expires_at"
 	connectionColumns = "platform, provider_account_id, scopes, created_at, access_expires_at"
 	// sealedColumns projects every field needed to reconstruct and decrypt a
 	// token, for the audit path that must present a live credential to a
@@ -62,8 +62,9 @@ func NewTokenStore(pool *db.Pool) service.TokenStore {
 // supports.
 func (s *tokenStore) Upsert(ctx context.Context, tok model.EncryptedToken) error {
 	const q = "INSERT INTO oauth_token (" + insertColumns + ") " +
-		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8) " +
+		"VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9) " +
 		"ON CONFLICT (user_id, platform, provider_account_id) DO UPDATE SET " +
+		"provider_user_id = COALESCE(EXCLUDED.provider_user_id, oauth_token.provider_user_id), " +
 		"access_token_enc = EXCLUDED.access_token_enc, " +
 		"refresh_token_enc = EXCLUDED.refresh_token_enc, " +
 		"dek_wrapped = EXCLUDED.dek_wrapped, " +
@@ -74,6 +75,7 @@ func (s *tokenStore) Upsert(ctx context.Context, tok model.EncryptedToken) error
 		tok.UserID,
 		tok.Platform,
 		tok.ProviderAccountID,
+		nullString(tok.ProviderUserID),
 		tok.AccessTokenEnc,
 		tok.RefreshTokenEnc,
 		tok.DEKWrapped,
@@ -166,4 +168,51 @@ func (s *tokenStore) DeleteByUserPlatform(ctx context.Context, userID uuid.UUID,
 			"could not disconnect the provider")
 	}
 	return tag.RowsAffected(), nil
+}
+
+// DeleteByProviderUser erases every token belonging to the provider's app-scoped
+// user and reports the owning platform user, so the caller can cascade the
+// deletion to the data derived from those tokens.
+//
+// This is the path Meta's deauthorize and data-deletion callbacks take: they name
+// a person by app-scoped id, not by our user id, and they arrive unauthenticated
+// (the signed_request is the credential). found is false — with no error — when no
+// connection matches, so a callback for someone who never connected, or who
+// already disconnected, succeeds as the no-op it is rather than 500-ing at Meta.
+func (s *tokenStore) DeleteByProviderUser(ctx context.Context, platform, providerUserID string) (uuid.UUID, bool, error) {
+	const q = `DELETE FROM oauth_token
+		WHERE platform = $1 AND provider_user_id = $2
+		RETURNING user_id`
+
+	rows, err := s.pool.Query(ctx, q, platform, providerUserID)
+	if err != nil {
+		return uuid.Nil, false, errs.Wrap(err, errs.KindUnavailable, "oauth.token_delete_failed",
+			"could not delete the connection")
+	}
+	defer rows.Close()
+
+	var userID uuid.UUID
+	found := false
+	for rows.Next() {
+		if err := rows.Scan(&userID); err != nil {
+			return uuid.Nil, false, errs.Wrap(err, errs.KindUnavailable, "oauth.token_delete_failed",
+				"could not delete the connection")
+		}
+		found = true
+	}
+	if err := rows.Err(); err != nil {
+		return uuid.Nil, false, errs.Wrap(err, errs.KindUnavailable, "oauth.token_delete_failed",
+			"could not delete the connection")
+	}
+	return userID, found, nil
+}
+
+// nullString maps the empty string to nil so an absent provider user id is stored
+// as SQL NULL rather than as an empty string that a lookup could accidentally
+// match.
+func nullString(s string) *string {
+	if s == "" {
+		return nil
+	}
+	return &s
 }

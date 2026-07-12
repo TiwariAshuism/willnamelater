@@ -67,7 +67,7 @@ var providers = map[string]providerMeta{
 		// account id, which hangs off the user's managed Pages. This traversal
 		// (granted by pages_show_list + instagram_basic) resolves it; a login with
 		// no linked IG business account has no usable id and is rejected honestly.
-		accountPath: "/me/accounts?fields=instagram_business_account{id,username}",
+		accountPath: "/me?fields=id,accounts{instagram_business_account{id,username}}",
 	},
 }
 

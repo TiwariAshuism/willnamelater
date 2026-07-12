@@ -37,6 +37,36 @@ type AuditReader interface {
 	AuditView(ctx context.Context, auditID string) (AuditView, error)
 }
 
+// CallerID resolves the authenticated caller. The report module needs the
+// caller's identity — not just a caller-scoped read — to answer a question
+// AuditReader cannot: is the person publishing or sharing this report the CREATOR
+// WHO OWNS the connected account it was built from? The user who requested an
+// audit and the creator who owns the audited account are different people (a
+// brand may audit a creator it does not own), and only the latter may direct
+// Instagram Graph data anywhere. The real implementation adapts auth.UserID.
+type CallerID interface {
+	CallerID(ctx context.Context) (uuid.UUID, error)
+}
+
+// ConnectedOwner reports which user owns the connected (OAuth-authenticated)
+// account an influencer's data came from, if any. OwnerUserID is nil when no
+// creator has connected the account — a public/CSV-sourced profile nobody has
+// claimed.
+//
+// This is the linchpin of the Meta Platform Terms §3.c "the User expressly
+// directs" requirement: a report built from a creator's Graph Insights may only
+// be published or shared on that creator's own direction, so the service compares
+// the caller against this owner. The real implementation is the influencer module
+// (influencer.user_id), adapted by the composition root.
+type ConnectedOwner struct {
+	OwnerUserID *uuid.UUID
+}
+
+// OwnerReader resolves the connected-account owner for an influencer.
+type OwnerReader interface {
+	ConnectedOwnerOf(ctx context.Context, influencerID uuid.UUID) (ConnectedOwner, error)
+}
+
 // Subscore is one dimension of the composite score.
 type Subscore struct {
 	Name       string

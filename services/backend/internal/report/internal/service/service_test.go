@@ -66,6 +66,12 @@ type fakeRepo struct {
 	get               PublishedReport
 	found             bool
 	upsertErr, getErr error
+
+	reportID     uuid.UUID
+	reportFound  bool
+	revokedAudit uuid.UUID
+	revokedUser  uuid.UUID
+	granted      ShareGrant
 }
 
 func (f *fakeRepo) UpsertReport(_ context.Context, rec ReportRecord) (string, error) {
@@ -81,6 +87,46 @@ func (f *fakeRepo) UpsertReport(_ context.Context, rec ReportRecord) (string, er
 
 func (f *fakeRepo) GetByPublicSlug(_ context.Context, _ string) (PublishedReport, bool, error) {
 	return f.get, f.found, f.getErr
+}
+
+func (f *fakeRepo) ReportIDOf(_ context.Context, _ uuid.UUID) (uuid.UUID, bool, error) {
+	return f.reportID, f.reportFound, nil
+}
+
+func (f *fakeRepo) RevokeByAuditJob(_ context.Context, auditJobID uuid.UUID, _ time.Time) error {
+	f.revokedAudit = auditJobID
+	return nil
+}
+
+func (f *fakeRepo) InsertShareGrant(_ context.Context, g ShareGrant) (uuid.UUID, error) {
+	f.granted = g
+	return uuid.MustParse("33333333-3333-3333-3333-333333333333"), nil
+}
+
+func (f *fakeRepo) RevokeGrantsByUser(_ context.Context, userID uuid.UUID, _ time.Time) (int64, error) {
+	f.revokedUser = userID
+	return 1, nil
+}
+
+// fakeCaller is the authenticated caller. ownerID() is the creator who connected
+// the account; any other id is somebody else (a brand, say) who must not be able
+// to publish or share that creator's Graph data.
+type fakeCaller struct {
+	id  uuid.UUID
+	err error
+}
+
+func (f fakeCaller) CallerID(context.Context) (uuid.UUID, error) { return f.id, f.err }
+
+// fakeOwner reports who connected the audited account. A nil owner is an
+// unclaimed profile — nobody who could direct a disclosure.
+type fakeOwner struct {
+	owner *uuid.UUID
+	err   error
+}
+
+func (f fakeOwner) ConnectedOwnerOf(context.Context, uuid.UUID) (port.ConnectedOwner, error) {
+	return port.ConnectedOwner{OwnerUserID: f.owner}, f.err
 }
 
 type fakeStorage struct {
@@ -108,10 +154,26 @@ func (f *fakeStorage) ShareURL(key string, _ time.Duration) (string, error) {
 func infID() uuid.UUID { return uuid.MustParse("11111111-1111-1111-1111-111111111111") }
 func audID() uuid.UUID { return uuid.MustParse("22222222-2222-2222-2222-222222222222") }
 
+// ownerID is the creator who connected the audited account — the only person who
+// may publish or share a report built from their Instagram Graph data.
+func ownerID() uuid.UUID { return uuid.MustParse("44444444-4444-4444-4444-444444444444") }
+
+// strangerID is somebody else (a brand that merely requested the audit). They may
+// read their own audit, but must never disclose the creator's Graph data.
+func strangerID() uuid.UUID { return uuid.MustParse("55555555-5555-5555-5555-555555555555") }
+
+// ownedByCreator is the default ownership fake: the audited account is connected
+// and owned by ownerID().
+func ownedByCreator() fakeOwner {
+	id := ownerID()
+	return fakeOwner{owner: &id}
+}
+
 // newSvc builds a Service with default (no-op) repo and storage fakes, for the
 // Assemble/PDF tests that do not exercise the publish path.
 func newSvc(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer) *Service {
-	return New(audit, score, narrative, fraud, pdf, &fakeRepo{}, &fakeStorage{})
+	return New(audit, score, narrative, fraud, pdf, &fakeRepo{}, &fakeStorage{},
+		fakeCaller{id: ownerID()}, ownedByCreator())
 }
 
 func fullView() port.AuditView {
@@ -241,6 +303,7 @@ func TestPublishStoresPDFAndPersistsBadge(t *testing.T) {
 		fakeFraud{},
 		&fakePDF{out: []byte("%PDF-1.4 body")},
 		repo, store,
+		fakeCaller{id: ownerID()}, ownedByCreator(),
 	)
 
 	res, err := svc.Publish(context.Background(), audID().String())
@@ -271,6 +334,7 @@ func TestPublishRejectsScorelessAudit(t *testing.T) {
 		fakeFraud{},
 		&fakePDF{out: []byte("x")},
 		&fakeRepo{}, &fakeStorage{},
+		fakeCaller{id: ownerID()}, ownedByCreator(),
 	)
 	if _, err := svc.Publish(context.Background(), audID().String()); errs.KindOf(err) != errs.KindInvalid {
 		t.Fatalf("want invalid publishing a scoreless audit, got %v", err)
@@ -282,7 +346,8 @@ func TestPublicBadgeReturnsSnapshotAndShareLink(t *testing.T) {
 		StorageKey: "reports/x.pdf",
 		Badge:      BadgeSnapshot{Overall: 90, Authenticity: 80, Niche: "fitness", Tier: "mid"},
 	}}
-	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, repo, &fakeStorage{shareURL: "https://s3/x?signed"})
+	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, repo,
+		&fakeStorage{shareURL: "https://s3/x?signed"}, fakeCaller{id: ownerID()}, ownedByCreator())
 
 	badge, err := svc.PublicBadge(context.Background(), "some-slug")
 	if err != nil {
@@ -293,8 +358,161 @@ func TestPublicBadgeReturnsSnapshotAndShareLink(t *testing.T) {
 	}
 }
 
+// --- Creator-directed sharing (Meta Platform Terms §3.c/§3.d) --------------
+
+// newOwnedSvc builds a Service whose audited account is connected and owned by
+// ownerID(), with caller as the authenticated user.
+func newOwnedSvc(repo *fakeRepo, caller uuid.UUID, owner fakeOwner) *Service {
+	return New(
+		fakeAudit{view: fullView()},
+		fakeScore{view: port.ScoreView{Present: true, Overall: 80}},
+		fakeNarrative{},
+		fakeFraud{},
+		&fakePDF{out: []byte("%PDF")},
+		repo, &fakeStorage{},
+		fakeCaller{id: caller}, owner,
+	)
+}
+
+// THE gate. A brand may request an audit of a creator it does not own — the audit
+// read is scoped to the requester and succeeds. But publishing that report
+// discloses the CREATOR's Instagram Graph data, and Meta Platform Terms §3.c
+// permits disclosure only on the direction of the user whose data it is. So a
+// requester who is not the connected-account owner must be refused.
+func TestPublishRefusesANonOwner(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := newOwnedSvc(repo, strangerID(), ownedByCreator())
+
+	_, err := svc.Publish(context.Background(), audID().String())
+	if errs.KindOf(err) != errs.KindForbidden {
+		t.Fatalf("want forbidden publishing someone else's connected account, got %v", err)
+	}
+	if repo.upserted.PublicSlug != "" {
+		t.Fatal("nothing may be published for a non-owner")
+	}
+}
+
+// An unclaimed profile (nobody connected it) has no user who could direct a
+// disclosure, so its report cannot be published at all.
+func TestPublishRefusesAnUnclaimedProfile(t *testing.T) {
+	repo := &fakeRepo{}
+	svc := newOwnedSvc(repo, ownerID(), fakeOwner{owner: nil})
+
+	if _, err := svc.Publish(context.Background(), audID().String()); errs.KindOf(err) != errs.KindForbidden {
+		t.Fatalf("want forbidden publishing an unclaimed profile, got %v", err)
+	}
+}
+
+// A published certificate must expire: §3.d forbids retaining Platform Data once
+// retention is no longer necessary, and a stale reach figure is not a credential.
+func TestPublishSetsAnExpiry(t *testing.T) {
+	repo := &fakeRepo{slug: "s"}
+	svc := newOwnedSvc(repo, ownerID(), ownedByCreator())
+
+	if _, err := svc.Publish(context.Background(), audID().String()); err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+	if repo.upserted.ExpiresAt.IsZero() {
+		t.Fatal("a published badge must carry an expiry, never live forever")
+	}
+	if got := repo.upserted.ExpiresAt.Sub(repo.upserted.GeneratedAt); got != badgeTTL {
+		t.Fatalf("expiry = generated+%v, want generated+%v", got, badgeTTL)
+	}
+}
+
+// Sharing records the creator's express direction: a NAMED recipient and a STATED
+// purpose, time-bounded. Both fields are the §3.c requirement, not decoration.
+func TestShareRecordsTheCreatorsDirection(t *testing.T) {
+	repo := &fakeRepo{reportFound: true, reportID: uuid.MustParse("66666666-6666-6666-6666-666666666666")}
+	svc := newOwnedSvc(repo, ownerID(), ownedByCreator())
+
+	res, err := svc.Share(context.Background(), audID().String(), "  Acme Cosmetics  ", " Q3 campaign vetting ")
+	if err != nil {
+		t.Fatalf("Share: %v", err)
+	}
+	if repo.granted.Recipient != "Acme Cosmetics" || repo.granted.Purpose != "Q3 campaign vetting" {
+		t.Fatalf("recipient/purpose not recorded (and trimmed): %+v", repo.granted)
+	}
+	if repo.granted.GrantedByUserID != ownerID() {
+		t.Fatalf("the grant must record the creator who directed it: %v", repo.granted.GrantedByUserID)
+	}
+	if repo.granted.ExpiresAt.Sub(repo.granted.GrantedAt) != grantTTL {
+		t.Fatal("a share grant must be time-bounded, never perpetual")
+	}
+	if res.GrantID == "" || res.Recipient != "Acme Cosmetics" {
+		t.Fatalf("share receipt wrong: %+v", res)
+	}
+}
+
+// An unnamed recipient or an unstated purpose is not a direction we can act on:
+// §3.c authorizes sharing only "for the purposes as specified in the User's
+// direction". Both must be rejected before anything is recorded.
+func TestShareRequiresRecipientAndPurpose(t *testing.T) {
+	tests := []struct{ name, recipient, purpose string }{
+		{"no recipient", "   ", "vetting"},
+		{"no purpose", "Acme", "  "},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			repo := &fakeRepo{reportFound: true}
+			svc := newOwnedSvc(repo, ownerID(), ownedByCreator())
+
+			if _, err := svc.Share(context.Background(), audID().String(), tt.recipient, tt.purpose); errs.KindOf(err) != errs.KindInvalid {
+				t.Fatalf("want invalid, got %v", err)
+			}
+			if repo.granted.Recipient != "" {
+				t.Fatal("nothing may be recorded for an incomplete direction")
+			}
+		})
+	}
+}
+
+// A non-owner cannot share the creator's data either — same gate as publish.
+func TestShareRefusesANonOwner(t *testing.T) {
+	repo := &fakeRepo{reportFound: true}
+	svc := newOwnedSvc(repo, strangerID(), ownedByCreator())
+
+	if _, err := svc.Share(context.Background(), audID().String(), "Acme", "vetting"); errs.KindOf(err) != errs.KindForbidden {
+		t.Fatalf("want forbidden, got %v", err)
+	}
+	if repo.granted.Recipient != "" {
+		t.Fatal("a non-owner must not record a share grant")
+	}
+}
+
+// Sharing an unpublished report is refused: there is nothing to disclose yet.
+func TestShareRequiresAPublishedReport(t *testing.T) {
+	repo := &fakeRepo{reportFound: false}
+	svc := newOwnedSvc(repo, ownerID(), ownedByCreator())
+
+	if _, err := svc.Share(context.Background(), audID().String(), "Acme", "vetting"); errs.KindOf(err) != errs.KindInvalid {
+		t.Fatalf("want invalid sharing an unpublished report, got %v", err)
+	}
+}
+
+// The creator can withdraw a published report at any time (§3.d "delete promptly
+// on request"); a non-owner cannot.
+func TestRevokeIsOwnerOnly(t *testing.T) {
+	repo := &fakeRepo{}
+	if err := newOwnedSvc(repo, ownerID(), ownedByCreator()).Revoke(context.Background(), audID().String()); err != nil {
+		t.Fatalf("owner revoke: %v", err)
+	}
+	if repo.revokedAudit != audID() {
+		t.Fatal("the owner's revocation must reach the repository")
+	}
+
+	other := &fakeRepo{}
+	if err := newOwnedSvc(other, strangerID(), ownedByCreator()).Revoke(context.Background(), audID().String()); errs.KindOf(err) != errs.KindForbidden {
+		t.Fatalf("want forbidden revoking someone else's report, got %v", err)
+	}
+	if other.revokedAudit != uuid.Nil {
+		t.Fatal("a non-owner must not revoke")
+	}
+}
+
 func TestPublicBadgeUnknownSlugIsNotFound(t *testing.T) {
-	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, &fakeRepo{found: false}, &fakeStorage{})
+	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, &fakeRepo{found: false},
+		&fakeStorage{}, fakeCaller{id: ownerID()}, ownedByCreator())
 	if _, err := svc.PublicBadge(context.Background(), "nope"); errs.KindOf(err) != errs.KindNotFound {
 		t.Fatalf("want not-found for an unknown slug, got %v", err)
 	}

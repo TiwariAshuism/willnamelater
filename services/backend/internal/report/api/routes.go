@@ -28,6 +28,12 @@ type ReportAPI interface {
 	// POST /audits/:id/report/publish
 	PublishReport(ctx context.Context, id string) (render.PublishResult, error)
 
+	// DELETE /audits/:id/report/publish
+	RevokeReport(ctx context.Context, id string) error
+
+	// POST /audits/:id/report/share
+	ShareReport(ctx context.Context, id string, body render.ShareRequest) (render.ShareResult, error)
+
 	// GET /reports/:slug
 	GetPublicBadge(ctx context.Context, slug string) (render.PublicBadge, error)
 }

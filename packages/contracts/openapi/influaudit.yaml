@@ -1200,6 +1200,23 @@ components:
       - provider_account_id
       - scopes
       type: object
+    oauth.DataDeletionResponse:
+      properties:
+        confirmation_code:
+          type: string
+        url:
+          type: string
+      required:
+      - confirmation_code
+      - url
+      type: object
+    oauth.SignedRequest:
+      properties:
+        signed_request:
+          type: string
+      required:
+      - signed_request
+      type: object
     report.FraudBlock:
       properties:
         available:
@@ -1344,6 +1361,32 @@ components:
       - available
       - overall
       - subscores
+      type: object
+    report.ShareRequest:
+      properties:
+        purpose:
+          type: string
+        recipient:
+          type: string
+      required:
+      - purpose
+      - recipient
+      type: object
+    report.ShareResult:
+      properties:
+        expires_at:
+          type: string
+        grant_id:
+          type: string
+        purpose:
+          type: string
+        recipient:
+          type: string
+      required:
+      - expires_at
+      - grant_id
+      - purpose
+      - recipient
       type: object
     report.Subscore:
       properties:
@@ -1782,6 +1825,17 @@ paths:
                 type: string
           description: OK
   /audits/{id}/report/publish:
+    delete:
+      operationId: RevokeReport
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
     post:
       operationId: PublishReport
       parameters:
@@ -1796,6 +1850,28 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/report.PublishResult"
+          description: OK
+  /audits/{id}/report/share:
+    post:
+      operationId: ShareReport
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/report.ShareRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.ShareResult"
           description: OK
   /auth/login:
     post:
@@ -2231,6 +2307,34 @@ paths:
                 items:
                   $ref: "#/components/schemas/oauth.ConnectionResponse"
                 type: array
+          description: OK
+  /oauth/meta/data-deletion:
+    post:
+      operationId: MetaDataDeletion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/oauth.SignedRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.DataDeletionResponse"
+          description: OK
+  /oauth/meta/deauthorize:
+    post:
+      operationId: MetaDeauthorize
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/oauth.SignedRequest"
+        required: true
+      responses:
+        "200":
           description: OK
   /oauth/{provider}:
     delete:

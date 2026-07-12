@@ -365,6 +365,8 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		reportFraudReader{a: auditMod},
 		pdf.New(a.Config.Gotenberg.URL, httpDoerForPDF),
 		reportStorage{s: a.storage},
+		reportCaller{},
+		reportOwnerReader{i: influencerMod},
 	)
 
 	// The dataimport module is the real-data ingress for Instagram while its live

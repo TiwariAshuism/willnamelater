@@ -87,6 +87,21 @@ func (a *App) mountModules(r *gin.Engine) {
 	m.Billing.RegisterRoutes(protected, public)
 
 	m.OAuth.RegisterRoutes(protected)
+
+	// Meta's deauthorize and data-deletion callbacks mount on the PUBLIC group:
+	// Meta holds no session, and the signed_request HMAC'd with our app secret is
+	// the only credential (verified in internal/platform/metasig before anything
+	// acts on the payload). They are a contractual obligation, not a feature —
+	// Meta Platform Terms §3.d requires us to delete a user's Platform Data
+	// promptly on request, and these are how that request arrives. An unset
+	// META_APP_SECRET fails every call closed.
+	metaCallbacks{
+		appSecret:     os.Getenv("META_APP_SECRET"),
+		oauth:         m.OAuth,
+		report:        m.Report,
+		publicBaseURL: a.Config.HTTP.PublicBaseURL,
+	}.RegisterPublicRoutes(public)
+
 	m.Influencer.RegisterRoutes(protected)
 	m.Metrics.RegisterRoutes(protected)
 	m.Scoring.RegisterRoutes(protected)

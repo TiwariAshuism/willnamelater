@@ -59,11 +59,16 @@ type EncryptedToken struct {
 	UserID            uuid.UUID
 	Platform          string
 	ProviderAccountID string
-	AccessTokenEnc    []byte
-	RefreshTokenEnc   []byte // nil when the provider issued no refresh token
-	DEKWrapped        []byte
-	Scopes            []string
-	AccessExpiresAt   *time.Time
+	// ProviderUserID is the provider's app-scoped id for the person who connected
+	// — the handle Meta's deauthorize and data-deletion callbacks use to name whose
+	// data must be erased. Empty for providers with no such callback (YouTube), and
+	// for connections made before it was captured.
+	ProviderUserID  string
+	AccessTokenEnc  []byte
+	RefreshTokenEnc []byte // nil when the provider issued no refresh token
+	DEKWrapped      []byte
+	Scopes          []string
+	AccessExpiresAt *time.Time
 }
 
 // Connection is the persisted, non-secret projection of an oauth_token row used
@@ -75,4 +80,20 @@ type Connection struct {
 	Scopes            []string
 	ConnectedAt       time.Time
 	AccessExpiresAt   *time.Time
+}
+
+// SignedRequest is the body Meta posts to its deauthorize and data-deletion
+// callbacks: a single form field carrying `<base64url(hmac)>.<base64url(json)>`.
+// It is the ONLY credential on those endpoints — they carry no session — so it is
+// verified against the app secret before anything acts on it.
+type SignedRequest struct {
+	SignedRequest string `json:"signed_request" form:"signed_request"`
+}
+
+// DataDeletionResponse is what Meta requires back from a data-deletion callback:
+// a URL where the person can check the status of their request, and a
+// confirmation code identifying it.
+type DataDeletionResponse struct {
+	URL              string `json:"url"`
+	ConfirmationCode string `json:"confirmation_code"`
 }

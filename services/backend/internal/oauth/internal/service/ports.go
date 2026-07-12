@@ -33,6 +33,10 @@ type TokenStore interface {
 	Upsert(ctx context.Context, tok model.EncryptedToken) error
 	ListByUser(ctx context.Context, userID uuid.UUID) ([]model.Connection, error)
 	DeleteByUserPlatform(ctx context.Context, userID uuid.UUID, platform string) (deleted int64, err error)
+	// DeleteByProviderUser erases every token for a provider's app-scoped user and
+	// returns the owning platform user. It backs the Meta deauthorize /
+	// data-deletion callbacks, which name a person by app-scoped id.
+	DeleteByProviderUser(ctx context.Context, platform, providerUserID string) (userID uuid.UUID, found bool, err error)
 	// ListSealed returns every connection with its ciphertext still sealed, for
 	// the service to decrypt on the audit path.
 	ListSealed(ctx context.Context, userID uuid.UUID) ([]model.EncryptedToken, error)
@@ -77,6 +81,12 @@ type ExchangeResult struct {
 	Expiry            time.Time
 	Scopes            []string
 	ProviderAccountID string
+	// ProviderUserID is the provider's app-scoped id for the PERSON who connected,
+	// as distinct from ProviderAccountID (the platform account we audit). Meta's
+	// deauthorize and data-deletion callbacks name a user by this id, so capturing
+	// it at connect time is what makes those callbacks actionable. Empty for
+	// providers that have no such callback (YouTube).
+	ProviderUserID string
 }
 
 // ProviderClient performs the authorization-code exchange against a provider's

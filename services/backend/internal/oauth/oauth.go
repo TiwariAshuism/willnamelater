@@ -107,6 +107,19 @@ func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 	m.handler.RegisterRoutes(rg)
 }
 
+// ForgetProviderUser erases every connection belonging to a provider's app-scoped
+// user, returning the platform user who owned them so the caller can cascade the
+// erasure to the data derived from those tokens.
+//
+// It backs Meta's deauthorize and data-deletion callbacks and therefore takes no
+// caller identity: those callbacks carry no session, and their signed_request is
+// verified by the composition root BEFORE this is reached. found is false, with no
+// error, when nobody matches — a callback for a user who never connected must
+// succeed as a no-op rather than make Meta retry forever.
+func (m *Module) ForgetProviderUser(ctx context.Context, provider, providerUserID string) (uuid.UUID, bool, error) {
+	return m.svc.ForgetProviderUser(ctx, provider, providerUserID)
+}
+
 // LiveConnections returns the user's connected platforms with decrypted access
 // tokens, for the audit orchestrator to hand to connectors. Only this module can
 // do this: it holds the cipher and the owner-binding AAD. A row that fails to

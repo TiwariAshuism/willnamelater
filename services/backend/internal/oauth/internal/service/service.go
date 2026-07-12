@@ -398,12 +398,38 @@ func (s *Service) sealToken(userID uuid.UUID, platform connector.Platform, res E
 		UserID:            userID,
 		Platform:          string(platform),
 		ProviderAccountID: res.ProviderAccountID,
+		ProviderUserID:    res.ProviderUserID,
 		AccessTokenEnc:    accessSealed.Ciphertext,
 		RefreshTokenEnc:   refreshEnc,
 		DEKWrapped:        accessSealed.WrappedDEK,
 		Scopes:            scopes,
 		AccessExpiresAt:   expiresAt,
 	}, nil
+}
+
+// ForgetProviderUser erases every connection belonging to a provider's app-scoped
+// user and returns the platform user who owned them, so the caller can cascade
+// the erasure to everything derived from those tokens.
+//
+// It takes NO caller: it backs Meta's deauthorize and data-deletion callbacks,
+// which are unauthenticated by design and prove the request's authenticity with a
+// signed_request rather than a session. The composition root verifies that
+// signature BEFORE calling this — nothing here may be reached from an
+// unauthenticated route without it.
+//
+// found is false, with no error, when nobody matches: a callback for a user who
+// never connected (or already disconnected) is the no-op it appears to be, and
+// must succeed so Meta does not retry forever.
+func (s *Service) ForgetProviderUser(ctx context.Context, provider, providerUserID string) (uuid.UUID, bool, error) {
+	p, ok := providers[provider]
+	if !ok {
+		return uuid.Nil, false, errUnknownProvider(provider)
+	}
+	if providerUserID == "" {
+		return uuid.Nil, false, errs.New(errs.KindInvalid, "oauth.no_provider_user",
+			"the deletion request named no user")
+	}
+	return s.tokens.DeleteByProviderUser(ctx, string(p.platform), providerUserID)
 }
 
 func errUnknownProvider(provider string) error {

@@ -61,7 +61,7 @@ func (c *Client) Exchange(ctx context.Context, req service.ExchangeRequest) (ser
 		return service.ExchangeResult{}, fmt.Errorf("token endpoint returned no access token")
 	}
 
-	accountID, err := c.resolveAccountID(ctx, req.Provider, req.AccountInfoURL, tok.AccessToken)
+	acct, err := c.resolveAccount(ctx, req.Provider, req.AccountInfoURL, tok.AccessToken)
 	if err != nil {
 		return service.ExchangeResult{}, err
 	}
@@ -76,7 +76,8 @@ func (c *Client) Exchange(ctx context.Context, req service.ExchangeRequest) (ser
 		RefreshToken:      tok.RefreshToken,
 		Expiry:            expiry,
 		Scopes:            strings.Fields(tok.Scope),
-		ProviderAccountID: accountID,
+		ProviderAccountID: acct.AccountID,
+		ProviderUserID:    acct.UserID,
 	}, nil
 }
 
@@ -117,37 +118,48 @@ func (c *Client) postToken(ctx context.Context, req service.ExchangeRequest) (to
 	return tok, nil
 }
 
-func (c *Client) resolveAccountID(ctx context.Context, provider, accountInfoURL, accessToken string) (string, error) {
+// account is what one account-info call yields: the platform account we audit,
+// and — where the provider has one — the app-scoped user id that identifies the
+// person to the provider. Meta's deauthorize and data-deletion callbacks name a
+// user by that app-scoped id, so it must be captured at connect time or those
+// callbacks arrive unmappable.
+type account struct {
+	AccountID string
+	UserID    string
+}
+
+func (c *Client) resolveAccount(ctx context.Context, provider, accountInfoURL, accessToken string) (account, error) {
 	httpReq, err := http.NewRequestWithContext(ctx, http.MethodGet, accountInfoURL, nil)
 	if err != nil {
-		return "", fmt.Errorf("build account request: %w", err)
+		return account{}, fmt.Errorf("build account request: %w", err)
 	}
 	httpReq.Header.Set("Authorization", "Bearer "+accessToken)
 	httpReq.Header.Set("Accept", "application/json")
 
 	resp, err := c.http.Do(httpReq)
 	if err != nil {
-		return "", fmt.Errorf("account request: %w", err)
+		return account{}, fmt.Errorf("account request: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	body := io.LimitReader(resp.Body, maxResponseBytes)
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		_, _ = io.Copy(io.Discard, body)
-		return "", fmt.Errorf("account endpoint returned status %d", resp.StatusCode)
+		return account{}, fmt.Errorf("account endpoint returned status %d", resp.StatusCode)
 	}
 
 	raw, err := io.ReadAll(body)
 	if err != nil {
-		return "", fmt.Errorf("read account response: %w", err)
+		return account{}, fmt.Errorf("read account response: %w", err)
 	}
-	return parseAccountID(provider, raw)
+	return parseAccount(provider, raw)
 }
 
-// parseAccountID extracts the stable account identifier from a provider's
-// account-info response. The response shape differs per provider, so parsing is
-// selected by provider name.
-func parseAccountID(provider string, body []byte) (string, error) {
+// parseAccount extracts the stable account identifier — and, where the provider
+// exposes one, the app-scoped user id — from a provider's account-info response.
+// The response shape differs per provider, so parsing is selected by provider
+// name.
+func parseAccount(provider string, body []byte) (account, error) {
 	switch provider {
 	case service.ProviderGoogle:
 		var yt struct {
@@ -156,34 +168,41 @@ func parseAccountID(provider string, body []byte) (string, error) {
 			} `json:"items"`
 		}
 		if err := json.Unmarshal(body, &yt); err != nil {
-			return "", fmt.Errorf("decode youtube account: %w", err)
+			return account{}, fmt.Errorf("decode youtube account: %w", err)
 		}
 		if len(yt.Items) == 0 || yt.Items[0].ID == "" {
-			return "", fmt.Errorf("youtube account response contained no channel id")
+			return account{}, fmt.Errorf("youtube account response contained no channel id")
 		}
-		return yt.Items[0].ID, nil
+		// YouTube has no deauthorize/data-deletion callback keyed on an app-scoped
+		// id, so none is captured: the channel id is the only identifier we need.
+		return account{AccountID: yt.Items[0].ID}, nil
 	case service.ProviderMeta:
-		// /me/accounts returns the Pages the user manages; the Instagram Business
-		// account id hangs off whichever Page has one linked. Return the first
+		// /me?fields=id,accounts{instagram_business_account{id,username}} returns
+		// BOTH ids in one call: the top-level `id` is the app-scoped user id Meta's
+		// deauthorize / data-deletion callbacks name, and the Instagram Business
+		// account id hangs off whichever managed Page has one linked. Take the first
 		// linked IG account. A login with no linked IG business account has no
 		// usable id — that is an honest failure, not a fabricated id.
-		var pages struct {
-			Data []struct {
-				IG *struct {
-					ID string `json:"id"`
-				} `json:"instagram_business_account"`
-			} `json:"data"`
+		var me struct {
+			ID       string `json:"id"`
+			Accounts struct {
+				Data []struct {
+					IG *struct {
+						ID string `json:"id"`
+					} `json:"instagram_business_account"`
+				} `json:"data"`
+			} `json:"accounts"`
 		}
-		if err := json.Unmarshal(body, &pages); err != nil {
-			return "", fmt.Errorf("decode meta account: %w", err)
+		if err := json.Unmarshal(body, &me); err != nil {
+			return account{}, fmt.Errorf("decode meta account: %w", err)
 		}
-		for _, p := range pages.Data {
+		for _, p := range me.Accounts.Data {
 			if p.IG != nil && p.IG.ID != "" {
-				return p.IG.ID, nil
+				return account{AccountID: p.IG.ID, UserID: me.ID}, nil
 			}
 		}
-		return "", fmt.Errorf("no instagram business account is linked to this login")
+		return account{}, fmt.Errorf("no instagram business account is linked to this login")
 	default:
-		return "", fmt.Errorf("no account resolver for provider %q", provider)
+		return account{}, fmt.Errorf("no account resolver for provider %q", provider)
 	}
 }

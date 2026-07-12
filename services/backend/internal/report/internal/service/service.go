@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"strings"
 	"time"
 
 	"github.com/google/uuid"
@@ -26,6 +27,20 @@ import (
 // can hand the link straight to a browser, and short enough that a leaked URL
 // does not grant indefinite access to the stored PDF.
 const shareTTL = 24 * time.Hour
+
+// badgeTTL bounds how long a published badge stays live before it must be
+// re-published. Meta Platform Terms §3.d requires Platform Data to be deleted
+// once retention is no longer necessary and updated or deleted on request, so a
+// certificate built from Instagram Graph data cannot be permanent. A bounded life
+// is also the honest posture: a months-old reach figure proves nothing about the
+// account today, and a stale certificate is exactly the misrepresentation a
+// verified badge exists to prevent.
+const badgeTTL = 90 * 24 * time.Hour
+
+// grantTTL bounds a creator's share of a report with a named brand (§3.c). A
+// direction to share is never perpetual; the creator re-grants if the brand still
+// needs it.
+const grantTTL = 30 * 24 * time.Hour
 
 // BadgeSnapshot is the public-safe projection frozen at publish time and stored
 // as badge_jsonb. It carries only non-sensitive headline fields — never the
@@ -61,13 +76,41 @@ type PublishedReport struct {
 	GeneratedAt time.Time
 }
 
+// ShareGrant is one creator-directed share: the evidence that the account owner
+// expressly directed us to disclose this report to a NAMED recipient for a STATED
+// purpose (Meta Platform Terms §3.c). Both fields are required — an unnamed
+// recipient or an unstated purpose is not a valid direction.
+type ShareGrant struct {
+	ReportID        uuid.UUID
+	GrantedByUserID uuid.UUID
+	Recipient       string
+	Purpose         string
+	GrantedAt       time.Time
+	ExpiresAt       time.Time
+}
+
 // Repository persists and reads published reports. It is declared by the service
 // (its consumer) and satisfied by the repository package. UpsertReport returns
 // the durable public slug — the pre-existing one when a report is re-published,
 // so a shared link is stable — which may differ from the candidate on rec.
+//
+// GetByPublicSlug returns only a LIVE report: one that is neither revoked nor
+// past its expiry. A revoked or expired badge is indistinguishable from one that
+// never existed, so withdrawing consent genuinely withdraws access.
 type Repository interface {
 	UpsertReport(ctx context.Context, rec ReportRecord) (publicSlug string, err error)
 	GetByPublicSlug(ctx context.Context, slug string) (PublishedReport, bool, error)
+	// ReportIDOf resolves the stored report row for an audit job.
+	ReportIDOf(ctx context.Context, auditJobID uuid.UUID) (uuid.UUID, bool, error)
+	// RevokeByAuditJob withdraws a published report: the slug stops resolving.
+	RevokeByAuditJob(ctx context.Context, auditJobID uuid.UUID, at time.Time) error
+	// InsertShareGrant records a creator's direction to share (§3.c evidence).
+	InsertShareGrant(ctx context.Context, g ShareGrant) (uuid.UUID, error)
+	// RevokeGrantsByUser withdraws every live grant a user ever made, and revokes
+	// the reports built from their connected account. This is the hard stop the
+	// Meta deauthorize / data-deletion callbacks and an explicit user request all
+	// funnel into (§3.d "delete promptly on request").
+	RevokeGrantsByUser(ctx context.Context, userID uuid.UUID, at time.Time) (int64, error)
 }
 
 // Service assembles and renders audit reports over the module's ports.
@@ -79,13 +122,19 @@ type Service struct {
 	pdf       port.PDFRenderer
 	repo      Repository
 	storage   port.Storage
+	caller    port.CallerID
+	owner     port.OwnerReader
 }
 
 // New wires the service. Every argument is a port the composition root
 // satisfies with an adapter over the real module; repo and storage back the
-// publish path (the durable, shareable report).
-func New(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, repo Repository, storage port.Storage) *Service {
-	return &Service{audit: audit, score: score, narrative: narrative, fraud: fraud, pdf: pdf, repo: repo, storage: storage}
+// publish path (the durable, shareable report). caller and owner back the
+// creator-ownership gate on publish/share (Meta Platform Terms §3.c).
+func New(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, repo Repository, storage port.Storage, caller port.CallerID, owner port.OwnerReader) *Service {
+	return &Service{
+		audit: audit, score: score, narrative: narrative, fraud: fraud,
+		pdf: pdf, repo: repo, storage: storage, caller: caller, owner: owner,
+	}
 }
 
 // Assemble builds the report for one of the caller's audits. The AuditReader
@@ -208,6 +257,15 @@ func (s *Service) Publish(ctx context.Context, auditID string) (render.PublishRe
 		return render.PublishResult{}, errs.New(errs.KindInvalid, "report.invalid_audit", "audit id is not a valid uuid")
 	}
 
+	// Only the creator who owns the connected account may publish a report built
+	// from it. Assemble's caller-scoping proves the caller REQUESTED this audit;
+	// it does not prove they own the audited account, and a brand may audit a
+	// creator it does not own. Publishing is a disclosure of the creator's own
+	// Instagram Graph data, which only the creator may direct (§3.c).
+	if err := s.requireConnectedOwner(ctx, report.InfluencerID); err != nil {
+		return render.PublishResult{}, err
+	}
+
 	html, err := render.HTML(report)
 	if err != nil {
 		return render.PublishResult{}, err
@@ -237,6 +295,10 @@ func (s *Service) Publish(ctx context.Context, auditID string) (render.PublishRe
 		SizeBytes:   int64(len(pdf)),
 		Checksum:    hex.EncodeToString(sum[:]),
 		GeneratedAt: now,
+		// A published certificate expires. Until now this was left zero and stored
+		// NULL, which granted indefinite public access to Graph-derived data —
+		// exactly what §3.d forbids. Re-publishing renews it.
+		ExpiresAt: now.Add(badgeTTL),
 	})
 	if err != nil {
 		return render.PublishResult{}, err
@@ -284,6 +346,132 @@ func (s *Service) PublicBadge(ctx context.Context, slug string) (render.PublicBa
 		GeneratedAt:      rec.Badge.GeneratedAt,
 		PDFURL:           pdfURL,
 	}, nil
+}
+
+// requireConnectedOwner asserts the caller is the creator who owns the connected
+// (OAuth-authenticated) account the influencer's data came from.
+//
+// This is the gate that keeps the product on the lawful side of Meta's Platform
+// Terms. A report assembled from Instagram Graph Insights is the creator's
+// Platform Data; §3.c permits disclosing it to a third party only "when a User
+// expressly directs" it — so the person doing the directing must BE that user.
+// Merely having requested the audit is not enough.
+//
+// An unclaimed profile (nobody has connected it) has no owner who could direct a
+// disclosure, so it cannot be published or shared at all.
+func (s *Service) requireConnectedOwner(ctx context.Context, influencerID string) error {
+	id, err := uuid.Parse(influencerID)
+	if err != nil {
+		return errs.New(errs.KindInvalid, "report.invalid_influencer", "influencer id is not a valid uuid")
+	}
+	callerID, err := s.caller.CallerID(ctx)
+	if err != nil {
+		return err
+	}
+	owner, err := s.owner.ConnectedOwnerOf(ctx, id)
+	if err != nil {
+		return err
+	}
+	if owner.OwnerUserID == nil {
+		return errs.New(errs.KindForbidden, "report.no_connected_owner",
+			"this profile has no connected account owner, so its report cannot be published or shared")
+	}
+	if *owner.OwnerUserID != callerID {
+		return errs.New(errs.KindForbidden, "report.not_account_owner",
+			"only the creator who connected this account may publish or share its report")
+	}
+	return nil
+}
+
+// Revoke withdraws a published report: the public slug stops resolving and every
+// live share grant on it is withdrawn. The creator who owns the connected account
+// may call it at any time — Meta Platform Terms §3.d requires us to delete
+// Platform Data promptly on the User's request, and a badge nobody can withdraw
+// cannot satisfy that.
+func (s *Service) Revoke(ctx context.Context, auditID string) error {
+	view, err := s.audit.AuditView(ctx, auditID)
+	if err != nil {
+		return err
+	}
+	if err := s.requireConnectedOwner(ctx, view.InfluencerID.String()); err != nil {
+		return err
+	}
+	return s.repo.RevokeByAuditJob(ctx, view.ID, time.Now().UTC())
+}
+
+// Share records the creator's express direction to disclose a published report to
+// a NAMED brand for a STATED purpose, and returns the grant id as the receipt.
+//
+// This — not a sale, and not a brand-side lookup — is the only channel by which a
+// creator's Graph-derived report reaches a third party. Meta Platform Terms
+// §3.a.iv flatly prohibits selling or licensing Platform Data (including data
+// "derived from" it, so a score computed from Insights is no escape hatch), while
+// §3.c permits sharing "for the purposes as specified in the User's direction".
+// So we take the direction, scope it, time-bound it, and keep the receipt.
+func (s *Service) Share(ctx context.Context, auditID, recipient, purpose string) (render.ShareResult, error) {
+	recipient = strings.TrimSpace(recipient)
+	purpose = strings.TrimSpace(purpose)
+	if recipient == "" {
+		return render.ShareResult{}, errs.New(errs.KindInvalid, "report.recipient_required",
+			"name the brand or agency this report may be shared with")
+	}
+	if purpose == "" {
+		return render.ShareResult{}, errs.New(errs.KindInvalid, "report.purpose_required",
+			"state the purpose this report may be used for")
+	}
+
+	view, err := s.audit.AuditView(ctx, auditID)
+	if err != nil {
+		return render.ShareResult{}, err
+	}
+	if err := s.requireConnectedOwner(ctx, view.InfluencerID.String()); err != nil {
+		return render.ShareResult{}, err
+	}
+
+	reportID, found, err := s.repo.ReportIDOf(ctx, view.ID)
+	if err != nil {
+		return render.ShareResult{}, err
+	}
+	if !found {
+		return render.ShareResult{}, errs.New(errs.KindInvalid, "report.not_published",
+			"publish the report before sharing it")
+	}
+
+	callerID, err := s.caller.CallerID(ctx)
+	if err != nil {
+		return render.ShareResult{}, err
+	}
+
+	now := time.Now().UTC()
+	expires := now.Add(grantTTL)
+	grantID, err := s.repo.InsertShareGrant(ctx, ShareGrant{
+		ReportID:        reportID,
+		GrantedByUserID: callerID,
+		Recipient:       recipient,
+		Purpose:         purpose,
+		GrantedAt:       now,
+		ExpiresAt:       expires,
+	})
+	if err != nil {
+		return render.ShareResult{}, err
+	}
+
+	return render.ShareResult{
+		GrantID:   grantID.String(),
+		Recipient: recipient,
+		Purpose:   purpose,
+		ExpiresAt: expires.Format(time.RFC3339),
+	}, nil
+}
+
+// RevokeAllForUser withdraws every share grant a user made and every report built
+// from their connected account. It is the single hard stop behind an explicit
+// user request and behind Meta's deauthorize / data-deletion callbacks (§3.d):
+// once a creator disconnects or asks for deletion, nothing they shared stays
+// reachable. It takes no caller — the callbacks are unauthenticated by design and
+// prove the user's identity by Meta's signature instead.
+func (s *Service) RevokeAllForUser(ctx context.Context, userID uuid.UUID) (int64, error) {
+	return s.repo.RevokeGrantsByUser(ctx, userID, time.Now().UTC())
 }
 
 // badgeFrom snapshots the public-safe subset of an assembled report: the
