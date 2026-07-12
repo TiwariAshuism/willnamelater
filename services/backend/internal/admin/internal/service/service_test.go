@@ -107,7 +107,7 @@ func userID() uuid.UUID  { return uuid.MustParse("bbbbbbbb-bbbb-bbbb-bbbb-bbbbbb
 func jobID() uuid.UUID   { return uuid.MustParse("cccccccc-cccc-cccc-cccc-cccccccccccc") }
 
 func newService(repo Repository, caller port.CallerID, guard port.AdminGuard, fraud port.FraudReader, cost port.CostReader, queues port.QueueInspector) *Service {
-	return New(repo, caller, guard, fraud, cost, queues)
+	return New(repo, caller, guard, fraud, cost, queues, nil)
 }
 
 // --- FileDispute ---------------------------------------------------------

@@ -12,6 +12,7 @@ package service
 
 import (
 	"context"
+	"log/slog"
 
 	"github.com/google/uuid"
 
@@ -49,11 +50,16 @@ type Service struct {
 	fraud  port.FraudReader
 	cost   port.CostReader
 	queues port.QueueInspector
+	// labels is the optional ml training-label sink. It may be nil (dispute
+	// resolution is unchanged); when set, a resolved dispute best-effort backfills
+	// the supervised fraud label onto the audit's feature-store row.
+	labels port.TrainingLabelSink
 }
 
 var _ AdminService = (*Service)(nil)
 
 // New builds the admin service over its repository and every collaborator port.
+// labels is optional (nil disables the ml training-label backfill).
 func New(
 	repo Repository,
 	caller port.CallerID,
@@ -61,6 +67,7 @@ func New(
 	fraud port.FraudReader,
 	cost port.CostReader,
 	queues port.QueueInspector,
+	labels port.TrainingLabelSink,
 ) *Service {
 	return &Service{
 		repo:   repo,
@@ -69,6 +76,7 @@ func New(
 		fraud:  fraud,
 		cost:   cost,
 		queues: queues,
+		labels: labels,
 	}
 }
 
@@ -144,7 +152,25 @@ func (s *Service) ResolveDispute(ctx context.Context, id string, req model.Resol
 	if err != nil {
 		return model.DisputeResponse{}, err
 	}
+
+	// Backfill the supervised fraud label onto the audit's feature-store row (the
+	// ml labelling loop). Best-effort: the decision is already recorded, so a sink
+	// failure is logged and never fails the resolution.
+	s.recordLabel(ctx, dispute.AuditJobID, decision.FraudLabel())
+
 	return model.ToDisputeResponse(dispute), nil
+}
+
+// recordLabel backfills the dispute's supervised fraud label through the optional
+// TrainingLabelSink. A nil sink is a no-op; any error is logged and swallowed.
+func (s *Service) recordLabel(ctx context.Context, auditJobID uuid.UUID, fraudulent bool) {
+	if s.labels == nil {
+		return
+	}
+	if err := s.labels.RecordDisputeLabel(ctx, auditJobID, fraudulent); err != nil {
+		slog.WarnContext(ctx, "ml training-label backfill failed (dispute resolution unaffected)",
+			slog.String("audit_job_id", auditJobID.String()), slog.Any("error", err))
+	}
 }
 
 // CostDashboard returns the aggregate LLM generation cost, with the USD and

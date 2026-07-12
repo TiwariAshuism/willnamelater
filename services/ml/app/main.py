@@ -6,9 +6,10 @@ from fastapi import FastAPI
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
-from app.api import comments, fraud, pods
+from app.api import comments, fraud, ml, pods
 from app.registry import get_registry
 from app.schemas import ErrorResponse, HealthResponse
+from app.serving.drift import get_drift_monitor
 
 
 def create_app() -> FastAPI:
@@ -21,6 +22,7 @@ def create_app() -> FastAPI:
     app.include_router(fraud.router)
     app.include_router(pods.router)
     app.include_router(comments.router)
+    app.include_router(ml.router)
 
     @app.exception_handler(RequestValidationError)
     async def _on_validation_error(_, exc: RequestValidationError) -> JSONResponse:
@@ -30,8 +32,12 @@ def create_app() -> FastAPI:
 
     @app.get("/healthz", response_model=HealthResponse)
     def healthz() -> HealthResponse:
+        registry = get_registry()
         return HealthResponse(
-            status="ok", model_version=get_registry().active_version()
+            status="ok",
+            model_version=registry.active_version(),
+            challenger_version=registry.shadow_version(),
+            drift_status=get_drift_monitor().status(),
         )
 
     return app

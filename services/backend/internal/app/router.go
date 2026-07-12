@@ -118,6 +118,15 @@ func (a *App) mountModules(r *gin.Engine) {
 	m.BulkAudit.RegisterRoutes(protected)
 	m.Whitelabel.RegisterRoutes(protected)
 	m.Campaign.RegisterRoutes(protected)
+
+	// mlops admin routes (feature-row export, model register/promote, canaries) are
+	// admin-gated like the admin module, so they mount on the protected group. The
+	// prediction-ingest route is machine-to-machine (the ml server), so it mounts on
+	// a separate group carrying the service-token middleware, NOT the user auth
+	// middleware.
+	m.MLOps.RegisterAdminRoutes(protected)
+	mlService := r.Group(apiBasePath, mlServiceTokenMiddleware(a.Config.ML.ServiceToken.Reveal()))
+	m.MLOps.RegisterServiceRoutes(mlService)
 }
 
 // billingCaller copies the authenticated caller from the auth module's context

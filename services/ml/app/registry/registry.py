@@ -9,6 +9,16 @@ Deliberately, no model file ships with the service. Shipping a placeholder
 ``.lgb`` would let the rest of the system believe a trained model exists and
 silently trust its output. The registry instead looks for a real artifact in a
 configurable directory and, finding none, falls back to the rule-based path.
+
+Two slots resolve from the same directory:
+
+* the **champion** — ``$INFLUAUDIT_ML_ARTIFACTS/manifest.json`` — serves users.
+  Its resolution is unchanged from the original contract.
+* the optional **challenger** — ``$INFLUAUDIT_ML_ARTIFACTS/shadow/manifest.json``
+  — is scored in parallel during a shadow window (never shown to a user) so a
+  candidate model can be compared against the champion on live traffic. The
+  shadow slot is additive: when it is absent the champion path is untouched and
+  cold start still reports ``heuristic``.
 """
 
 from __future__ import annotations
@@ -30,13 +40,23 @@ ARTIFACT_DIR_ENV = "INFLUAUDIT_ML_ARTIFACTS"
 #: path.
 MANIFEST_NAME = "manifest.json"
 
+#: Sub-directory of the artifact dir holding the challenger during a shadow
+#: window (RETRAINING_ARCHITECTURE §3.2). Cleared on promotion/rollback.
+SHADOW_DIR_NAME = "shadow"
+
 
 @dataclass(frozen=True)
 class ArtifactRef:
-    """A resolved, on-disk supervised model artifact."""
+    """A resolved, on-disk supervised model artifact.
+
+    ``feature_order`` is the positional input contract read from the manifest.
+    It is optional so an older manifest without the key still resolves; the
+    supervised scorer requires it and treats its absence as unservable.
+    """
 
     version: str
     model_path: Path
+    feature_order: tuple[str, ...] | None = None
 
 
 class ModelRegistry:
@@ -53,10 +73,16 @@ class ModelRegistry:
             artifact_dir = Path(env) if env else None
         self._artifact_dir = artifact_dir
 
-    def _resolve(self) -> ArtifactRef | None:
-        if self._artifact_dir is None:
+    def _resolve_dir(self, directory: Path | None) -> ArtifactRef | None:
+        """Resolve a manifest+model pair in ``directory`` or return ``None``.
+
+        Shared by the champion and challenger slots so both apply the exact same
+        validation: a real manifest with string ``version`` / ``model_file`` and
+        a model file that actually exists on disk.
+        """
+        if directory is None:
             return None
-        manifest = self._artifact_dir / MANIFEST_NAME
+        manifest = directory / MANIFEST_NAME
         if not manifest.is_file():
             return None
         try:
@@ -67,19 +93,50 @@ class ModelRegistry:
         model_file = meta.get("model_file")
         if not isinstance(version, str) or not isinstance(model_file, str):
             return None
-        model_path = self._artifact_dir / model_file
+        model_path = directory / model_file
         if not model_path.is_file():
             return None
-        return ArtifactRef(version=version, model_path=model_path)
+        raw_order = meta.get("feature_order")
+        feature_order: tuple[str, ...] | None = None
+        if isinstance(raw_order, list) and all(isinstance(x, str) for x in raw_order):
+            feature_order = tuple(raw_order)
+        return ArtifactRef(
+            version=version, model_path=model_path, feature_order=feature_order
+        )
+
+    def _resolve(self) -> ArtifactRef | None:
+        return self._resolve_dir(self._artifact_dir)
+
+    def _shadow_dir(self) -> Path | None:
+        if self._artifact_dir is None:
+            return None
+        return self._artifact_dir / SHADOW_DIR_NAME
 
     def active_version(self) -> str:
         """Return the active model version, or ``heuristic`` in cold start."""
         ref = self._resolve()
         return ref.version if ref is not None else HEURISTIC_VERSION
 
+    def active_ref(self) -> ArtifactRef | None:
+        """The resolved champion artifact, or ``None`` in cold start."""
+        return self._resolve()
+
     def is_supervised(self) -> bool:
         """True only once a real trained artifact has been resolved."""
         return self._resolve() is not None
+
+    def shadow_ref(self) -> ArtifactRef | None:
+        """The resolved challenger artifact, or ``None`` when no shadow is set."""
+        return self._resolve_dir(self._shadow_dir())
+
+    def shadow_version(self) -> str | None:
+        """The challenger version during a shadow window, else ``None``."""
+        ref = self.shadow_ref()
+        return ref.version if ref is not None else None
+
+    def has_shadow(self) -> bool:
+        """True only when a valid challenger artifact is present."""
+        return self.shadow_ref() is not None
 
 
 _default_registry = ModelRegistry()

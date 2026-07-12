@@ -40,8 +40,9 @@ func New(
 	fraud port.FraudReader,
 	cost port.CostReader,
 	queues port.QueueInspector,
+	labels port.TrainingLabelSink,
 ) *Module {
-	svc := service.New(repository.New(pool), caller, guard, fraud, cost, queues)
+	svc := service.New(repository.New(pool), caller, guard, fraud, cost, queues, labels)
 	return &Module{handler: handler.New(svc)}
 }
 

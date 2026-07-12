@@ -846,6 +846,324 @@ components:
       - platform
       - platform_post_id
       type: object
+    mlops.CanaryItem:
+      properties:
+        active:
+          type: boolean
+        created_at:
+          format: date-time
+          type: string
+        expected_label:
+          nullable: true
+          type: boolean
+        expected_reach_max:
+          nullable: true
+          type: integer
+        expected_reach_min:
+          nullable: true
+          type: integer
+        features:
+          format: byte
+          type: string
+        id:
+          type: string
+        label:
+          type: string
+        model_name:
+          type: string
+        source:
+          type: string
+      required:
+      - active
+      - created_at
+      - features
+      - id
+      - label
+      - model_name
+      - source
+      type: object
+    mlops.CanaryListResponse:
+      properties:
+        canaries:
+          items:
+            $ref: "#/components/schemas/mlops.CanaryItem"
+          type: array
+        count:
+          type: integer
+      required:
+      - canaries
+      - count
+      type: object
+    mlops.CanaryQuery:
+      properties:
+        Active:
+          type: boolean
+        HasActive:
+          type: boolean
+        ModelName:
+          type: string
+      required:
+      - Active
+      - HasActive
+      - ModelName
+      type: object
+    mlops.CanaryResponse:
+      properties:
+        canary:
+          $ref: "#/components/schemas/mlops.CanaryItem"
+      required:
+      - canary
+      type: object
+    mlops.CreateCanaryRequest:
+      properties:
+        expected_label:
+          nullable: true
+          type: boolean
+        expected_reach_max:
+          nullable: true
+          type: integer
+        expected_reach_min:
+          nullable: true
+          type: integer
+        features:
+          format: byte
+          type: string
+        label:
+          type: string
+        model_name:
+          type: string
+        source:
+          type: string
+      required:
+      - expected_label
+      - expected_reach_max
+      - expected_reach_min
+      - features
+      - label
+      - model_name
+      - source
+      type: object
+    mlops.FeatureRowExportResponse:
+      properties:
+        count:
+          type: integer
+        rows:
+          items:
+            $ref: "#/components/schemas/mlops.FeatureRowItem"
+          type: array
+      required:
+      - count
+      - rows
+      type: object
+    mlops.FeatureRowItem:
+      properties:
+        audit_job_id:
+          type: string
+        captured_at:
+          format: date-time
+          type: string
+        features:
+          format: byte
+          type: string
+        fraud_label:
+          nullable: true
+          type: boolean
+        fraud_label_source:
+          type: string
+        influencer_id:
+          type: string
+        model_version_at_capture:
+          type: string
+        platform:
+          type: string
+        quality_ok:
+          type: boolean
+        quality_reasons:
+          items:
+            type: string
+          type: array
+        reach_label:
+          nullable: true
+          type: integer
+        reach_label_source:
+          type: string
+        verification_tier:
+          type: string
+      required:
+      - audit_job_id
+      - captured_at
+      - features
+      - fraud_label
+      - influencer_id
+      - model_version_at_capture
+      - platform
+      - quality_ok
+      - quality_reasons
+      - reach_label
+      - verification_tier
+      type: object
+    mlops.FeatureRowQuery:
+      properties:
+        Limit:
+          type: integer
+        Quality:
+          type: string
+        Since:
+          format: date-time
+          type: string
+      required:
+      - Limit
+      - Quality
+      - Since
+      type: object
+    mlops.FeatureSnapshotRef:
+      properties:
+        content_hash:
+          type: string
+        max_captured_at:
+          format: date-time
+          type: string
+        row_count:
+          type: integer
+      required:
+      - content_hash
+      - max_captured_at
+      - row_count
+      type: object
+    mlops.PredictionLogRequest:
+      properties:
+        audit_job_id:
+          nullable: true
+          type: string
+        challenger_score:
+          nullable: true
+          type: number
+        challenger_version:
+          nullable: true
+          type: string
+        champion_score:
+          type: number
+        champion_version:
+          type: string
+        features_hash:
+          type: string
+        model_name:
+          type: string
+        scored_at:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+      - audit_job_id
+      - challenger_score
+      - challenger_version
+      - champion_score
+      - champion_version
+      - features_hash
+      - model_name
+      - scored_at
+      type: object
+    mlops.PredictionLogResponse:
+      properties:
+        accepted:
+          type: boolean
+      required:
+      - accepted
+      type: object
+    mlops.PromoteModelRequest:
+      properties:
+        model_name:
+          type: string
+        override_shadow:
+          type: boolean
+        reason:
+          type: string
+      required:
+      - model_name
+      - override_shadow
+      - reason
+      type: object
+    mlops.PromoteModelResponse:
+      properties:
+        champion_version:
+          type: string
+        manifest:
+          format: byte
+          type: string
+        model_name:
+          type: string
+        previous_champion_version:
+          type: string
+        promoted_at:
+          format: date-time
+          type: string
+        s3_key:
+          type: string
+      required:
+      - champion_version
+      - manifest
+      - model_name
+      - promoted_at
+      - s3_key
+      type: object
+    mlops.RegisterModelRequest:
+      properties:
+        data_floor_counts:
+          format: byte
+          type: string
+        feature_snapshot:
+          $ref: "#/components/schemas/mlops.FeatureSnapshotRef"
+        manifest:
+          format: byte
+          type: string
+        metrics:
+          format: byte
+          type: string
+        model_file_b64:
+          type: string
+        model_file_name:
+          type: string
+        model_name:
+          type: string
+        validation_report:
+          format: byte
+          type: string
+        version:
+          type: string
+      required:
+      - data_floor_counts
+      - feature_snapshot
+      - manifest
+      - metrics
+      - model_file_b64
+      - model_file_name
+      - model_name
+      - validation_report
+      - version
+      type: object
+    mlops.RegisterModelResponse:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        model_name:
+          type: string
+        role:
+          type: string
+        s3_key:
+          type: string
+        version:
+          type: string
+      required:
+      - created_at
+      - id
+      - model_name
+      - role
+      - s3_key
+      - version
+      type: object
     oauth.AuthorizeResponse:
       properties:
         authorization_url:
@@ -1220,6 +1538,91 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/admin.DisputeResponse"
+          description: OK
+  /admin/mlops/canaries:
+    get:
+      operationId: ListCanaries
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.CanaryQuery"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.CanaryListResponse"
+          description: OK
+    post:
+      operationId: CreateCanary
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.CreateCanaryRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.CanaryResponse"
+          description: OK
+  /admin/mlops/feature-rows:
+    get:
+      operationId: ExportFeatureRows
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.FeatureRowQuery"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.FeatureRowExportResponse"
+          description: OK
+  /admin/mlops/models:
+    post:
+      operationId: RegisterModel
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.RegisterModelRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.RegisterModelResponse"
+          description: OK
+  /admin/mlops/models/{version}/promote:
+    post:
+      operationId: PromoteModel
+      parameters:
+      - in: path
+        name: version
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.PromoteModelRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.PromoteModelResponse"
           description: OK
   /admin/queues:
     get:
@@ -1800,6 +2203,22 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/scoring.ScoreHistoryResponse"
+          description: OK
+  /ml/predictions:
+    post:
+      operationId: IngestPrediction
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.PredictionLogRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.PredictionLogResponse"
           description: OK
   /oauth/connections:
     get:

@@ -49,6 +49,7 @@ func New(
 	connectors port.Connectors,
 	connections port.Connections,
 	caller port.CallerID,
+	features port.FeatureRecorder,
 ) *Module {
 	svc := service.New(
 		repository.New(pool),
@@ -61,6 +62,7 @@ func New(
 		connectors,
 		connections,
 		caller,
+		features,
 	)
 
 	return &Module{

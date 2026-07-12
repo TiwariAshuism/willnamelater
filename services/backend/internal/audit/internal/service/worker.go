@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -290,6 +291,11 @@ func (s *Service) scoreAndReport(ctx context.Context, job model.Job, snapshots [
 		return err
 	}
 
+	// Feed the ml feature store (the data flywheel). This is best-effort: the
+	// score is already persisted, so a recorder failure is logged and ignored —
+	// the audit's deliverable never depends on the training intake succeeding.
+	s.recordFeatures(ctx, job, snapshots, fraud)
+
 	if _, _, err := s.reporter.GenerateReport(ctx, port.ReportInput{
 		AuditJobID:   job.ID,
 		InfluencerID: job.InfluencerID,
@@ -316,6 +322,25 @@ func (s *Service) finishNoData(ctx context.Context, jobID uuid.UUID, reservation
 		return err
 	}
 	return nil
+}
+
+// recordFeatures captures the completed audit as an ml feature-store row through
+// the optional FeatureRecorder port. A nil recorder is a no-op; any error is
+// logged and swallowed so the training intake can never fail an audit that has
+// already produced its deliverable.
+func (s *Service) recordFeatures(ctx context.Context, job model.Job, snapshots []connector.Snapshot, fraud port.FraudSummary) {
+	if s.features == nil {
+		return
+	}
+	if err := s.features.RecordFeatures(ctx, port.FeatureRecord{
+		AuditJobID:   job.ID,
+		InfluencerID: job.InfluencerID,
+		Snapshots:    snapshots,
+		Fraud:        fraud,
+	}); err != nil {
+		slog.WarnContext(ctx, "ml feature-store intake failed (audit unaffected)",
+			slog.String("audit_job_id", job.ID.String()), slog.Any("error", err))
+	}
 }
 
 // toFraudInput maps the ml-agnostic fraud summary onto the scoring engine's

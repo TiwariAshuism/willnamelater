@@ -22,6 +22,11 @@ x-backend-env: &backend-env
   INFLUAUDIT_REDIS__ADDR: redis:6379
   INFLUAUDIT_GOTENBERG__URL: http://gotenberg:3000
   INFLUAUDIT_ML__BASE_URL: http://ml:8000
+  # Shared secret the ml server presents on the prediction-log ingest route
+  # (POST /v1/ml/predictions). It is machine-to-machine, so a static token rather
+  # than a JWT; the backend and the ml service must carry the SAME value. Empty
+  # disables shadow logging (the route then rejects every call).
+  INFLUAUDIT_ML__SERVICE_TOKEN: ${INFLUAUDIT_ML_SERVICE_TOKEN:-dev-ml-service-token}
   # Object storage for published report PDFs. In dev this is LocalStack S3,
   # reached by service name from inside the compose network. The credentials are
   # LocalStack's well-known dummies (test/test) — they are not secrets and never
@@ -136,6 +141,17 @@ services:
     build:
       context: ../services/ml
       dockerfile: Dockerfile
+    environment:
+      # Shadow prediction logging: the ml server posts champion-vs-challenger
+      # pairs back to the backend with this token (must match the backend's
+      # INFLUAUDIT_ML__SERVICE_TOKEN). Absent → shadow logging is a silent no-op.
+      INFLUAUDIT_ML_SERVICE_TOKEN: ${INFLUAUDIT_ML_SERVICE_TOKEN:-dev-ml-service-token}
+      INFLUAUDIT_BACKEND_BASE_URL: http://api:8080
+      # Directory the registry loads a promoted champion from; empty = cold-start
+      # heuristic. A real deploy syncs the S3 artifact here after promotion.
+      INFLUAUDIT_ML_ARTIFACTS: /var/lib/ml-artifacts
+    volumes:
+      - ml-artifacts:/var/lib/ml-artifacts
     ports:
       - "${ML_PORT:-8000}:8000"
     # Healthcheck is defined in the image (distroless-adjacent slim has no curl).
@@ -198,3 +214,4 @@ volumes:
   postgres-data:
   redis-data:
   localstack-data:
+  ml-artifacts:

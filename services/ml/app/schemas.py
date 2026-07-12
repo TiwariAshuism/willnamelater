@@ -133,6 +133,9 @@ class FraudScoreRequest(_StrictRequest):
     # Optional sourced benchmark for the engagement-deviation signal. Absent =>
     # that signal is skipped (contributes 0), never anchored to a guessed curve.
     engagement_benchmark: EngagementBenchmark | None = None
+    # Optional correlation id for the shadow prediction log (§5.6). Backward
+    # compatible: absent => the shadow row is logged without an audit_job_id.
+    audit_ref: str | None = None
 
 
 class FraudScoreResponse(BaseModel):
@@ -275,6 +278,35 @@ class HealthResponse(BaseModel):
 
     status: str
     model_version: str
+    # The challenger version during a shadow window, else null (no shadow model
+    # active). Operator-visible so a shadow deploy is observable from the probe.
+    challenger_version: str | None = None
+    # Coarse prediction-drift state: insufficient_data | stable | drift_warning.
+    drift_status: str = "insufficient_data"
+
+
+class DriftResponse(BaseModel):
+    """Prediction-drift estimate over recent served scores (§3, drift signal).
+
+    Every field is an estimate. ``psi`` is null until both comparison windows
+    reach ``min_per_window`` real observations — drift is never asserted on too
+    little traffic. ``status`` is ``drift_warning`` when ``psi >= psi_threshold``,
+    the operator's cue to consider an emergency retrain.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    status: str
+    psi: float | None
+    sample_count: int = Field(ge=0)
+    reference_count: int = Field(ge=0)
+    current_count: int = Field(ge=0)
+    min_per_window: int = Field(ge=0)
+    psi_threshold: float = Field(ge=0.0)
+    model_version: str
+    challenger_version: str | None = None
+    estimate: bool = True
+    detail: str
 
 
 class ErrorResponse(BaseModel):

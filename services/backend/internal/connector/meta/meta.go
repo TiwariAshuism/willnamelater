@@ -247,6 +247,7 @@ func (c *Connector) Fetch(ctx context.Context, req connector.FetchRequest) (conn
 		return connector.Snapshot{}, err
 	}
 	snap.Followers = user.FollowersCount
+	snap.Following = user.FollowsCount
 	if req.Wants(connector.CapabilityMetrics) {
 		snap.Metrics = c.metricsFrom(user, snap.CapturedAt)
 	}

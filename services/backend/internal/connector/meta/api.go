@@ -23,11 +23,14 @@ import (
 // account's own engagement counters (like_count, comments_count) arrive inline;
 // reach/impressions/saved/shares come from the separate per-media insights edge.
 
-// userNode is the IG User node: identity, follower count and media count.
+// userNode is the IG User node: identity, follower/following count and media
+// count. follows_count is the account's following count, used downstream for the
+// follower/following ratio feature.
 type userNode struct {
 	ID             string `json:"id"`
 	Username       string `json:"username"`
 	FollowersCount int64  `json:"followers_count"`
+	FollowsCount   int64  `json:"follows_count"`
 	MediaCount     int64  `json:"media_count"`
 }
 
@@ -255,7 +258,7 @@ func (c *Connector) classifyError(resp *http.Response, body []byte) error {
 // media count, in one call.
 func (c *Connector) getUser(ctx context.Context, token, accountID string) (userNode, error) {
 	params := url.Values{}
-	params.Set("fields", "id,username,followers_count,media_count")
+	params.Set("fields", "id,username,followers_count,follows_count,media_count")
 
 	var u userNode
 	if err := c.get(ctx, token, accountID, params, &u); err != nil {

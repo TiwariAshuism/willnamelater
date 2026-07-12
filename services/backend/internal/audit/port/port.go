@@ -168,3 +168,23 @@ type Connections interface {
 type CallerID interface {
 	CallerID(ctx context.Context) (uuid.UUID, error)
 }
+
+// FeatureRecord is one completed audit's contribution to the ml feature store:
+// the usable snapshots it collected and the fraud signal it produced. The
+// composition root adapts it onto the mlops feature recorder, which computes the
+// frozen feature vector and resolves niche/tier/verification there (the audit
+// module imports neither mlops nor scoring).
+type FeatureRecord struct {
+	AuditJobID   uuid.UUID
+	InfluencerID uuid.UUID
+	Snapshots    []connector.Snapshot
+	Fraud        FraudSummary
+}
+
+// FeatureRecorder captures a completed audit as an ml training feature row (the
+// data-flywheel intake). The real implementation is the mlops module, adapted by
+// app. The call is best-effort: a failure is logged and never fails the audit,
+// so the flywheel is a side benefit of running an audit, not a dependency of it.
+type FeatureRecorder interface {
+	RecordFeatures(ctx context.Context, rec FeatureRecord) error
+}

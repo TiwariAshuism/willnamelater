@@ -165,6 +165,17 @@ ml-train: ## Train the supervised fraud model from the admin label export (needs
 		--token "$${TOKEN:-}" \
 		--out "$${INFLUAUDIT_ML_ARTIFACTS:-./artifacts}"
 
+.PHONY: ml-retrain
+ml-retrain: ## Champion-challenger retrain (MODEL=fraud|reach): fetch → train → validate → register → shadow → promote. Gated on real data; promotes nothing below the floor or on any failed gate.
+	cd $(ML) && python -m training.retrain \
+		--model "$${MODEL:-fraud}" \
+		--feature-rows-url "$${FEATURE_ROWS_URL:-http://localhost:8080/v1/admin/mlops/feature-rows}" \
+		--canaries-url "$${CANARIES_URL:-http://localhost:8080/v1/admin/mlops/canaries}" \
+		--models-url "$${MODELS_URL:-http://localhost:8080/v1/admin/mlops/models}" \
+		--token "$${TOKEN:-}" \
+		--out "$${INFLUAUDIT_ML_ARTIFACTS:-./artifacts}" \
+		$${PROMOTE:+--promote}
+
 # ---------------------------------------------------------------------------
 # Web (Next.js) + typed contract client
 # ---------------------------------------------------------------------------

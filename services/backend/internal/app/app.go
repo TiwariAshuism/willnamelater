@@ -40,6 +40,7 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/llm"
 	"github.com/getnyx/influaudit/backend/internal/metrics"
 	"github.com/getnyx/influaudit/backend/internal/ml"
+	"github.com/getnyx/influaudit/backend/internal/mlops"
 	"github.com/getnyx/influaudit/backend/internal/oauth"
 	"github.com/getnyx/influaudit/backend/internal/platform/config"
 	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
@@ -117,6 +118,11 @@ type Modules struct {
 	BulkAudit  *bulkaudit.Module
 	Whitelabel *whitelabel.Module
 	Campaign   *campaign.Module
+
+	// MLOps owns the champion-challenger retraining data surface (feature store,
+	// model registry, canaries, shadow prediction log). It stays cold-start
+	// (registry "heuristic") until real labeled rows accumulate.
+	MLOps *mlops.Module
 }
 
 // Build constructs every dependency. On any failure it tears down whatever was
@@ -387,6 +393,9 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		BulkAudit:  bulkaudit.New(),
 		Whitelabel: whitelabel.New(),
 		Campaign:   campaign.New(),
+		// mlops reaches auth (admin bit), the ml service token, and object storage
+		// only through ports; its feature store + registry are empty at boot.
+		MLOps: mlops.New(a.Pool, adminGuard{}, mlServiceAuth{}, mlopsStore{s: a.storage}),
 	}
 	return nil
 }

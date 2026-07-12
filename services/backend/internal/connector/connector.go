@@ -203,8 +203,17 @@ type Snapshot struct {
 	AccountID  string
 	CapturedAt time.Time
 	Followers  int64
-	Metrics    []MetricPoint
-	Posts      []Post
+	// Following is the count of accounts this account follows, when the platform
+	// exposes it (Instagram's follows_count). Zero means "not reported" — most
+	// platforms (YouTube) have no analogous figure, and a follower/following ratio
+	// is only computed when it is a real positive count.
+	Following int64
+	// Verified is the platform's verified-badge flag, or nil when the platform (or
+	// the account's access tier) does not expose it. It is a pointer so "unknown"
+	// is distinct from "not verified" — a false is never invented.
+	Verified *bool
+	Metrics  []MetricPoint
+	Posts    []Post
 	// Comments are the individual comments sampled across Posts, present only
 	// when CapabilityComments was requested and the connector supports it. Each
 	// Comment.PostID references a Post.ID in the same Snapshot.

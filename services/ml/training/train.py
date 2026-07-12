@@ -42,9 +42,10 @@ def train(labels, *, seed: int = SEED) -> TrainResult:
     train_idx, val_idx = order[:split], order[split:]
 
     import lightgbm as lgb
+    import numpy as np
 
     dtrain = lgb.Dataset(
-        [features[i] for i in train_idx],
+        np.asarray([features[i] for i in train_idx], dtype=np.float64),
         label=[targets[i] for i in train_idx],
     )
     params = {
@@ -62,7 +63,9 @@ def train(labels, *, seed: int = SEED) -> TrainResult:
     }
     booster = lgb.train(params, dtrain, num_boost_round=50)
     metrics = _evaluate(
-        booster, [features[i] for i in val_idx], [targets[i] for i in val_idx]
+        booster,
+        np.asarray([features[i] for i in val_idx], dtype=np.float64),
+        [targets[i] for i in val_idx],
     )
     return TrainResult(
         trained=True,
@@ -79,7 +82,7 @@ def _temporal_order(resolved_at):
 
 
 def _evaluate(booster, features_val, targets_val):
-    if not features_val:
+    if len(features_val) == 0:
         return {}
     preds = booster.predict(features_val)
     predicted = [1 if p >= 0.5 else 0 for p in preds]

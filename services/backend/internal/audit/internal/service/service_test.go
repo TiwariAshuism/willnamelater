@@ -40,7 +40,7 @@ func newHarness(conns []port.Connection, registered map[connector.Platform]conne
 	connections := &fakeConnections{conns: conns}
 	caller := uuid.New()
 
-	svc := New(repo, enqueuer, quota, ingester, scorer, fraud, reporter, connectors, connections, fakeCaller{id: caller})
+	svc := New(repo, enqueuer, quota, ingester, scorer, fraud, reporter, connectors, connections, fakeCaller{id: caller}, nil)
 
 	return &harness{
 		svc:         svc,

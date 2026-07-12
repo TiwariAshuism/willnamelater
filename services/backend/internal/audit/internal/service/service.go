@@ -86,12 +86,17 @@ type Service struct {
 	connectors  port.Connectors
 	connections port.Connections
 	caller      port.CallerID
+	// features is the optional ml feature-store intake. It may be nil (the audit
+	// runs identically without it); when set, each completed audit is recorded
+	// best-effort as a training row.
+	features port.FeatureRecorder
 }
 
 var _ AuditService = (*Service)(nil)
 
 // New builds the audit service over its repository, the asynq client, and every
-// collaborator port.
+// collaborator port. features is optional (nil disables the ml feature-store
+// intake) so the module builds and tests without it.
 func New(
 	repo Repository,
 	enqueuer taskEnqueuer,
@@ -103,6 +108,7 @@ func New(
 	connectors port.Connectors,
 	connections port.Connections,
 	caller port.CallerID,
+	features port.FeatureRecorder,
 ) *Service {
 	return &Service{
 		repo:        repo,
@@ -115,6 +121,7 @@ func New(
 		connectors:  connectors,
 		connections: connections,
 		caller:      caller,
+		features:    features,
 	}
 }
 

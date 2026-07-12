@@ -98,3 +98,13 @@ type QueueInspector interface {
 	Queues() ([]string, error)
 	GetQueueInfo(queue string) (*asynq.QueueInfo, error)
 }
+
+// TrainingLabelSink backfills a supervised fraud label onto the ml feature-store
+// row when a dispute is decided: fraudulent=true when the flag stood (dispute
+// rejected), false when it was overturned (upheld). The real implementation is
+// the mlops module, adapted by app; the admin module never imports mlops. The
+// call is best-effort — a failure is logged and never fails the dispute
+// resolution, since the label is a training side-effect, not the decision itself.
+type TrainingLabelSink interface {
+	RecordDisputeLabel(ctx context.Context, auditJobID uuid.UUID, fraudulent bool) error
+}

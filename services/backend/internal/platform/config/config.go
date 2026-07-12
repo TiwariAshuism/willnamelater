@@ -137,9 +137,13 @@ type GotenbergConfig struct {
 	URL string `koanf:"url"`
 }
 
-// MLConfig holds the internal machine-learning service base URL.
+// MLConfig holds the internal machine-learning service settings. ServiceToken is
+// the static bearer the ml server presents on the prediction-log ingest route
+// (a service, not a user, so it is a shared secret rather than a JWT); the mlops
+// module authenticates it in constant time.
 type MLConfig struct {
-	BaseURL string `koanf:"base_url"`
+	BaseURL      string `koanf:"base_url"`
+	ServiceToken Secret `koanf:"service_token"`
 }
 
 // StorageConfig holds S3-compatible object storage settings. Endpoint is an
