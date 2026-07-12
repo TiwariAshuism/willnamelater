@@ -58,11 +58,16 @@ var providers = map[string]providerMeta{
 		},
 	},
 	ProviderMeta: {
-		platform:    connector.PlatformInstagram,
-		authURL:     "https://www.facebook.com/v21.0/dialog/oauth",
-		tokenURL:    "https://graph.facebook.com/v21.0/oauth/access_token",
-		scopeSep:    ",",
-		accountPath: "/me?fields=id",
+		platform: connector.PlatformInstagram,
+		authURL:  "https://www.facebook.com/v21.0/dialog/oauth",
+		tokenURL: "https://graph.facebook.com/v21.0/oauth/access_token",
+		scopeSep: ",",
+		// /me?fields=id returns the Facebook USER id, which is the wrong node for
+		// the Instagram Graph API. The audit needs the numeric Instagram Business
+		// account id, which hangs off the user's managed Pages. This traversal
+		// (granted by pages_show_list + instagram_basic) resolves it; a login with
+		// no linked IG business account has no usable id and is rejected honestly.
+		accountPath: "/me/accounts?fields=instagram_business_account{id,username}",
 	},
 }
 

@@ -54,7 +54,10 @@ type ScoreView struct {
 	Niche          string
 	Tier           string
 	BenchmarkLabel string
-	Subscores      []Subscore
+	// VerificationTier is the score's trust tier ("verified"/"estimated"/
+	// "unverified"), surfaced on the report and the public badge.
+	VerificationTier string
+	Subscores        []Subscore
 }
 
 // ScoreReader loads the latest persisted score for an influencer. The real

@@ -163,16 +163,26 @@ func parseAccountID(provider string, body []byte) (string, error) {
 		}
 		return yt.Items[0].ID, nil
 	case service.ProviderMeta:
-		var me struct {
-			ID string `json:"id"`
+		// /me/accounts returns the Pages the user manages; the Instagram Business
+		// account id hangs off whichever Page has one linked. Return the first
+		// linked IG account. A login with no linked IG business account has no
+		// usable id — that is an honest failure, not a fabricated id.
+		var pages struct {
+			Data []struct {
+				IG *struct {
+					ID string `json:"id"`
+				} `json:"instagram_business_account"`
+			} `json:"data"`
 		}
-		if err := json.Unmarshal(body, &me); err != nil {
+		if err := json.Unmarshal(body, &pages); err != nil {
 			return "", fmt.Errorf("decode meta account: %w", err)
 		}
-		if me.ID == "" {
-			return "", fmt.Errorf("meta account response contained no id")
+		for _, p := range pages.Data {
+			if p.IG != nil && p.IG.ID != "" {
+				return p.IG.ID, nil
+			}
 		}
-		return me.ID, nil
+		return "", fmt.Errorf("no instagram business account is linked to this login")
 	default:
 		return "", fmt.Errorf("no account resolver for provider %q", provider)
 	}

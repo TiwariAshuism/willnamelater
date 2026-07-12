@@ -69,6 +69,25 @@ type insightsResponse struct {
 	} `json:"data"`
 }
 
+// demographicsResponse is the account-level follower_demographics insight in the
+// total_value + breakdown shape: each breakdown result pairs a single dimension
+// value (an age bucket, a gender code, or an ISO country code) with a follower
+// count. Its shape is derived from the public Graph API reference, not captured
+// data.
+type demographicsResponse struct {
+	Data []struct {
+		Name       string `json:"name"`
+		TotalValue struct {
+			Breakdowns []struct {
+				Results []struct {
+					DimensionValues []string    `json:"dimension_values"`
+					Value           json.Number `json:"value"`
+				} `json:"results"`
+			} `json:"breakdowns"`
+		} `json:"total_value"`
+	} `json:"data"`
+}
+
 // commentsResponse is one page of the comments edge.
 type commentsResponse struct {
 	Data   []commentNode `json:"data"`
@@ -428,6 +447,71 @@ func (c *Connector) listComments(ctx context.Context, token string, posts []conn
 				break
 			}
 			after = resp.Paging.Cursors.After
+		}
+	}
+	return out, nil
+}
+
+// getAudience resolves the account's follower demographics across the age,
+// gender and country breakdowns — one insights call each — and normalizes each
+// to fractions. It returns (nil, nil) when the account exposes no demographics
+// at all (a valid empty result). Any transport, quota, permission or
+// availability error is returned to the caller, which treats audience as
+// best-effort and marks the snapshot partial rather than failing the audit.
+func (c *Connector) getAudience(ctx context.Context, token, accountID string) (*connector.AudienceBreakdown, error) {
+	age, err := c.demographicBreakdown(ctx, token, accountID, breakdownAge)
+	if err != nil {
+		return nil, err
+	}
+	gender, err := c.demographicBreakdown(ctx, token, accountID, breakdownGender)
+	if err != nil {
+		return nil, err
+	}
+	country, err := c.demographicBreakdown(ctx, token, accountID, breakdownCountry)
+	if err != nil {
+		return nil, err
+	}
+
+	ages := normalizeFractions(age)
+	genders := normalizeGender(gender)
+	countries := normalizeFractions(country)
+	if ages == nil && genders == nil && countries == nil {
+		return nil, nil
+	}
+	return &connector.AudienceBreakdown{
+		Countries: countries,
+		AgeGroups: ages,
+		Gender:    genders,
+	}, nil
+}
+
+// demographicBreakdown fetches one follower_demographics breakdown dimension and
+// reduces it to a bucket→count map. A malformed count is skipped, not fatal.
+func (c *Connector) demographicBreakdown(ctx context.Context, token, accountID, breakdown string) (map[string]int64, error) {
+	params := url.Values{}
+	params.Set("metric", metricFollowerDemographics)
+	params.Set("period", "lifetime")
+	params.Set("metric_type", "total_value")
+	params.Set("breakdown", breakdown)
+
+	var resp demographicsResponse
+	if err := c.get(ctx, token, accountID+"/insights", params, &resp); err != nil {
+		return nil, err
+	}
+
+	out := make(map[string]int64)
+	for _, d := range resp.Data {
+		for _, b := range d.TotalValue.Breakdowns {
+			for _, r := range b.Results {
+				if len(r.DimensionValues) == 0 {
+					continue
+				}
+				n, err := r.Value.Int64()
+				if err != nil {
+					continue
+				}
+				out[r.DimensionValues[0]] = n
+			}
 		}
 	}
 	return out, nil

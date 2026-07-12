@@ -81,6 +81,7 @@ func (s *Service) Score(
 	}
 	score.AuditJobID = auditJobID
 	score.InfluencerID = influencerID
+	score.VerificationTier = contract.DeriveVerificationTier(snapshots)
 
 	if err := s.repo.UpsertScore(ctx, toScoreRow(score, snapshots)); err != nil {
 		return contract.Score{}, err

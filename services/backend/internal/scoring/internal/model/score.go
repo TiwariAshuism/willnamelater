@@ -30,6 +30,7 @@ type ScoreRow struct {
 	WeightsVersion        int
 	BenchmarkVersion      int
 	ContributingPlatforms []string
+	VerificationTier      string
 	Breakdown             Breakdown
 	CreatedAt             time.Time
 }
@@ -64,6 +65,7 @@ type ScoreResponse struct {
 	BenchmarkVersion      int                          `json:"benchmark_version"`
 	BenchmarkLabel        string                       `json:"benchmark_label"`
 	ContributingPlatforms []string                     `json:"contributing_platforms"`
+	VerificationTier      string                       `json:"verification_tier"`
 	CreatedAt             time.Time                    `json:"created_at"`
 }
 

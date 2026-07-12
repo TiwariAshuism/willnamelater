@@ -218,16 +218,22 @@ func (a auditConnections) ListConnections(ctx context.Context, influencerID uuid
 		return nil, err
 	}
 
-	// Index the owner's live tokens by platform, when there is an owner. A profile
-	// with no owner keeps an empty index, so every handle resolves to a nil token.
-	tokens := map[connector.Platform]connector.OAuthToken{}
+	// Index the owner's live connections by platform, when there is an owner. A
+	// profile with no owner keeps an empty index, so every handle resolves to a
+	// nil token. Each entry carries both the token and the id the provider
+	// resolved at connect time (e.g. the numeric Instagram Business account id).
+	type liveConn struct {
+		token     connector.OAuthToken
+		accountID string
+	}
+	live := map[connector.Platform]liveConn{}
 	if profile.OwnerUserID != nil {
-		live, err := a.oauth.LiveConnections(ctx, *profile.OwnerUserID)
+		conns, err := a.oauth.LiveConnections(ctx, *profile.OwnerUserID)
 		if err != nil {
 			return nil, err
 		}
-		for _, lc := range live {
-			tokens[connector.Platform(lc.Platform)] = lc.Token
+		for _, lc := range conns {
+			live[connector.Platform(lc.Platform)] = liveConn{token: lc.Token, accountID: lc.ProviderAccountID}
 		}
 	}
 
@@ -238,13 +244,27 @@ func (a auditConnections) ListConnections(ctx context.Context, influencerID uuid
 			Handle:    h.Handle,
 			AccountID: h.AccountID,
 		}
-		if tok, ok := tokens[h.Platform]; ok {
-			t := tok
+		if lc, ok := live[h.Platform]; ok {
+			t := lc.token
 			conn.Token = &t
+			conn.AccountID = connAccountID(h.AccountID, lc.accountID)
 		}
 		conns = append(conns, conn)
 	}
 	return conns, nil
+}
+
+// connAccountID chooses the account id a connected-platform fetch runs against.
+// For a connected platform the OAuth-resolved id is authoritative — it is the id
+// the live API must be queried with (e.g. the numeric Instagram Business account
+// id, not the public handle) — so it wins whenever the provider resolved one.
+// A provider that resolved nothing leaves the handle's own id in place, which is
+// the correct cold-start/public-path behavior.
+func connAccountID(handleID, liveID string) string {
+	if liveID != "" {
+		return liveID
+	}
+	return handleID
 }
 
 // --- CallerID: auth -> port.CallerID -------------------------------------
@@ -300,13 +320,14 @@ func (r reportScoreReader) ScoreOf(ctx context.Context, influencerID uuid.UUID) 
 		return reportport.ScoreView{}, err
 	}
 	out := reportport.ScoreView{
-		Present:        true,
-		Overall:        view.Overall,
-		Authenticity:   view.Authenticity,
-		Niche:          view.Niche,
-		Tier:           view.Tier,
-		BenchmarkLabel: view.BenchmarkLabel,
-		Subscores:      make([]reportport.Subscore, 0, len(view.Subscores)),
+		Present:          true,
+		Overall:          view.Overall,
+		Authenticity:     view.Authenticity,
+		Niche:            view.Niche,
+		Tier:             view.Tier,
+		BenchmarkLabel:   view.BenchmarkLabel,
+		VerificationTier: view.VerificationTier,
+		Subscores:        make([]reportport.Subscore, 0, len(view.Subscores)),
 	}
 	for _, s := range view.Subscores {
 		out.Subscores = append(out.Subscores, reportport.Subscore{Name: s.Name, Value: s.Value, Confidence: s.Confidence})

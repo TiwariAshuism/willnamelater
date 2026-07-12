@@ -52,13 +52,16 @@ type FraudBlock struct {
 // ScoreBlock is the composite score presented in the report. Available is false
 // for a fully failed audit that produced no score.
 type ScoreBlock struct {
-	Available      bool       `json:"available"`
-	Overall        float64    `json:"overall"`
-	Authenticity   float64    `json:"authenticity"`
-	Niche          string     `json:"niche,omitempty"`
-	Tier           string     `json:"tier,omitempty"`
-	BenchmarkLabel string     `json:"benchmark_label,omitempty"`
-	Subscores      []Subscore `json:"subscores"`
+	Available      bool    `json:"available"`
+	Overall        float64 `json:"overall"`
+	Authenticity   float64 `json:"authenticity"`
+	Niche          string  `json:"niche,omitempty"`
+	Tier           string  `json:"tier,omitempty"`
+	BenchmarkLabel string  `json:"benchmark_label,omitempty"`
+	// VerificationTier is the trust tier ("verified"/"estimated"/"unverified")
+	// derived from the provenance of the data behind the score.
+	VerificationTier string     `json:"verification_tier,omitempty"`
+	Subscores        []Subscore `json:"subscores"`
 }
 
 // Subscore is one dimension of the composite, with the confidence that

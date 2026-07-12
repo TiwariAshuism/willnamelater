@@ -1,10 +1,20 @@
-# `services/ml/training` — supervised fraud model (design)
+# `services/ml/training` — supervised fraud model
 
-**Status: design only. No trainer is shipped, and none should be until real
-labelled dispute data exists.** A classifier fit on an empty or near-empty label
-set produces a confidently wrong model — exactly the failure mode InfluAudit
-exists to expose in other people's numbers. This document fixes the contract and
-the plan so that building the trainer, once there is data, is a small step.
+**Status: implemented and data-floor gated.** The pipeline is real
+(`labels.py` → `features.py` → `gate.py` → `train.py` → `artifact.py`, driven by
+`cli.py`), but it **trains nothing and writes no artifact until real labelled
+dispute data clears the floor of ≥50 feature-bearing examples per class**. Below
+the floor the ML service keeps serving the unsupervised cold-start models and the
+registry stays `heuristic` — a classifier fit on an empty or near-empty label set
+produces a confidently wrong model, exactly the failure mode InfluAudit exists to
+expose in other people's numbers. A trained model only ever *augments* the
+cold-start path, never replaces it.
+
+Run it with `make ml-train` (or `python -m training.cli --labels-url … --out
+$INFLUAUDIT_ML_ARTIFACTS`): it fetches labels from the admin export and either
+writes `model.txt` + `manifest.json` into `$INFLUAUDIT_ML_ARTIFACTS` (which the
+running service picks up on its next request) or reports the shortfall and writes
+nothing.
 
 ## Where the labels come from
 

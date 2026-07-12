@@ -31,6 +31,7 @@ func toScoreRow(score contract.Score, snapshots []connector.Snapshot) model.Scor
 		WeightsVersion:        score.WeightsVersion,
 		BenchmarkVersion:      score.BenchmarkVersion,
 		ContributingPlatforms: platformStrings(score.ContributingPlatforms),
+		VerificationTier:      score.VerificationTier,
 		Breakdown: model.Breakdown{
 			Niche:             score.Niche,
 			Tier:              score.Tier,
@@ -64,6 +65,7 @@ func toScoreResponse(row model.ScoreRow) model.ScoreResponse {
 		BenchmarkVersion:      row.BenchmarkVersion,
 		BenchmarkLabel:        row.Breakdown.BenchmarkLabel,
 		ContributingPlatforms: row.ContributingPlatforms,
+		VerificationTier:      row.VerificationTier,
 		CreatedAt:             row.CreatedAt,
 	}
 	if row.InfluencerID != nil {

@@ -1,7 +1,7 @@
 // Package meta implements connector.Connector for Instagram over the Meta Graph
 // API (graph.facebook.com). It audits a Business/Creator account the influencer
 // has connected over OAuth: media, per-media insights (reach, impressions,
-// saved, shares) and comments.
+// saved, shares), comments, and audience demographics (age, gender, country).
 //
 // Unlike the YouTube connector, the Meta Graph API exposes NO public
 // unauthenticated path — every read requires the connected user's OAuth access
@@ -69,6 +69,21 @@ const (
 	insightReach       = "reach"
 	insightSaved       = "saved"
 	insightShares      = "shares"
+)
+
+// Account-level follower-demographics insight. The Graph API exposes audience
+// composition via the follower_demographics metric with a total_value query and
+// one breakdown dimension per call. It requires a Business/Creator account with
+// at least audienceFollowerThreshold followers; below that Meta returns no
+// distribution, so the connector skips the call and marks the snapshot partial
+// rather than fabricating one.
+const (
+	metricFollowerDemographics = "follower_demographics"
+	breakdownAge               = "age"
+	breakdownGender            = "gender"
+	breakdownCountry           = "country"
+	audienceFollowerThreshold  = 100
+	audienceBreakdownCalls     = 3 // one insights call per breakdown (age, gender, country)
 )
 
 // Doer is the minimal HTTP contract the connector depends on: the standard
@@ -155,10 +170,10 @@ func (c *Connector) Platform() connector.Platform { return connector.PlatformIns
 
 // Capabilities returns every capability this connector advertises. A fresh slice
 // is returned each call so a caller cannot mutate shared state. Audience
-// demographics are advertised but degrade to a partial result: they require the
-// account-level insights endpoint under a lifetime period and a follower
-// threshold, which is out of this connector's scope; the value is never
-// fabricated.
+// demographics are served from the account-level follower_demographics insight
+// for accounts that clear Meta's follower threshold; a smaller account, a missing
+// insights permission, or a rate limit leaves the audience absent and the
+// snapshot partial rather than fabricating a distribution.
 func (c *Connector) Capabilities() []connector.Capability {
 	return []connector.Capability{
 		connector.CapabilityProfile,
@@ -186,6 +201,9 @@ func (c *Connector) CostOf(req connector.FetchRequest) int {
 	}
 	if req.Wants(connector.CapabilityComments) && nPosts > 0 {
 		cost += nPosts * c.maxCommentPagesPerMedia
+	}
+	if req.Wants(connector.CapabilityAudienceBreakdown) {
+		cost += audienceBreakdownCalls
 	}
 	return cost
 }
@@ -216,6 +234,7 @@ func (c *Connector) Fetch(ctx context.Context, req connector.FetchRequest) (conn
 
 	snap := connector.Snapshot{
 		Platform:   connector.PlatformInstagram,
+		Source:     connector.SourceInstagramGraph,
 		Handle:     req.Handle,
 		AccountID:  req.AccountID,
 		CapturedAt: c.now(),
@@ -278,12 +297,20 @@ func (c *Connector) Fetch(ctx context.Context, req connector.FetchRequest) (conn
 		}
 	}
 
-	// Audience demographics require the account-level insights endpoint under a
-	// lifetime period and a 100-follower threshold, which this connector does not
-	// call. Rather than fabricate a distribution we leave Snapshot.Audience nil
-	// and mark the snapshot partial so the orchestrator records the gap honestly.
+	// Phase 5: audience demographics (age, gender, country) from the account-level
+	// follower_demographics insight. It is best-effort and never fatal: an account
+	// below Meta's follower threshold exposes none (skip the call), and any error —
+	// a missing insights permission, an unavailable distribution, a rate limit —
+	// leaves Audience nil and marks the snapshot partial, so the gap is recorded
+	// honestly rather than fabricated.
 	if req.Wants(connector.CapabilityAudienceBreakdown) {
-		snap.Partial = true
+		if snap.Followers < audienceFollowerThreshold {
+			snap.Partial = true
+		} else if aud, aerr := c.getAudience(ctx, token, req.AccountID); aerr != nil || aud == nil {
+			snap.Partial = true
+		} else {
+			snap.Audience = aud
+		}
 	}
 
 	return snap, nil
@@ -340,4 +367,52 @@ func parseTime(s string) time.Time {
 		return t
 	}
 	return time.Time{}
+}
+
+// normalizeFractions turns per-bucket follower counts into fractions of their
+// total. An empty or all-zero input yields nil: the dimension is then treated as
+// absent (Snapshot.Audience distinguishes nil from a set of zero fractions),
+// never fabricated.
+func normalizeFractions(counts map[string]int64) map[string]float64 {
+	var total int64
+	for _, v := range counts {
+		if v > 0 {
+			total += v
+		}
+	}
+	if total == 0 {
+		return nil
+	}
+	out := make(map[string]float64, len(counts))
+	for k, v := range counts {
+		if v > 0 {
+			out[k] = float64(v) / float64(total)
+		}
+	}
+	return out
+}
+
+// normalizeGender relabels Meta's single-letter gender codes (F/M/U) onto the
+// connector's full labels (female/male/unknown) before normalizing to fractions.
+// An unrecognised code passes through lowercased so an unexpected value is
+// surfaced rather than silently dropped.
+func normalizeGender(counts map[string]int64) map[string]float64 {
+	relabeled := make(map[string]int64, len(counts))
+	for k, v := range counts {
+		relabeled[genderLabel(k)] += v
+	}
+	return normalizeFractions(relabeled)
+}
+
+func genderLabel(code string) string {
+	switch strings.ToUpper(code) {
+	case "F":
+		return "female"
+	case "M":
+		return "male"
+	case "U":
+		return "unknown"
+	default:
+		return strings.ToLower(code)
+	}
 }

@@ -32,13 +32,14 @@ const shareTTL = 24 * time.Hour
 // advisory narrative or anything identifying the account owner beyond the public
 // handle the creator already publishes.
 type BadgeSnapshot struct {
-	Handle         string  `json:"handle"`
-	Overall        float64 `json:"overall"`
-	Authenticity   float64 `json:"authenticity"`
-	Niche          string  `json:"niche"`
-	Tier           string  `json:"tier"`
-	BenchmarkLabel string  `json:"benchmark_label"`
-	GeneratedAt    string  `json:"generated_at"`
+	Handle           string  `json:"handle"`
+	Overall          float64 `json:"overall"`
+	Authenticity     float64 `json:"authenticity"`
+	Niche            string  `json:"niche"`
+	Tier             string  `json:"tier"`
+	BenchmarkLabel   string  `json:"benchmark_label"`
+	VerificationTier string  `json:"verification_tier"`
+	GeneratedAt      string  `json:"generated_at"`
 }
 
 // ReportRecord is a published report to persist.
@@ -114,13 +115,14 @@ func (s *Service) Assemble(ctx context.Context, auditID string) (render.Report, 
 	}
 	if sc.Present {
 		report.Score = render.ScoreBlock{
-			Available:      true,
-			Overall:        sc.Overall,
-			Authenticity:   sc.Authenticity,
-			Niche:          sc.Niche,
-			Tier:           sc.Tier,
-			BenchmarkLabel: sc.BenchmarkLabel,
-			Subscores:      make([]render.Subscore, 0, len(sc.Subscores)),
+			Available:        true,
+			Overall:          sc.Overall,
+			Authenticity:     sc.Authenticity,
+			Niche:            sc.Niche,
+			Tier:             sc.Tier,
+			BenchmarkLabel:   sc.BenchmarkLabel,
+			VerificationTier: sc.VerificationTier,
+			Subscores:        make([]render.Subscore, 0, len(sc.Subscores)),
 		}
 		for _, ss := range sc.Subscores {
 			report.Score.Subscores = append(report.Score.Subscores, render.Subscore{
@@ -272,14 +274,15 @@ func (s *Service) PublicBadge(ctx context.Context, slug string) (render.PublicBa
 	}
 
 	return render.PublicBadge{
-		Handle:         rec.Badge.Handle,
-		Overall:        rec.Badge.Overall,
-		Authenticity:   rec.Badge.Authenticity,
-		Niche:          rec.Badge.Niche,
-		Tier:           rec.Badge.Tier,
-		BenchmarkLabel: rec.Badge.BenchmarkLabel,
-		GeneratedAt:    rec.Badge.GeneratedAt,
-		PDFURL:         pdfURL,
+		Handle:           rec.Badge.Handle,
+		Overall:          rec.Badge.Overall,
+		Authenticity:     rec.Badge.Authenticity,
+		Niche:            rec.Badge.Niche,
+		Tier:             rec.Badge.Tier,
+		BenchmarkLabel:   rec.Badge.BenchmarkLabel,
+		VerificationTier: rec.Badge.VerificationTier,
+		GeneratedAt:      rec.Badge.GeneratedAt,
+		PDFURL:           pdfURL,
 	}, nil
 }
 
@@ -293,12 +296,13 @@ func badgeFrom(r render.Report, now time.Time) BadgeSnapshot {
 		generated = now.Format("2006-01-02 15:04 UTC")
 	}
 	return BadgeSnapshot{
-		Overall:        r.Score.Overall,
-		Authenticity:   r.Score.Authenticity,
-		Niche:          r.Score.Niche,
-		Tier:           r.Score.Tier,
-		BenchmarkLabel: r.Score.BenchmarkLabel,
-		GeneratedAt:    generated,
+		Overall:          r.Score.Overall,
+		Authenticity:     r.Score.Authenticity,
+		Niche:            r.Score.Niche,
+		Tier:             r.Score.Tier,
+		BenchmarkLabel:   r.Score.BenchmarkLabel,
+		VerificationTier: r.Score.VerificationTier,
+		GeneratedAt:      generated,
 	}
 }
 

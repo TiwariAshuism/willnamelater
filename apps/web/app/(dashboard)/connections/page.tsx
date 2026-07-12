@@ -2,7 +2,7 @@ import { requireToken } from "@/lib/auth";
 import { listConnections } from "@/lib/api/oauth";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { ConnectAccountButton } from "@/components/connections/ConnectAccountButton";
-import { YOUTUBE_PROVIDER } from "@/lib/providers";
+import { INSTAGRAM_PROVIDER, YOUTUBE_PROVIDER } from "@/lib/providers";
 import type { ConnectionResponse } from "@influaudit/contracts";
 
 export default async function ConnectionsPage({
@@ -52,6 +52,22 @@ export default async function ConnectionsPage({
           <ConnectAccountButton
             provider={YOUTUBE_PROVIDER}
             label="Connect YouTube"
+          />
+        </div>
+      </Card>
+
+      <Card className="flex flex-col gap-4">
+        <div className="flex items-center justify-between">
+          <div>
+            <CardTitle>Instagram</CardTitle>
+            <p className="mt-1 text-sm text-[var(--ink-secondary)]">
+              Authorize via Meta (Business/Creator account insights).{" "}
+              <span className="text-[var(--muted)]">Pending Meta review.</span>
+            </p>
+          </div>
+          <ConnectAccountButton
+            provider={INSTAGRAM_PROVIDER}
+            label="Connect Instagram"
           />
         </div>
       </Card>

@@ -948,6 +948,8 @@ components:
           type: string
         tier:
           type: string
+        verification_tier:
+          type: string
       required:
       - authenticity
       - overall
@@ -1016,6 +1018,8 @@ components:
             $ref: "#/components/schemas/report.Subscore"
           type: array
         tier:
+          type: string
+        verification_tier:
           type: string
       required:
       - authenticity
@@ -1104,6 +1108,8 @@ components:
           type: object
         tier:
           type: string
+        verification_tier:
+          type: string
         weights_version:
           type: integer
       required:
@@ -1117,6 +1123,7 @@ components:
       - overall
       - subscores
       - tier
+      - verification_tier
       - weights_version
       type: object
     scoring.Subscore:

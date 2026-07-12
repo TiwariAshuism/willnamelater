@@ -31,7 +31,11 @@ type PublicBadge struct {
 	Niche          string  `json:"niche,omitempty"`
 	Tier           string  `json:"tier,omitempty"`
 	BenchmarkLabel string  `json:"benchmark_label,omitempty"`
-	GeneratedAt    string  `json:"generated_at,omitempty"`
+	// VerificationTier is the trust tier ("verified"/"estimated"), the 🟢/🟡
+	// signal shown on the public badge. A verified badge rests on live-API data;
+	// an estimated one includes uploaded or provider-sourced data.
+	VerificationTier string `json:"verification_tier,omitempty"`
+	GeneratedAt      string `json:"generated_at,omitempty"`
 	// PDFURL is a presigned, expiring link to the full rendered PDF.
 	PDFURL string `json:"pdf_url,omitempty"`
 }

@@ -1023,6 +1023,7 @@ export interface components {
             overall: number;
             pdf_url?: string;
             tier?: string;
+            verification_tier?: string;
         };
         "report.PublishResult": {
             badge_url: string;
@@ -1049,6 +1050,7 @@ export interface components {
             overall: number;
             subscores: components["schemas"]["report.Subscore"][];
             tier?: string;
+            verification_tier?: string;
         };
         "report.Subscore": {
             confidence: number;
@@ -1085,6 +1087,7 @@ export interface components {
                 [key: string]: components["schemas"]["scoring.Subscore"];
             };
             tier: string;
+            verification_tier: string;
             weights_version: number;
         };
         "scoring.Subscore": {

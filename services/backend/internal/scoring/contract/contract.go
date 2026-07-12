@@ -44,6 +44,40 @@ type FraudInput struct {
 	ModelVersion      string
 }
 
+// Verification tiers describe how much a score can be trusted based on where its
+// data came from. They are stable, persisted strings and are surfaced on the
+// public badge as a 🟢/🟡 signal.
+const (
+	// VerificationVerified: every contributing snapshot came from a live,
+	// authenticated API pull (OAuth or an API key). The number rests on ground
+	// truth the platform itself reported.
+	VerificationVerified = "verified"
+	// VerificationEstimated: at least one contributing snapshot came from an
+	// upload or a public-data provider, so the composite is a considered estimate,
+	// not measured ground truth.
+	VerificationEstimated = "estimated"
+	// VerificationUnverified: no platform produced usable data (a failed audit).
+	VerificationUnverified = "unverified"
+)
+
+// DeriveVerificationTier classifies a score by the provenance of the snapshots
+// that fed it. It is deliberately monotone and conservative: a single uploaded
+// or provider-sourced platform downgrades the whole composite to "estimated",
+// and only an all-live set earns "verified" — the score never over-claims. Any
+// source that is not a recognised live path (including an unset one) is treated
+// as non-live, so an unlabelled snapshot can never be silently certified.
+func DeriveVerificationTier(snaps []connector.Snapshot) string {
+	if len(snaps) == 0 {
+		return VerificationUnverified
+	}
+	for _, s := range snaps {
+		if s.Source != connector.SourceYouTubeAPI && s.Source != connector.SourceInstagramGraph {
+			return VerificationEstimated
+		}
+	}
+	return VerificationVerified
+}
+
 // Subscore is one component of the composite: its value on a 0..100 scale and
 // the confidence in [0,1] that qualifies it. Confidence stays low while the
 // evidence behind the value is thin — a bootstrap benchmark with few samples, a
@@ -84,6 +118,11 @@ type Score struct {
 	// partial audit records the reduced set so a consumer never reads the score
 	// as if it covered every requested platform.
 	ContributingPlatforms []connector.Platform
+
+	// VerificationTier is the trust tier derived from the data sources that fed
+	// the score (see DeriveVerificationTier): "verified", "estimated", or
+	// "unverified".
+	VerificationTier string
 
 	CreatedAt time.Time
 }

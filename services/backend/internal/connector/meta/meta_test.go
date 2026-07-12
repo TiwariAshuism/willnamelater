@@ -52,6 +52,25 @@ const (
 	commentsBodyMedia2 = `{"data":[{"id":"c2","text":"great work","timestamp":"2021-09-06T08:00:00+0000",` +
 		`"username":"fan_b","from":{"id":"user_b","username":"fan_b"}}],"paging":{"cursors":{"after":""}}}`
 
+	// A small account: below Meta's follower threshold, it exposes no audience
+	// demographics, so the connector skips the call and marks the snapshot partial.
+	smallUserBody = `{"id":"17841400000000000","username":"tinycreator",` +
+		`"followers_count":40,"media_count":12}`
+
+	// Account-level follower_demographics insight, one breakdown dimension each,
+	// in the documented total_value shape.
+	demographicsAgeBody = `{"data":[{"name":"follower_demographics","period":"lifetime",` +
+		`"total_value":{"breakdowns":[{"dimension_keys":["age"],"results":[` +
+		`{"dimension_values":["18-24"],"value":600},{"dimension_values":["25-34"],"value":400}]}]}}]}`
+
+	demographicsGenderBody = `{"data":[{"name":"follower_demographics","period":"lifetime",` +
+		`"total_value":{"breakdowns":[{"dimension_keys":["gender"],"results":[` +
+		`{"dimension_values":["F"],"value":700},{"dimension_values":["M"],"value":300}]}]}}]}`
+
+	demographicsCountryBody = `{"data":[{"name":"follower_demographics","period":"lifetime",` +
+		`"total_value":{"breakdowns":[{"dimension_keys":["country"],"results":[` +
+		`{"dimension_values":["US"],"value":500},{"dimension_values":["IN"],"value":500}]}]}}]}`
+
 	appRateLimitBody = `{"error":{"message":"Application request limit reached",` +
 		`"type":"OAuthException","code":4,"fbtrace_id":"AtraceA"}}`
 
@@ -280,17 +299,18 @@ func TestCostOf(t *testing.T) {
 			want: 1 + 3 + 60 + 120,
 		},
 		{
-			name: "audience adds nothing",
+			name: "audience adds its three breakdown calls",
 			req: connector.FetchRequest{
 				Capabilities: []connector.Capability{connector.CapabilityProfile, connector.CapabilityAudienceBreakdown},
 			},
-			want: 1,
+			// user(1) + audience breakdowns (age, gender, country) = 3
+			want: 1 + 3,
 		},
 		{
 			name: "empty capabilities means all",
 			req:  connector.FetchRequest{},
-			// user(1) + media(1) + insights 25 + comments 25*2=50
-			want: 1 + 1 + 25 + 50,
+			// user(1) + media(1) + insights 25 + comments 25*2=50 + audience 3
+			want: 1 + 1 + 25 + 50 + 3,
 		},
 	}
 	for _, tt := range tests {
@@ -656,10 +676,13 @@ func TestFetchInsightsUnavailableSkipsMedia(t *testing.T) {
 	}
 }
 
-func TestFetchPartialOnAudience(t *testing.T) {
+// An account below the follower threshold exposes no demographics: the connector
+// skips the call entirely (no wasted API calls) and marks the snapshot partial,
+// never fabricating a distribution.
+func TestFetchAudienceBelowThresholdIsPartial(t *testing.T) {
 	t.Parallel()
 	doer := newStubDoer(t, map[string][]stubResponse{
-		"user": {ok(userBody)},
+		"user": {ok(smallUserBody)},
 	})
 	c := newTestConnector(t, doer)
 
@@ -673,13 +696,80 @@ func TestFetchPartialOnAudience(t *testing.T) {
 		t.Fatalf("Fetch: %v", err)
 	}
 	if !snap.Partial {
-		t.Fatal("audience request the connector cannot serve should be partial")
+		t.Fatal("a below-threshold account cannot serve audience → partial")
 	}
 	if snap.Audience != nil {
 		t.Fatal("audience must be nil, never fabricated")
 	}
-	if doer.calls["media"]+doer.calls["insights"]+doer.calls["comments"] != 0 {
-		t.Fatalf("audience-only fetch spent extra calls: %+v", doer.calls)
+	if doer.calls["insights"] != 0 {
+		t.Fatalf("below-threshold audience must issue no insights calls: %+v", doer.calls)
+	}
+}
+
+// A full audience fetch normalizes each breakdown (age, gender, country) to
+// fractions and populates Snapshot.Audience without marking the snapshot partial.
+func TestFetchAudienceSuccess(t *testing.T) {
+	t.Parallel()
+	doer := newStubDoer(t, map[string][]stubResponse{
+		"user":     {ok(userBody)},
+		"insights": {ok(demographicsAgeBody), ok(demographicsGenderBody), ok(demographicsCountryBody)},
+	})
+	c := newTestConnector(t, doer)
+
+	snap, err := c.Fetch(context.Background(), connector.FetchRequest{
+		Handle:       "@x",
+		AccountID:    testAccountID,
+		Token:        validToken(),
+		Capabilities: []connector.Capability{connector.CapabilityProfile, connector.CapabilityAudienceBreakdown},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if snap.Partial {
+		t.Fatal("a complete audience fetch should not be partial")
+	}
+	if snap.Audience == nil {
+		t.Fatal("audience should be populated")
+	}
+	if got := snap.Audience.AgeGroups["18-24"]; got != 0.6 {
+		t.Fatalf("18-24 fraction = %v, want 0.6 (600/1000)", got)
+	}
+	if got := snap.Audience.Gender["female"]; got != 0.7 {
+		t.Fatalf("female fraction = %v, want 0.7 (F relabelled)", got)
+	}
+	if got := snap.Audience.Countries["US"]; got != 0.5 {
+		t.Fatalf("US fraction = %v, want 0.5", got)
+	}
+	if doer.calls["insights"] != 3 {
+		t.Fatalf("audience should spend one call per breakdown (3), got %+v", doer.calls)
+	}
+}
+
+// Audience is best-effort: a permission or availability error on the demographics
+// call leaves Audience nil and marks the snapshot partial, never failing the
+// whole audit.
+func TestFetchAudiencePartialOnError(t *testing.T) {
+	t.Parallel()
+	doer := newStubDoer(t, map[string][]stubResponse{
+		"user":     {ok(userBody)},
+		"insights": {{status: http.StatusForbidden, body: permissionBody}},
+	})
+	c := newTestConnector(t, doer)
+
+	snap, err := c.Fetch(context.Background(), connector.FetchRequest{
+		Handle:       "@x",
+		AccountID:    testAccountID,
+		Token:        validToken(),
+		Capabilities: []connector.Capability{connector.CapabilityProfile, connector.CapabilityAudienceBreakdown},
+	})
+	if err != nil {
+		t.Fatalf("Fetch must not fail the audit on an audience error: %v", err)
+	}
+	if !snap.Partial {
+		t.Fatal("an audience error should mark the snapshot partial")
+	}
+	if snap.Audience != nil {
+		t.Fatal("audience must be nil when its fetch errored")
 	}
 }
 

@@ -78,6 +78,16 @@ migrate-local: ## Apply migrations from the host (needs INFLUAUDIT_POSTGRES__DSN
 migrate-reset: clean up ## Drop the data volume and re-apply every migration from scratch
 	@echo "Database reset and re-migrated."
 
+.PHONY: migrate-force
+migrate-force: ## Clear a dirty migration and pin the version: make migrate-force version=19 (then `make migrate`). If the failed migration left partial objects, drop them first or use migrate-reset.
+	@test -n "$(version)" || { echo "usage: make migrate-force version=<n>"; exit 1; }
+	$(COMPOSE) exec -T postgres psql -U $${POSTGRES_USER:-influaudit} -d $${POSTGRES_DB:-influaudit} \
+		-c "UPDATE schema_migrations SET version=$(version), dirty=false;"
+
+.PHONY: db-psql
+db-psql: ## Open a psql shell on the running compose postgres
+	$(COMPOSE) exec postgres psql -U $${POSTGRES_USER:-influaudit} -d $${POSTGRES_DB:-influaudit}
+
 .PHONY: migrate-create
 migrate-create: ## Scaffold the next-numbered up/down migration pair: make migrate-create name=add_widgets
 	@test -n "$(name)" || { echo "usage: make migrate-create name=<snake_case_name>"; exit 1; }
@@ -147,6 +157,13 @@ ml-install: ## Install the ML service with dev extras
 ml-test: ## Lint (ruff) and test (pytest) the ML service
 	cd $(ML) && ruff check .
 	cd $(ML) && pytest
+
+.PHONY: ml-train
+ml-train: ## Train the supervised fraud model from the admin label export (needs LABELS_URL, TOKEN, ARTIFACTS). Writes nothing below the data floor.
+	cd $(ML) && python -m training.cli \
+		--labels-url "$${LABELS_URL:-http://localhost:8080/v1/admin/training/labels}" \
+		--token "$${TOKEN:-}" \
+		--out "$${INFLUAUDIT_ML_ARTIFACTS:-./artifacts}"
 
 # ---------------------------------------------------------------------------
 # Web (Next.js) + typed contract client

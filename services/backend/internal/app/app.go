@@ -33,6 +33,7 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/connector"
 	"github.com/getnyx/influaudit/backend/internal/connector/csvimport"
 	"github.com/getnyx/influaudit/backend/internal/connector/meta"
+	"github.com/getnyx/influaudit/backend/internal/connector/providerpublic"
 	"github.com/getnyx/influaudit/backend/internal/connector/youtube"
 	"github.com/getnyx/influaudit/backend/internal/dataimport"
 	"github.com/getnyx/influaudit/backend/internal/influencer"
@@ -512,11 +513,26 @@ func (a *App) buildConnectorRegistry(cc *connector.Config) (*connector.Registry,
 		}
 	}
 
+	// Flow B: licensed public-data provider. When enabled it serves a public
+	// @handle audit for a platform with no live OAuth connection, sitting BETWEEN
+	// the live connectors and the uploaded-CSV fallback in precedence. It is off
+	// by default: no provider adapter is wired yet, so enabling it makes an
+	// Instagram audit fail loudly with a not-implemented error rather than
+	// fabricating public numbers or silently shadowing the working CSV path.
+	if flowBProviderEnabled() {
+		if _, taken := registry.Get(connector.PlatformInstagram); !taken {
+			if err := registry.Register(providerpublic.New(connector.PlatformInstagram, nil /* licensed adapter, wired when a provider is chosen */)); err != nil {
+				return nil, err
+			}
+		}
+	}
+
 	// Upload-backed fallbacks. Instagram has no live API connector until the Meta
 	// grant clears review (it is enabled:false in config), so the csvimport
 	// connector serves it from the creator's uploaded Insights export. It is
-	// registered only when no live connector already claims the platform, so a
-	// future live Meta connector takes precedence without a code change here.
+	// registered only when no live/provider connector already claims the platform,
+	// so a future live Meta connector (or an enabled provider) takes precedence
+	// without a code change here.
 	if _, taken := registry.Get(connector.PlatformInstagram); !taken {
 		if err := registry.Register(csvimport.New(connector.PlatformInstagram, a.Pool)); err != nil {
 			return nil, err
@@ -524,6 +540,14 @@ func (a *App) buildConnectorRegistry(cc *connector.Config) (*connector.Registry,
 	}
 
 	return registry, nil
+}
+
+// flowBProviderEnabled reports whether the Flow B licensed public-data provider
+// is switched on. It defaults off; enabling it without a wired provider adapter
+// makes provider-served audits fail loudly (not-implemented) rather than falling
+// through to the CSV upload path, which is the intended honest behavior.
+func flowBProviderEnabled() bool {
+	return os.Getenv("INFLUAUDIT_FLOWB_PROVIDER_ENABLED") == "true"
 }
 
 // resolveCredentials reads every environment variable the platform's auth block

@@ -97,7 +97,10 @@ type ReportView struct {
 	Overall        float64
 	Authenticity   float64
 	BenchmarkLabel string
-	Subscores      []NamedSubscore
+	// VerificationTier is the trust tier of the score ("verified"/"estimated"/
+	// "unverified"), derived from the provenance of the data that fed it.
+	VerificationTier string
+	Subscores        []NamedSubscore
 }
 
 // ReportView returns the latest persisted score for an influencer as a
@@ -110,11 +113,12 @@ func (m *Module) ReportView(ctx context.Context, influencerID uuid.UUID) (Report
 		return ReportView{}, err
 	}
 	view := ReportView{
-		Niche:          resp.Niche,
-		Tier:           resp.Tier,
-		Overall:        resp.Overall,
-		BenchmarkLabel: resp.BenchmarkLabel,
-		Subscores:      make([]NamedSubscore, 0, len(resp.Subscores)),
+		Niche:            resp.Niche,
+		Tier:             resp.Tier,
+		Overall:          resp.Overall,
+		BenchmarkLabel:   resp.BenchmarkLabel,
+		VerificationTier: resp.VerificationTier,
+		Subscores:        make([]NamedSubscore, 0, len(resp.Subscores)),
 	}
 	for name, sub := range resp.Subscores {
 		view.Subscores = append(view.Subscores, NamedSubscore{Name: name, Value: sub.Value, Confidence: sub.Confidence})

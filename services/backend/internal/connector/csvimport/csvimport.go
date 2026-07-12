@@ -79,6 +79,7 @@ func (c *Connector) Fetch(ctx context.Context, req connector.FetchRequest) (conn
 
 	return connector.Snapshot{
 		Platform:   c.platform,
+		Source:     connector.SourceCSVUpload,
 		Handle:     req.Handle,
 		AccountID:  req.AccountID,
 		CapturedAt: ds.capturedAt,

@@ -18,6 +18,31 @@ function fmt(n: number): string {
   return (Math.round(n * 10) / 10).toString();
 }
 
+// The trust chip: a verified badge rests on live-API data (🟢), an estimated one
+// includes uploaded or provider-sourced data (🟡). Anything else is shown
+// neutrally rather than claiming a tier the score does not have.
+function VerificationChip({ tier }: { tier?: string }) {
+  if (tier === "verified") {
+    return (
+      <span className="rounded-full bg-[color-mix(in_oklab,green_18%,transparent)] px-2.5 py-1 text-xs font-semibold text-green-700 dark:text-green-400">
+        🟢 Verified
+      </span>
+    );
+  }
+  if (tier === "estimated") {
+    return (
+      <span className="rounded-full bg-[color-mix(in_oklab,orange_18%,transparent)] px-2.5 py-1 text-xs font-semibold text-amber-700 dark:text-amber-400">
+        🟡 Estimated
+      </span>
+    );
+  }
+  return (
+    <span className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
+      InfluAudit
+    </span>
+  );
+}
+
 export default async function BadgePage({
   params,
 }: {
@@ -34,9 +59,7 @@ export default async function BadgePage({
     <main className="mx-auto flex min-h-screen max-w-xl flex-col items-center justify-center gap-6 px-6 py-16">
       <div className="w-full rounded-2xl border border-[var(--line)] bg-[var(--surface)] p-8 shadow-sm">
         <div className="flex items-center justify-between">
-          <span className="text-xs font-semibold uppercase tracking-wide text-[var(--muted)]">
-            InfluAudit · Verified
-          </span>
+          <VerificationChip tier={badge.verification_tier} />
           {badge.generated_at && (
             <span className="text-xs text-[var(--muted)]">
               {badge.generated_at}

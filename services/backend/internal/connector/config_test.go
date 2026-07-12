@@ -43,7 +43,9 @@ func TestLoadRealConfig(t *testing.T) {
 		byPlatform[cc.Platform] = cc
 	}
 
-	// YouTube and Instagram are the enabled MVP connectors.
+	// YouTube is the enabled MVP connector. Instagram is present but stays
+	// disabled until Meta app review clears; the csvimport connector is the
+	// interim Instagram data path.
 	yt, ok := byPlatform[connector.PlatformYouTube]
 	if !ok {
 		t.Fatal("youtube connector missing")
@@ -62,8 +64,11 @@ func TestLoadRealConfig(t *testing.T) {
 	if !ok {
 		t.Fatal("instagram connector missing")
 	}
-	if !ig.Enabled {
-		t.Fatal("instagram must be enabled")
+	// Instagram stays disabled until Meta app review clears — the live Graph
+	// connector must not be reachable before then; csvimport serves Instagram in
+	// the interim.
+	if ig.Enabled {
+		t.Fatal("instagram must stay disabled until Meta app review clears")
 	}
 	if !ig.RequiresAppReview {
 		t.Fatal("instagram must carry requires_app_review: true")
@@ -89,8 +94,9 @@ func TestLoadRealConfig(t *testing.T) {
 		}
 	}
 
-	if got := cfg.Enabled(); len(got) != 2 {
-		t.Fatalf("Enabled() returned %d connectors, want 2 (youtube, instagram)", len(got))
+	// Only youtube is enabled at MVP; instagram is gated on Meta app review.
+	if got := cfg.Enabled(); len(got) != 1 {
+		t.Fatalf("Enabled() returned %d connectors, want 1 (youtube)", len(got))
 	}
 }
 

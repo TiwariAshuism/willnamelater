@@ -10,6 +10,7 @@ import (
 
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
+	"github.com/getnyx/influaudit/backend/internal/scoring/contract"
 	"github.com/getnyx/influaudit/backend/internal/scoring/internal/engine"
 	"github.com/getnyx/influaudit/backend/internal/scoring/internal/model"
 )
@@ -104,8 +105,9 @@ func (r *PostgresRepository) UpsertScore(ctx context.Context, row model.ScoreRow
 
 	const q = `INSERT INTO score
 		(audit_job_id, influencer_id, overall, authenticity, engagement, audience_quality,
-		 content_quality, weights_version, benchmark_version, contributing_platforms, breakdown)
-		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::platform[], $11::jsonb)
+		 content_quality, weights_version, benchmark_version, contributing_platforms, breakdown,
+		 verification_tier)
+		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::platform[], $11::jsonb, $12)
 		ON CONFLICT (audit_job_id) DO UPDATE SET
 			influencer_id          = EXCLUDED.influencer_id,
 			overall                = EXCLUDED.overall,
@@ -116,16 +118,21 @@ func (r *PostgresRepository) UpsertScore(ctx context.Context, row model.ScoreRow
 			weights_version        = EXCLUDED.weights_version,
 			benchmark_version      = EXCLUDED.benchmark_version,
 			contributing_platforms = EXCLUDED.contributing_platforms,
-			breakdown              = EXCLUDED.breakdown`
+			breakdown              = EXCLUDED.breakdown,
+			verification_tier      = EXCLUDED.verification_tier`
 
 	platforms := row.ContributingPlatforms
 	if platforms == nil {
 		platforms = []string{}
 	}
+	tier := row.VerificationTier
+	if tier == "" {
+		tier = contract.VerificationUnverified
+	}
 	if _, err := r.pool.Exec(ctx, q,
 		row.AuditJobID, row.InfluencerID, row.Overall, row.Authenticity, row.Engagement,
 		row.AudienceQuality, row.ContentQuality, row.WeightsVersion, row.BenchmarkVersion,
-		platforms, breakdown,
+		platforms, breakdown, tier,
 	); err != nil {
 		return errs.Wrap(err, errs.KindUnavailable, "scoring.upsert_score", "could not persist score")
 	}
@@ -133,7 +140,7 @@ func (r *PostgresRepository) UpsertScore(ctx context.Context, row model.ScoreRow
 }
 
 const scoreColumns = `audit_job_id, influencer_id, overall, weights_version, benchmark_version,
-	contributing_platforms, breakdown, created_at`
+	contributing_platforms, breakdown, verification_tier, created_at`
 
 // LatestScore reads an influencer's most recent score row.
 func (r *PostgresRepository) LatestScore(ctx context.Context, influencerID uuid.UUID) (model.ScoreRow, error) {
@@ -190,7 +197,7 @@ func scanScore(row scanRow) (model.ScoreRow, error) {
 	)
 	if err := row.Scan(
 		&out.AuditJobID, &out.InfluencerID, &out.Overall, &out.WeightsVersion,
-		&out.BenchmarkVersion, &out.ContributingPlatforms, &breakdown, &out.CreatedAt,
+		&out.BenchmarkVersion, &out.ContributingPlatforms, &breakdown, &out.VerificationTier, &out.CreatedAt,
 	); err != nil {
 		return model.ScoreRow{}, err
 	}

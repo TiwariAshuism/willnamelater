@@ -199,6 +199,7 @@ func (c *Connector) Fetch(ctx context.Context, req connector.FetchRequest) (conn
 
 	snap := connector.Snapshot{
 		Platform:   connector.PlatformYouTube,
+		Source:     connector.SourceYouTubeAPI,
 		Handle:     req.Handle,
 		CapturedAt: c.now(),
 	}

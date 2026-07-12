@@ -31,6 +31,31 @@ const (
 	PlatformLinkedIn  Platform = "linkedin"
 )
 
+// DataSource names the concrete data path that produced a Snapshot. It is
+// distinct from Platform: the same platform can be reached by a live,
+// authenticated API pull, an uploaded export, or a licensed public-data
+// provider, and those carry very different trust. Downstream, the verification
+// tier of a score is derived from the sources of the snapshots that fed it — a
+// live-API pull is "verified", an upload or provider read is "estimated".
+//
+// This is deliberately the one provenance axis added to the connector layer;
+// the broader per-field {value, source, confidence} wrapper is left for when the
+// content-quality and reach/valuation models land and actually need it.
+type DataSource string
+
+const (
+	// SourceYouTubeAPI is a live pull from the YouTube Data API.
+	SourceYouTubeAPI DataSource = "youtube-api"
+	// SourceInstagramGraph is a live pull from the Meta/Instagram Graph API
+	// against a connected Business/Creator account (Flow A).
+	SourceInstagramGraph DataSource = "instagram-graph"
+	// SourceProviderPublic is a read from a licensed third-party public-data
+	// provider (Flow B). Inherently incomplete versus an OAuth pull.
+	SourceProviderPublic DataSource = "provider"
+	// SourceCSVUpload is a creator's own uploaded Insights export.
+	SourceCSVUpload DataSource = "csv"
+)
+
 // Capability enumerates a discrete kind of data a Connector can return. A
 // FetchRequest names the subset the orchestrator wants; a Connector advertises
 // the superset it can serve via Capabilities. The intersection is what a Fetch
@@ -168,7 +193,12 @@ type AudienceBreakdown struct {
 // maps its platform's native shape onto this type so downstream code stays
 // platform-agnostic.
 type Snapshot struct {
-	Platform   Platform
+	Platform Platform
+	// Source is the concrete data path that produced this snapshot (live API,
+	// upload, or provider). It distinguishes a verified live pull from an
+	// estimated one independent of Platform, and drives a score's verification
+	// tier. A connector sets it on every Snapshot it returns.
+	Source     DataSource
 	Handle     string
 	AccountID  string
 	CapturedAt time.Time
