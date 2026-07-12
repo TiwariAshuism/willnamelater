@@ -157,12 +157,12 @@ func adminSvc(repo Repository, store *fakeStore) *Service {
 // contract's validation_report_jsonb, not from any real training run.
 func passingReport() json.RawMessage {
 	return json.RawMessage(`{"g1_held_out":{"pass":true},"g2_stratified":{"pass":true},` +
-		`"g3_canary":{"pass":false,"skipped":true},"g4_vs_champion":{"pass":true}}`)
+		`"g3_canary":{"pass":false,"skipped":true},"g4_vs_champion":{"pass":true},"g6_beats_heuristic":{"pass":true}}`)
 }
 
 // fraudFloor is a data-floor-counts blob that meets the fraud per-class floor.
 func fraudFloor() json.RawMessage {
-	return json.RawMessage(`{"positive":61,"negative":74,"floor":50}`)
+	return json.RawMessage(`{"positive":61,"negative":74,"positive_influencers":40,"negative_influencers":52,"floor":50}`)
 }
 
 // --- RecordFeatureRow ----------------------------------------------------
@@ -711,7 +711,7 @@ func TestPromoteFirstChampionWithCanariesRequiresPassingCanaryGate(t *testing.T)
 
 	passing := base
 	passing.ValidationReport = json.RawMessage(`{"g1_held_out":{"pass":true},"g2_stratified":{"pass":true},` +
-		`"g3_canary":{"pass":true},"g4_vs_champion":{"pass":true}}`)
+		`"g3_canary":{"pass":true},"g4_vs_champion":{"pass":true},"g6_beats_heuristic":{"pass":true}}`)
 	repo := &fakeRepo{
 		getFound: true, getResult: passing, canaries: canaryOnFile,
 		promoteRes: model.PromotionResult{ChampionVersion: "lgbm-first"},

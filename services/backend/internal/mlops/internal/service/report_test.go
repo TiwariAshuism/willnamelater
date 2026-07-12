@@ -19,7 +19,10 @@ func mv(report, floor string) model.Version {
 	}
 }
 
-const okFloor = `{"positive":61,"negative":74,"floor":50}`
+// okFloor clears BOTH floors: the per-class row counts and the per-class DISTINCT
+// CREATOR counts. The creator counts are the ones that matter — 61 positive rows
+// from 3 creators would be 3 examples, not 61.
+const okFloor = `{"positive":61,"negative":74,"positive_influencers":40,"negative_influencers":52,"floor":50}`
 
 func TestValidatePromotableAllGatesPass(t *testing.T) {
 	report := `{"g1_held_out":{"pass":true},"g2_stratified":{"pass":true},"g3_canary":{"pass":true},"g4_vs_champion":{"pass":true},"g6_beats_heuristic":{"pass":true}}`
@@ -62,13 +65,40 @@ func TestValidatePromotableCanaryFailsNotSkipped(t *testing.T) {
 	}
 }
 
-func TestValidatePromotableShadowFailsBlocksUnlessOverride(t *testing.T) {
-	report := `{"g1_held_out":{"pass":true},"g3_canary":{"pass":true},"g4_vs_champion":{"pass":true},"g5_shadow":{"pass":false}}`
-	if err := validatePromotable(mv(report, okFloor), 1); errs.KindOf(err) != errs.KindConflict {
-		t.Fatalf("a failed shadow gate must block promotion, got %v", err)
+// The shadow gate DOES NOT EXIST, and this test pins that honestly rather than
+// pretending otherwise.
+//
+// The Python "g5" is a serving-SKEW check: it compares score distributions (PSI)
+// and joins NO LABELS, so it can never say a challenger is more ACCURATE. It never
+// even emitted its key, so the old Go check was a no-op over a nil field — a
+// safety gate that had never once run. It is now structurally incapable of
+// carrying a `pass`, and the Go report deliberately has no field for it.
+//
+// A stray g5 verdict in a stored report must therefore be INERT: it must neither
+// grant nor block a promotion, because it is not evidence of anything. What blocks
+// promotion is G6 — the challenger must beat the raw heuristic.
+//
+// The real label-joined arbiter (ml_prediction_log JOIN training_feature_row) is
+// NOT BUILT. There is currently no evidence-of-accuracy-on-live-traffic gate.
+func TestAStaleShadowVerdictIsInert(t *testing.T) {
+	base := `"g1_held_out":{"pass":true},"g3_canary":{"pass":true},"g4_vs_champion":{"pass":true},` +
+		`"g6_beats_heuristic":{"pass":true}`
+
+	// A "failing" shadow verdict cannot block a challenger that passed the gates
+	// that actually mean something: it never measured accuracy in the first place.
+	failing := `{` + base + `,"g5_shadow":{"pass":false}}`
+	if err := validatePromotable(mv(failing, okFloor), 1); err != nil {
+		t.Fatalf("a skew verdict is not an accuracy verdict and must not block: %v", err)
 	}
-	if err := validatePromotable(mv(report, okFloor), 1); err != nil {
-		t.Fatalf("override_shadow must waive the shadow gate: %v", err)
+
+	// And a "passing" one cannot rescue a challenger that failed G6 — which is the
+	// dangerous direction, and the one that used to be exploitable: a null
+	// "plumbing" challenger scores identically to the champion, PSI ~= 0, and the
+	// shadow gate would have waved it through with zero labels behind it.
+	distillation := `{"g1_held_out":{"pass":true},"g3_canary":{"pass":true},` +
+		`"g4_vs_champion":{"pass":true},"g6_beats_heuristic":{"pass":false},"g5_shadow":{"pass":true}}`
+	if err := validatePromotable(mv(distillation, okFloor), 1); errs.KindOf(err) != errs.KindConflict {
+		t.Fatalf("no skew verdict may rescue a challenger that lost to the heuristic, got %v", err)
 	}
 }
 
