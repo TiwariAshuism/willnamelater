@@ -69,10 +69,10 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # BOTH are validated on every change. prod-azure is not deployed today — it
-        # is the migration target, and a target you have never planned is not a
-        # target, it is a hope.
-        env: [prod-gcp, prod-azure]
+        # ALL THREE are validated on every change, though only one is ever applied.
+        # A migration target you have never planned is not a target, it is a hope —
+        # and the first time you plan prod-azure must not be the morning you need it.
+        env: [prod-gcp, prod-azure, prod-aws]
 
     steps:
       - uses: actions/checkout@v4

@@ -111,6 +111,10 @@ module "dns" {
   api_domain = "api.influaudit.com"
   app_domain = "app.influaudit.com"
 
+  # The Caddyfile defines a Grafana site. A Caddy site with no DNS record never
+  # completes its HTTP-01 challenge and sits without a certificate — quietly, forever.
+  grafana_domain = "grafana.influaudit.com"
+
   # THE CUTOVER. On migration day this resolves to the Azure VM instead, and that
   # single value moving is what redirects production.
   target_ip = module.compute.public_ip

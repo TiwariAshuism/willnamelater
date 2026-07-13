@@ -1,0 +1,21 @@
+[Unit]
+Description=Nightly InfluAudit backup
+Documentation=file:///opt/influaudit/deploy/ARCHITECTURE.md
+
+[Timer]
+# 02:30 UTC — 08:00 IST, comfortably outside the traffic peak for an India-first
+# audience, and well clear of the 03:00 nightly corpus recompute the worker runs.
+OnCalendar=*-*-* 02:30:00 UTC
+
+# Randomise within ten minutes so that, once there is more than one host, they do not
+# all hammer object storage on the same second.
+RandomizedDelaySec=600
+
+# THE ONE THAT MATTERS. If the VM was down at 02:30 — a reboot, a migration, a
+# failover — run the backup as soon as it comes back rather than skipping the night
+# entirely. Without this, the nights you most need a backup are the nights you do not
+# get one.
+Persistent=true
+
+[Install]
+WantedBy=timers.target

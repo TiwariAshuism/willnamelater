@@ -1,4 +1,4 @@
-# Production on Azure.
+# Production on AWS.
 #
 # ─────────────────────────────────────────────────────────────────────────────
 # READ THIS ALONGSIDE ../prod-gcp/main.tf. The two files differ by FOUR LINES —
@@ -13,22 +13,13 @@ terraform {
   required_version = ">= 1.10"
 
   required_providers {
-    azurerm    = { source = "hashicorp/azurerm", version = "~> 4.0" }
+    aws        = { source = "hashicorp/aws", version = "~> 5.0" }
     cloudflare = { source = "cloudflare/cloudflare", version = "~> 4.0" }
   }
 }
 
-provider "azurerm" {
-  features {}
-  subscription_id = var.azure_subscription_id
-}
-
-# Azure alone requires every resource to live in a resource group. The modules read
-# it out of `tags`, so the shared contract does not have to grow an Azure-shaped
-# variable that the other two clouds would have to ignore.
-resource "azurerm_resource_group" "this" {
-  name     = "influaudit-prod"
-  location = var.region
+provider "aws" {
+  region = var.region
 }
 
 provider "cloudflare" {
@@ -39,17 +30,16 @@ locals {
   name = "influaudit-prod"
 
   tags = {
-    app            = "influaudit"
-    environment    = "prod"
-    managed_by     = "terraform"
-    resource_group = azurerm_resource_group.this.name
+    app         = "influaudit"
+    environment = "prod"
+    managed_by  = "terraform"
   }
 }
 
 # ---- Cloud-specific: the ONLY four modules whose source changes on migration ----
 
 module "network" {
-  source = "../../modules/network/azure" # ← migration changed this line
+  source = "../../modules/network/aws" # ← migration changed this line
 
   name             = local.name
   region           = var.region
@@ -58,7 +48,7 @@ module "network" {
 }
 
 module "database" {
-  source = "../../modules/database/azure" # ← and this one
+  source = "../../modules/database/aws" # ← and this one
 
   name       = local.name
   region     = var.region
@@ -74,7 +64,7 @@ module "database" {
 }
 
 module "cache" {
-  source = "../../modules/cache/azure" # ← and this one
+  source = "../../modules/cache/aws" # ← and this one
 
   name       = local.name
   region     = var.region
@@ -87,7 +77,7 @@ module "cache" {
 }
 
 module "compute" {
-  source = "../../modules/compute/azure" # ← and this one
+  source = "../../modules/compute/aws" # ← and this one
 
   name           = local.name
   region         = var.region
@@ -124,8 +114,7 @@ module "dns" {
   # completes its HTTP-01 challenge and sits without a certificate — quietly, forever.
   grafana_domain = "grafana.influaudit.com"
 
-  # THE CUTOVER. This now resolves to the Azure VM. That single value moving is
-  # what redirected production off GCP.
+  # THE CUTOVER. One A record. Moving it is what redirects production onto AWS.
   target_ip = module.compute.public_ip
   ttl       = var.dns_ttl
 }

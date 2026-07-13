@@ -36,6 +36,17 @@ variable "app_domain" {
   type        = string
 }
 
+variable "grafana_domain" {
+  description = <<-EOT
+    FQDN Grafana is served on. The Caddyfile defines a site for it, and a Caddy site
+    with no DNS record never completes an HTTP-01 challenge — so it would sit there
+    without a certificate, quietly, forever. Empty disables the record and you should
+    then also remove the site from the Caddyfile.
+  EOT
+  type        = string
+  default     = ""
+}
+
 variable "target_ip" {
   description = "The VM's public IP, from the compute module. THIS IS THE CUTOVER: changing it moves production to another cloud."
   type        = string
@@ -68,6 +79,17 @@ resource "cloudflare_record" "api" {
 resource "cloudflare_record" "app" {
   zone_id = var.zone_id
   name    = var.app_domain
+  type    = "A"
+  content = var.target_ip
+  ttl     = var.ttl
+  proxied = false
+}
+
+resource "cloudflare_record" "grafana" {
+  count = var.grafana_domain != "" ? 1 : 0
+
+  zone_id = var.zone_id
+  name    = var.grafana_domain
   type    = "A"
   content = var.target_ip
   ttl     = var.ttl

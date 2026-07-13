@@ -63,6 +63,21 @@ usermod -aG docker "${DEPLOY_USER}"
 install -d -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" -m 0755 "${APP_DIR}"
 install -d -o "${DEPLOY_USER}" -g "${DEPLOY_USER}" -m 0700 "/home/${DEPLOY_USER}/.ssh"
 
+# --- Backup timer -------------------------------------------------------------
+# Installed here rather than left as a documented step, because a backup that depends
+# on someone remembering to enable it is not a backup.
+if [[ -d "${APP_DIR}/deploy/systemd" ]]; then
+  log "Installing the backup timer"
+  cp "${APP_DIR}"/deploy/systemd/influaudit-backup.* /etc/systemd/system/
+  systemctl daemon-reload
+  systemctl enable --now influaudit-backup.timer
+  systemctl list-timers influaudit-backup.timer --no-pager || true
+else
+  log "NOTE: ${APP_DIR}/deploy not present yet — after cloning the repo, run:"
+  echo "  sudo cp ${APP_DIR}/deploy/systemd/influaudit-backup.* /etc/systemd/system/"
+  echo "  sudo systemctl daemon-reload && sudo systemctl enable --now influaudit-backup.timer"
+fi
+
 cat <<'EOF'
 
 === Remaining manual steps ===

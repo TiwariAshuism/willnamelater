@@ -1,0 +1,21 @@
+# Copy to terraform.tfvars (gitignored) and fill in.
+#
+# Note what is NOT here: no machine types, no SKUs, no instance classes. Sizes are
+# named in main.tf as "medium", and each cloud's module translates. That is what lets
+# prod-azure/terraform.tfvars be almost the same file.
+
+azure_subscription_id = "REPLACE"
+region                = "centralindia" # Mumbai
+
+# The CI deploy key's PUBLIC half. Its private half is the SSH_PRIVATE_KEY GitHub
+# secret, and on the VM it is pinned to a forced command (ssh-entrypoint.sh), so it can
+# ask for a deploy or a rollback and nothing else.
+ssh_public_key = "ssh-ed25519 AAAA... ci@influaudit"
+
+# Cloudflare: DNS, R2, and the Terraform state. None of it moves when the cloud does.
+cloudflare_api_token  = "REPLACE"
+cloudflare_account_id = "REPLACE"
+cloudflare_zone_id    = "REPLACE"
+
+# Drop to 60 the day BEFORE a migration so the cutover propagates in a minute.
+dns_ttl = 300

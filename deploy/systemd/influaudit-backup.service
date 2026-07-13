@@ -1,0 +1,40 @@
+# The nightly portable backup. Fired by influaudit-backup.timer.
+#
+# A systemd unit rather than a cron line or a compose restart-loop, for one reason:
+# failure is OBSERVABLE. `systemctl status influaudit-backup` and
+# `journalctl -u influaudit-backup` tell you whether last night's backup ran and why it
+# did not. A cron job that starts failing silently is how a company discovers, on the
+# worst day of its life, that it has no backups.
+#
+# Install:
+#   sudo cp deploy/systemd/influaudit-backup.* /etc/systemd/system/
+#   sudo systemctl daemon-reload
+#   sudo systemctl enable --now influaudit-backup.timer
+#   sudo systemctl list-timers influaudit-backup.timer      # confirm it is scheduled
+
+[Unit]
+Description=InfluAudit portable pg_dump backup to object storage
+Documentation=file:///opt/influaudit/deploy/ARCHITECTURE.md
+After=docker.service network-online.target
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/influaudit/deploy/scripts/backup.sh
+
+# The dump is streamed (pg_dump | age | mc) and never lands on disk, but a large
+# database still takes a while. Do not let a hung relay pin the unit forever.
+TimeoutStartSec=3600
+
+# Two retries, ten minutes apart. A transient network blip must not cost a night's
+# backup — but a genuinely broken backup should fail and stay failed, loudly, rather
+# than retry itself into looking healthy.
+Restart=on-failure
+RestartSec=600
+StartLimitBurst=3
+
+# backup.sh decrypts secrets to /run and drives docker; it needs root.
+User=root
+
+[Install]
+WantedBy=multi-user.target
