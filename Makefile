@@ -251,6 +251,16 @@ PROD_SSH ?= deploy@$(shell echo $${INFLUAUDIT_PROD_HOST:-prod.influaudit.com})
 .PHONY: secrets-edit
 secrets-edit: ## Edit the encrypted production secrets (decrypts to a temp file, re-encrypts on save)
 	sops deploy/secrets/prod.enc.env
+	@$(MAKE) --no-print-directory secrets-check
+
+.PHONY: secrets-check
+secrets-check: ## Assert deploy/secrets/*.enc.env is actually encrypted (a .gitignore cannot catch this)
+	bash deploy/scripts/secrets-check.sh
+
+.PHONY: hooks
+hooks: ## Install the git hooks (pre-commit refuses to commit plaintext secrets)
+	git config core.hooksPath .githooks
+	@echo "Hooks enabled. pre-commit now blocks unencrypted deploy/secrets/*.enc.env."
 
 .PHONY: prod-deploy
 prod-deploy: ## Deploy a version to production. Usage: make prod-deploy VERSION=<git-sha>

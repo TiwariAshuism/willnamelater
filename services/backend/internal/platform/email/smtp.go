@@ -287,7 +287,10 @@ func writeHeader(buf *bytes.Buffer, h textproto.MIMEHeader) {
 	// Deterministic order so a composed message is byte-stable and testable.
 	for _, k := range []string{"From", "To", "Subject", "Date", "MIME-Version", "Content-Type", "Content-Transfer-Encoding"} {
 		if v := h.Get(k); v != "" {
-			buf.WriteString(k + ": " + v + "\r\n")
+			buf.WriteString(k)
+			buf.WriteString(": ")
+			buf.WriteString(v)
+			buf.WriteString("\r\n")
 		}
 	}
 }

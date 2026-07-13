@@ -19,8 +19,24 @@ deploy/
   otel-collector.yaml       The observability seam. Swapping telemetry backends
                             happens HERE, never in application code.
   prometheus.yml  loki.yml  tempo.yml
-  grafana/provisioning/     Datasources and dashboards AS CODE, so they already
-                            exist on the new VM on migration day.
+  promtail.yml              Ships container logs to Loki. NOT optional — without it
+                            Loki runs, the dashboards are green, and there are no
+                            logs in any of them.
+  grafana/provisioning/
+    datasources/            Prometheus, Loki, Tempo — wired, with log→trace links.
+    dashboards/             The Overview dashboard, AS CODE, so it already exists on
+                            the new VM on migration day.
+    alerting/               Four rules and one contact point. Alerts go out through
+                            the SAME SMTP relay the app uses — Grafana does not need
+                            a cloud identity to tell you the site is down.
+
+  systemd/
+    influaudit-backup.{service,timer}
+                            The nightly backup. A systemd unit, not cron, so that
+                            FAILURE IS OBSERVABLE: a cron job that starts failing
+                            silently is how a company discovers on its worst day that
+                            it has no backups. Persistent=true means a night the VM
+                            was down is caught up, not skipped.
 
   .sops.yaml                Secrets policy (SOPS + age).
   secrets/
@@ -39,6 +55,9 @@ deploy/
     backup.sh               Nightly pg_dump → R2. THE script that makes a cloud
                             migration possible at all.
     restore.sh              The other half. Exercised monthly by dr-drill.yml.
+    sync-artifacts.sh       Pulls the promoted champion model from R2 into the
+                            ml-artifacts volume. Without it a model can be trained,
+                            gated, promoted — and never served, silently.
 
   terraform/
     modules/{network,compute,database,cache}/{gcp,azure,aws}/

@@ -17,7 +17,23 @@ concurrency:
 permissions:
   contents: read
 
+# NOTE: the `secrets` job below is deliberately in ci.yml rather than in a
+# deploy-specific workflow. It must run on EVERY commit, because the mistake it catches
+# — committing deploy/secrets/prod.enc.env in plaintext — is committed by someone who
+# was not thinking about deployment at the time.
+
 jobs:
+  # Cheap, fast, and first: no plaintext credential may reach main. deploy/secrets/
+  # prod.enc.env is COMMITTED by design (SOPS encrypts values, leaves keys readable, so
+  # a diff shows which secret rotated). The cost of that design is this check — a
+  # .gitignore cannot distinguish the encrypted file from the plaintext one, because
+  # they are the same path.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash deploy/scripts/secrets-check.sh
+
   backend:
     runs-on: ubuntu-latest
     defaults:
