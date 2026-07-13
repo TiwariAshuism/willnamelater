@@ -1,0 +1,59 @@
+# Accepted risks. Every line is a DECISION, and every decision has a reason.
+#
+# This file exists so the security scan can be ENFORCED in CI (--exit-code 1) rather than
+# emitted as a report nobody reads. In a scanner's output an unexplained finding and a
+# deliberately accepted risk look identical, and only one of them is acceptable — the
+# difference has to be written down somewhere, and this is that somewhere.
+#
+# Adding a line here is not a way to make a finding go away. It is a claim that you have
+# understood it. If you cannot write the reason, you have not accepted the risk; you have
+# hidden it.
+#
+# Re-examine this file whenever the architecture moves — particularly the two ingress
+# entries, which stop being true the moment there is a load balancer or a bastion.
+
+# ---------------------------------------------------------------------------------------
+# The VM is directly internet-facing, on purpose.
+#
+# Caddy terminates TLS on the box; there is no load balancer. At one node an LB is a
+# second thing to pay for, configure, and migrate, and it would terminate the TLS that
+# Caddy already terminates for free. This stops being the right answer at two nodes — see
+# deploy/ARCHITECTURE.md, "When to graduate".
+AVD-GCP-0031  # google_compute_instance has a public IP
+AVD-AWS-0164  # public subnet assigns public IPs
+
+# ---------------------------------------------------------------------------------------
+# Unrestricted ingress on 80/443. This is a public web server. That is the job.
+AVD-AWS-0107
+AVD-AZU-0047
+
+# ---------------------------------------------------------------------------------------
+# Unrestricted egress.
+#
+# The VM must reach GHCR, the managed Postgres and Redis, Cloudflare R2, Anthropic,
+# Razorpay, the SMTP relay, and every creator platform's API. An egress allowlist over
+# that set is a list of CIDRs owned by other people, which changes without telling us and
+# fails closed at 3am.
+AVD-AWS-0104
+
+# ---------------------------------------------------------------------------------------
+# SSH open by default, and the scanner is right to dislike it.
+#
+# CI deploys over SSH from GitHub's runners, whose addresses are not stable. The
+# mitigation is that the key on the far end is pinned to a forced command
+# (deploy/scripts/ssh-entrypoint.sh): it can ask for a deploy or a rollback of a specific
+# version and NOTHING else — it cannot obtain a shell, forward a port, or read the age key.
+#
+# That is a mitigation, not a fix. Narrow var.ssh_source_cidrs the day you have a bastion
+# or a self-hosted runner. Until then this is the one entry in this file that should make
+# you slightly uncomfortable, and it is meant to.
+AVD-AZU-0050
+
+# ---------------------------------------------------------------------------------------
+# FALSE POSITIVE — not an accepted risk.
+#
+# The rule looks for the DEPRECATED `require_ssl` attribute, which google provider v6
+# replaced with `ssl_mode`. The instance sets ssl_mode = "ENCRYPTED_ONLY", which is
+# strictly stronger: it rejects every unencrypted connection at the server. The two
+# attributes conflict, so the scanner cannot be satisfied without WEAKENING the config.
+AVD-GCP-0015  # "database does not require TLS" — it does.

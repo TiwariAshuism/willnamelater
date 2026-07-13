@@ -1,4 +1,8 @@
 terraform {
+  # Pinned so a module cannot be planned by a Terraform old enough to
+  # mis-handle it. Same value in every module, on every cloud.
+  required_version = ">= 1.10"
+
   required_providers {
     google = { source = "hashicorp/google", version = "~> 6.0" }
   }
@@ -14,6 +18,10 @@ locals {
   public_ip = google_compute_instance.this.network_interface[0].access_config[0].nat_ip
 }
 
+# trivy:ignore:AVD-GCP-0031 The VM has a public IP on purpose: Caddy terminates TLS on the
+# box and there is no load balancer. At one node an LB is a second thing to pay for,
+# configure, and migrate, and it would terminate the TLS Caddy already terminates for
+# free. Revisit at two nodes — see deploy/ARCHITECTURE.md.
 resource "google_compute_instance" "this" {
   name         = var.name
   machine_type = local.sizes[var.vm_size]

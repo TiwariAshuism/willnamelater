@@ -1,4 +1,8 @@
 terraform {
+  # Pinned so a module cannot be planned by a Terraform old enough to
+  # mis-handle it. Same value in every module, on every cloud.
+  required_version = ">= 1.10"
+
   required_providers {
     aws = { source = "hashicorp/aws", version = "~> 5.0" }
   }
@@ -49,6 +53,10 @@ data "aws_subnets" "public" {
   }
 }
 
+# trivy:ignore:AVD-AWS-0164 The VM has a public IP on purpose: Caddy terminates TLS on the
+# box and there is no load balancer. At one node an LB is a second thing to pay for,
+# configure, and migrate, and it would terminate the TLS that Caddy already terminates
+# for free. Revisit at two nodes — see deploy/ARCHITECTURE.md.
 resource "aws_instance" "this" {
   ami           = data.aws_ami.ubuntu.id
   instance_type = local.sizes[var.vm_size]
@@ -58,6 +66,23 @@ resource "aws_instance" "this" {
   associate_public_ip_address = true
 
   key_name = aws_key_pair.deploy.key_name
+
+  # IMDSv2, required — not optional, which is the AWS default and the reason this is a
+  # finding rather than a preference.
+  #
+  # With IMDSv1 still accepted, ANY server-side request forgery in the application is a
+  # credential-theft primitive: a single unvalidated outbound URL fetch reaches
+  # 169.254.169.254 and returns the instance's IAM credentials. Requiring a session
+  # token closes that, because SSRF can rarely issue the PUT that mints one.
+  #
+  # This application makes plenty of outbound requests it does not fully control
+  # (connector APIs, webhooks, Gotenberg rendering caller-influenced HTML), so the
+  # premise of that attack is not hypothetical here.
+  metadata_options {
+    http_endpoint               = "enabled"
+    http_tokens                 = "required"
+    http_put_response_hop_limit = 1 # a container cannot reach IMDS through the host
+  }
 
   root_block_device {
     volume_size = var.disk_gb

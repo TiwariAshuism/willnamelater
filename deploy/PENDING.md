@@ -19,7 +19,7 @@ So the list below is read against a known baseline.
 | Version stamping | `/healthz` returns the git SHA (it returned `dev` before) |
 | Email | SMTP client tested against a real socket; publish survives a dead relay |
 | Compose | dev + prod both `config --quiet` clean; dev stack boots, `/readyz` 200 |
-| Terraform | `fmt` clean; **`validate` passes on prod-gcp, prod-azure, prod-aws** (run via Docker) |
+| Terraform | `fmt` clean · `validate` **and `terraform test` (mocked plan+apply) pass on prod-gcp, prod-azure, prod-aws** · `tflint` 0 findings with all 3 real provider schemas · `trivy` 0 HIGH/CRITICAL, **enforced** · a real `terraform plan` of the AWS stack against LocalStack planned 17 resources |
 | Portability contract | all 8 `variables.tf`/`outputs.tf` byte-identical across 3 clouds |
 | Observability configs | validated against **pinned** binaries: caddy 2.9, tempo 2.7.2, loki 3.3.2, promtail 3.3.2, prometheus v3.1.0, otelcol 0.117.0 |
 | Secrets guard | `secrets-check.sh` catches plaintext, and partial-plaintext, and redacts what it finds |
@@ -79,9 +79,12 @@ Not optional. A rollback that has never rolled back is a rumour.
 
 ## P2 — Real gaps, not blocking
 
-- [ ] **`envs/prod-aws/` is validated but never planned** against a real AWS account. Its
-      network module comma-joins subnet ids into the contract's single `network_id` string;
-      that translation is the least-exercised code in the Terraform.
+- [ ] **No cloud has ever been applied.** All three stacks pass `terraform test` against
+      mocked providers, and the AWS stack additionally plans against LocalStack — but no
+      real `apply` has run anywhere. Mocks cannot catch a quota, an IAM permission, a region
+      that lacks a SKU, or a resource that takes 40 minutes and then fails.
+- [ ] **The AMI lookup is unverified.** LocalStack has no Canonical images, so
+      `data.aws_ami.ubuntu` is the one AWS resource never resolved against a real API.
 - [ ] **No staging environment.** `envs/staging-gcp/` does not exist. It should, and it should
       be where every one of the P1 items is tested. **This is the highest-value P2 item.**
 - [ ] **HTTP metric names in the dashboard and alerts are assumed**, not confirmed. They follow

@@ -16,6 +16,10 @@
 # not on the cloud at all. This module is the second kind.
 
 terraform {
+  # Pinned so a module cannot be planned by a Terraform old enough to
+  # mis-handle it. Same value in every module, on every cloud.
+  required_version = ">= 1.10"
+
   required_providers {
     cloudflare = { source = "cloudflare/cloudflare", version = "~> 4.0" }
   }

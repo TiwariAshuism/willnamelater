@@ -1,5 +1,9 @@
 # ElastiCache for Redis.
 terraform {
+  # Pinned so a module cannot be planned by a Terraform old enough to
+  # mis-handle it. Same value in every module, on every cloud.
+  required_version = ">= 1.10"
+
   required_providers {
     aws    = { source = "hashicorp/aws", version = "~> 5.0" }
     random = { source = "hashicorp/random", version = "~> 3.6" }

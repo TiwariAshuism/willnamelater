@@ -1,4 +1,8 @@
 terraform {
+  # Pinned so a module cannot be planned by a Terraform old enough to
+  # mis-handle it. Same value in every module, on every cloud.
+  required_version = ">= 1.10"
+
   required_providers {
     azurerm = { source = "hashicorp/azurerm", version = "~> 4.0" }
   }
@@ -42,6 +46,16 @@ resource "azurerm_subnet" "data" {
   }
 }
 
+# Deliberate, and annotated so the security scan can be ENFORCED in CI rather than being
+# a report nobody reads. An unexplained finding and an accepted risk look identical in a
+# scanner's output, and only one of them is acceptable.
+#
+# trivy:ignore:AVD-AZU-0047 Unrestricted ingress on 80/443. This is a public web server.
+# trivy:ignore:AVD-AZU-0050 SSH open by default. CI deploys from GitHub's runners, whose
+#   addresses are not stable. The mitigation is that the key on the far end is pinned to
+#   a forced command (deploy/scripts/ssh-entrypoint.sh): it can ask for a deploy or a
+#   rollback and nothing else, and cannot obtain a shell. That is a mitigation, not a
+#   fix — narrow var.ssh_source_cidrs the day you have a bastion or a self-hosted runner.
 resource "azurerm_network_security_group" "this" {
   name                = var.name
   location            = var.region

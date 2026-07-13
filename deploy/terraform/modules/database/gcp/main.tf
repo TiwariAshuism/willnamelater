@@ -9,6 +9,10 @@
 # changes. That fallback is why "managed Postgres" is a viable answer at all.
 
 terraform {
+  # Pinned so a module cannot be planned by a Terraform old enough to
+  # mis-handle it. Same value in every module, on every cloud.
+  required_version = ">= 1.10"
+
   required_providers {
     google = { source = "hashicorp/google", version = "~> 6.0" }
     random = { source = "hashicorp/random", version = "~> 3.6" }
@@ -32,6 +36,11 @@ resource "random_password" "db" {
   special = false
 }
 
+# trivy:ignore:AVD-GCP-0015 False positive. The rule looks for the DEPRECATED
+# `require_ssl` attribute, which provider v6 replaced with `ssl_mode`. This instance sets
+# ssl_mode = "ENCRYPTED_ONLY", which is strictly stronger than the old require_ssl: it
+# rejects every unencrypted connection at the server. Setting both is not possible — they
+# conflict — so the scanner cannot be satisfied without weakening the configuration.
 resource "google_sql_database_instance" "this" {
   name             = var.name
   region           = var.region

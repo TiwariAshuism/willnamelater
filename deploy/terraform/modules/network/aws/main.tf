@@ -1,4 +1,8 @@
 terraform {
+  # Pinned so a module cannot be planned by a Terraform old enough to
+  # mis-handle it. Same value in every module, on every cloud.
+  required_version = ">= 1.10"
+
   required_providers {
     aws = { source = "hashicorp/aws", version = "~> 5.0" }
   }
@@ -63,6 +67,17 @@ resource "aws_route_table_association" "public" {
   route_table_id = aws_route_table.public.id
 }
 
+# The three exceptions below are deliberate, and each one is a decision rather than an
+# oversight. They are annotated so the security scan can be ENFORCED in CI (exit-code 1)
+# instead of being a report nobody reads — an unexplained finding and an accepted risk
+# look identical in a scanner's output, and only one of them is fine.
+#
+# trivy:ignore:AVD-AWS-0107 Unrestricted ingress on 80/443. This is a public web server.
+#   That is what it is for.
+# trivy:ignore:AVD-AWS-0104 Unrestricted egress. The VM must reach GHCR, the managed
+#   Postgres and Redis, Cloudflare R2, Anthropic, Razorpay, the SMTP relay, and every
+#   creator platform's API. An egress allowlist over that set would be a list of CIDRs
+#   owned by other people, which changes without telling us and fails closed at 3am.
 resource "aws_security_group" "this" {
   name   = var.name
   vpc_id = aws_vpc.this.id
@@ -82,6 +97,14 @@ resource "aws_security_group" "this" {
     cidr_blocks = ["0.0.0.0/0"]
   }
 
+  # SSH defaults to open, and the scanner is right to dislike it. See
+  # variables.tf:ssh_source_cidrs — the reason is that CI deploys from GitHub's runners,
+  # whose addresses are not stable, and the mitigation is that the key on the far end is
+  # pinned to a forced command (deploy/scripts/ssh-entrypoint.sh) so it can ask for a
+  # deploy or a rollback and NOTHING else. It cannot get a shell.
+  #
+  # That is a mitigation, not a fix. Narrow this the day you have a bastion or a
+  # self-hosted runner.
   ingress {
     from_port   = 22
     to_port     = 22

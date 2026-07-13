@@ -28,6 +28,10 @@
 # lack of an S3 API is Azure's problem, and it should stay Azure's problem.
 
 terraform {
+  # Pinned so a module cannot be planned by a Terraform old enough to
+  # mis-handle it. Same value in every module, on every cloud.
+  required_version = ">= 1.10"
+
   required_providers {
     cloudflare = { source = "cloudflare/cloudflare", version = "~> 4.0" }
   }

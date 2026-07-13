@@ -84,8 +84,8 @@ jobs:
       - name: fmt
         run: terraform fmt -check -recursive deploy/terraform
 
-      # -backend=false: validation needs no state and no credentials, so it runs on
-      # a fork's PR with no secrets at all.
+      # -backend=false: validation needs no state and no credentials, so every step
+      # below runs on a fork's PR with no secrets at all.
       - name: init
         working-directory: deploy/terraform/envs/${{ matrix.env }}
         run: terraform init -backend=false
@@ -93,3 +93,51 @@ jobs:
       - name: validate
         working-directory: deploy/terraform/envs/${{ matrix.env }}
         run: terraform validate
+
+      # THE ONE THAT ACTUALLY EXECUTES THE MODULES.
+      #
+      # validate proves the HCL parses. tflint (below) proves the arguments exist. Neither
+      # RUNS anything, and neither would notice that a value legal on one cloud is not
+      # purchasable on another.
+      #
+      # That is not hypothetical: this test is how `storage_gb = 100` was caught. Perfectly
+      # legal on Cloud SQL and RDS; rejected outright by Azure Flexible Server, which sells
+      # only fixed storage tiers. It would have failed at apply, on migration day.
+      #
+      # mock_provider synthesises the computed attributes, so a real plan+apply runs against
+      # a fake cloud with no credentials.
+      - name: test (mocked plan + apply)
+        working-directory: deploy/terraform/envs/${{ matrix.env }}
+        run: terraform test
+
+  lint:
+    name: tflint + trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # tflint loads each provider's REAL schema, so it knows that
+      # google_compute_instance has no attribute called `machine_size` and that an
+      # argument was deprecated two majors ago. terraform validate does not.
+      #
+      # It is also what caught the Azure cache sitting on the public internet: it
+      # reported var.network_id as unused, and an unused variable in a portability
+      # contract usually means one cloud is quietly NOT doing what the other two do.
+      - uses: terraform-linters/setup-tflint@v4
+      - name: tflint
+        working-directory: deploy/terraform
+        run: |
+          tflint --init
+          tflint --recursive --config="$(pwd)/.tflint.hcl" --format compact
+
+      # Enforced, not advisory. Every accepted risk is written down in
+      # deploy/terraform/.trivyignore with a reason — because in a scanner's output an
+      # unexplained finding and an accepted risk look identical, and only one is fine.
+      - name: trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: deploy/terraform
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          trivyignores: deploy/terraform/.trivyignore
