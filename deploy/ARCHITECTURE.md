@@ -72,6 +72,19 @@ This is the list that makes a migration short. Each of these lives deliberately 
 
 The app speaks **only OTLP**, so switching to Grafana Cloud or Honeycomb later is an exporter block in `otel-collector.yaml`, not a code change.
 
+### The observability stack, and what nearly broke it
+
+```
+app ──OTLP───► otel-collector ──► prometheus  (metrics)
+                               └► tempo       (traces)
+app ──stdout─► docker ──► promtail ──► loki   (logs)
+                                          └──► grafana ──► SMTP alerts
+```
+
+**`promtail` is not optional.** Without it Loki runs, the datasource resolves, every dashboard is green — and there are no logs in any of them. An empty log panel reads as *"no errors"* rather than *"no logs"*. One of the four alert rules (`logs-stopped`) exists purely to contradict that.
+
+**Every third-party image is pinned to an exact version.** They were briefly on `:latest`, and validating the configs against the real binaries caught what that costs: the then-current `grafana/tempo:latest` had **dropped** the top-level `ingester` and `compactor` config keys, so `tempo.yml` — valid on 2.7.2 — fails to parse on it. On `:latest` that surfaces as **the monitoring tier refusing to start, at deploy time, with no change to this repository.** The tier you rely on to tell you what is broken is the worst possible place to accept an unannounced upgrade. Bump deliberately, and re-run the config validation.
+
 ---
 
 ## The portability contract (Terraform)

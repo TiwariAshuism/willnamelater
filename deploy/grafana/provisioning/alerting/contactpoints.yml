@@ -1,0 +1,39 @@
+# Where alerts go.
+#
+# Through the SAME SMTP relay the application uses (internal/platform/email) — the
+# same four environment variables, the same cloud-independent provider. Grafana does
+# not need a cloud identity to tell you the site is down, and giving it one would be
+# the smallest, most forgettable piece of lock-in in the whole system: the kind nobody
+# remembers until the migration.
+#
+# Slack is optional and off unless SLACK_WEBHOOK_URL is set.
+
+apiVersion: 1
+
+contactPoints:
+  - orgId: 1
+    name: ops
+    receivers:
+      - uid: ops-email
+        type: email
+        settings:
+          addresses: ${ALERT_EMAIL}
+          singleEmail: true
+
+      - uid: ops-slack
+        type: slack
+        # Grafana skips a receiver whose required setting is empty, so an unset webhook
+        # simply means email-only rather than a boot error.
+        settings:
+          url: ${SLACK_WEBHOOK_URL}
+
+policies:
+  - orgId: 1
+    receiver: ops
+    group_by: [alertname]
+    # Wait before firing, so a rule that flaps across one evaluation does not page.
+    group_wait: 1m
+    group_interval: 5m
+    # Do not re-send the same firing alert every five minutes. An alert that repeats
+    # itself into the ground gets filtered into a folder, which is the same as being off.
+    repeat_interval: 4h

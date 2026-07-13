@@ -13,8 +13,17 @@
 
 {
 	email {$ACME_EMAIL}
-	# Every response, on every site. Caddy adds no Server banner of its own beyond
-	# "Caddy", and there is no reason to advertise even that.
+
+	# The admin API, bound to the compose network so Prometheus can scrape
+	# /metrics at caddy:2019. It is NOT published to the host and NOT reachable
+	# from the internet — the admin API can reconfigure the server, so exposing it
+	# would hand over TLS termination to whoever asked.
+	#
+	# prometheus.yml scrapes this. Without the two lines below that scrape target
+	# is dead and the proxy is the one tier with no metrics at all.
+	admin :2019
+	metrics
+
 	servers {
 		trusted_proxies static private_ranges
 	}
@@ -47,6 +56,26 @@
 {$APP_DOMAIN} {
 	import security
 	reverse_proxy web:3000
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Grafana. ARCHITECTURE.md promises it is reachable behind Caddy; this is where that
+# becomes true rather than aspirational.
+#
+# Grafana does its own authentication (GF_SECURITY_ADMIN_PASSWORD, sign-up disabled),
+# so there is no basic-auth layer here — two password prompts to reach one dashboard
+# teaches people to click through prompts, which is the opposite of security.
+#
+# It is a separate hostname rather than a path on app., so a bug in Grafana cannot
+# read the app's cookies: they are scoped to different origins.
+{$GRAFANA_DOMAIN} {
+	import security
+	reverse_proxy grafana:3000
 	encode zstd gzip
 
 	log {

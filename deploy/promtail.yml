@@ -1,0 +1,60 @@
+# Ships container logs to Loki.
+#
+# This file is what makes the logging story real. Without it Loki runs, the Grafana
+# datasource resolves, every dashboard is green — and there are no logs in it. A
+# telemetry pipeline that is configured but not connected is worse than none, because
+# it looks like it works.
+#
+# The chain is deliberately dull:
+#
+#   app → stdout → Docker json-file → promtail → Loki
+#
+# The application writes structured JSON to stdout and knows nothing else. It never
+# opens a log file, never calls a cloud logging SDK, and never learns where its output
+# ends up. That is the whole reason moving clouds does not move the logging: there is
+# nothing in the app to move.
+
+server:
+  http_listen_port: 9080
+  grpc_listen_port: 0
+  log_level: warn
+
+positions:
+  # Survives a promtail restart, so a redeploy does not re-ship the last N hours.
+  filename: /tmp/positions.yaml
+
+clients:
+  - url: http://loki:3100/loki/api/v1/push
+
+scrape_configs:
+  - job_name: containers
+    docker_sd_configs:
+      - host: unix:///var/run/docker.sock
+        refresh_interval: 15s
+
+    relabel_configs:
+      # Compose stamps these on every container it starts. Without them every log line
+      # lands in one undifferentiated stream and Loki is a `grep` with extra steps.
+      - source_labels: ["__meta_docker_container_label_com_docker_compose_service"]
+        target_label: service
+
+      - source_labels: ["__meta_docker_container_name"]
+        regex: "/(.*)"
+        target_label: container
+
+      - source_labels: ["__meta_docker_container_log_stream"]
+        target_label: stream
+
+    pipeline_stages:
+      # The Go services log structured JSON (slog). Lifting trace_id out as a label is
+      # what makes the Loki→Tempo link in the Grafana datasource actually resolve: a log
+      # line becomes a click through to the trace it belongs to.
+      - json:
+          expressions:
+            level: level
+            trace_id: trace_id
+            msg: msg
+      - labels:
+          level:
+      # Not a label — trace ids are high-cardinality and would blow up Loki's index.
+      # The derived field in the Grafana datasource regexes it out of the line instead.

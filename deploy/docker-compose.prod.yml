@@ -1,5 +1,15 @@
 # Production stack. One VM, one docker compose, managed data tier.
 #
+# EVERY IMAGE HERE IS PINNED TO AN EXACT VERSION, and that is not fussiness.
+# The observability images were briefly on `:latest`, and validating them against the
+# real binaries caught it: the then-current grafana/tempo:latest had DROPPED the
+# top-level `ingester` and `compactor` config keys, so tempo.yml — valid on 2.7.2 —
+# fails to parse on it. On `:latest` that surfaces as the monitoring tier refusing to
+# start, at deploy time, without a single line of this repository having changed.
+#
+# The tier you rely on to tell you what is broken is the worst possible place to accept
+# an unannounced upgrade. Bump these deliberately, and re-run the config validation.
+#
 #   docker compose -f deploy/docker-compose.prod.yml --env-file /run/influaudit/.env <cmd>
 #
 # Normally you do not run this by hand — deploy/scripts/deploy.sh does, and it
@@ -94,11 +104,18 @@ services:
   # The only service bound to a public port. Everything else is reachable only on
   # the compose network.
   caddy:
-    image: caddy:2-alpine
+    image: caddy:2.9-alpine
     restart: unless-stopped
     ports:
       - "80:80"
       - "443:443"
+    environment:
+      # Caddy substitutes {$VAR} in the Caddyfile at load. Each is a site address, so
+      # a missing one would make Caddy serve that site on the literal string.
+      ACME_EMAIL: ${ACME_EMAIL:?}
+      API_DOMAIN: ${API_DOMAIN:?}
+      APP_DOMAIN: ${APP_DOMAIN:?}
+      GRAFANA_DOMAIN: ${GRAFANA_DOMAIN:-grafana.influaudit.com}
     volumes:
       - ./Caddyfile:/etc/caddy/Caddyfile:ro
       # caddy-data holds the Let's Encrypt certificates and account key. Back it up:
@@ -183,7 +200,7 @@ services:
   # an exporter block in this collector's config and NOT a code change. Do not give
   # that up by pointing the app at a vendor endpoint directly.
   otel-collector:
-    image: otel/opentelemetry-collector-contrib:latest
+    image: otel/opentelemetry-collector-contrib:0.117.0
     restart: unless-stopped
     command: ["--config=/etc/otel/config.yaml"]
     volumes:
@@ -204,7 +221,7 @@ services:
   # otel-collector.yaml — not a code change. See that file.
 
   prometheus:
-    image: prom/prometheus:latest
+    image: prom/prometheus:v3.1.0
     restart: unless-stopped
     command:
       - --config.file=/etc/prometheus/prometheus.yml
@@ -215,15 +232,30 @@ services:
       - prometheus-data:/prometheus
 
   loki:
-    image: grafana/loki:latest
+    image: grafana/loki:3.3.2
     restart: unless-stopped
     command: ["-config.file=/etc/loki/config.yaml"]
     volumes:
       - ./loki.yml:/etc/loki/config.yaml:ro
       - loki-data:/loki
 
+  # Without this, Loki runs, the datasource resolves, the dashboards are green — and
+  # there are no logs in any of them. See promtail.yml.
+  promtail:
+    image: grafana/promtail:3.3.2
+    restart: unless-stopped
+    command: ["-config.file=/etc/promtail/config.yaml"]
+    volumes:
+      - ./promtail.yml:/etc/promtail/config.yaml:ro
+      # Read-only, and only to DISCOVER containers and read their json-file logs.
+      # promtail never starts, stops, or inspects anything it is not reading.
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+      - /var/lib/docker/containers:/var/lib/docker/containers:ro
+    depends_on:
+      - loki
+
   tempo:
-    image: grafana/tempo:latest
+    image: grafana/tempo:2.7.2
     restart: unless-stopped
     command: ["-config.file=/etc/tempo/config.yaml"]
     volumes:
@@ -231,12 +263,25 @@ services:
       - tempo-data:/var/tempo
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:11.5.1
     restart: unless-stopped
     environment:
       GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:?}
       GF_USERS_ALLOW_SIGN_UP: "false"
       GF_SERVER_ROOT_URL: https://${GRAFANA_DOMAIN:-grafana.influaudit.com}
+
+      # Alerts go out through the SAME relay the application uses. Grafana does not
+      # need a cloud identity to tell you the site is down.
+      GF_SMTP_ENABLED: "true"
+      GF_SMTP_HOST: ${INFLUAUDIT_EMAIL__HOST:?}:${INFLUAUDIT_EMAIL__PORT:-587}
+      GF_SMTP_USER: ${INFLUAUDIT_EMAIL__USERNAME:-}
+      GF_SMTP_PASSWORD: ${INFLUAUDIT_EMAIL__PASSWORD:-}
+      GF_SMTP_FROM_ADDRESS: ${INFLUAUDIT_EMAIL__FROM:?}
+      GF_SMTP_FROM_NAME: InfluAudit Alerts
+
+      # Substituted into provisioning/alerting/contactpoints.yml.
+      ALERT_EMAIL: ${ALERT_EMAIL:?where alerts are delivered}
+      SLACK_WEBHOOK_URL: ${SLACK_WEBHOOK_URL:-}
     volumes:
       # Datasources and dashboards are provisioned FROM GIT, not clicked together in
       # the UI. That is what makes them survive the VM, and what makes them exist
@@ -247,7 +292,7 @@ services:
   # Host metrics: disk, memory, load. The one thing an app-level exporter cannot see
   # coming, and the usual cause of a VM falling over.
   node-exporter:
-    image: prom/node-exporter:latest
+    image: prom/node-exporter:v1.8.2
     restart: unless-stopped
     command:
       - --path.rootfs=/host
