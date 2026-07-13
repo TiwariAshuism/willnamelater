@@ -37,8 +37,8 @@ type Module struct {
 // audit, scoring, llm, influencer, platform-PDF, and object-storage
 // implementations. caller and owner back the creator-ownership gate: only the
 // creator who connected an account may publish or share a report built from it.
-func New(pool *db.Pool, audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, storage port.Storage, caller port.CallerID, owner port.OwnerReader) *Module {
-	svc := service.New(audit, score, narrative, fraud, pdf, repository.New(pool), storage, caller, owner)
+func New(pool *db.Pool, audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, storage port.Storage, caller port.CallerID, owner port.OwnerReader, mailer port.Mailer, recipients port.Recipient) *Module {
+	svc := service.New(audit, score, narrative, fraud, pdf, repository.New(pool), storage, caller, owner, mailer, recipients)
 	return &Module{svc: svc, handler: handler.New(svc)}
 }
 

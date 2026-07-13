@@ -5,11 +5,15 @@ on:
     paths:
       - "apps/web/**"
       - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/web.yml"
   pull_request:
     paths:
       - "apps/web/**"
       - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
       - ".github/workflows/web.yml"
 
 permissions:
@@ -21,42 +25,33 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
-      # apps/web is not scaffolded yet. Skip the rest without failing the
-      # pipeline until its package.json exists.
-      - id: guard
-        run: |
-          if [ -f apps/web/package.json ]; then
-            echo "present=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "present=false" >> "$GITHUB_OUTPUT"
-            echo "apps/web/package.json not found; skipping web CI."
-          fi
-
       - name: Install pnpm
-        if: steps.guard.outputs.present == 'true'
         uses: pnpm/action-setup@v4
         with:
           version: 10.32.1
 
       - name: Setup Node
-        if: steps.guard.outputs.present == 'true'
         uses: actions/setup-node@v4
         with:
           node-version: 22.x
           cache: pnpm
-          cache-dependency-path: "**/pnpm-lock.yaml"
+          cache-dependency-path: pnpm-lock.yaml
 
+      # Installed from the workspace root, not apps/web: @influaudit/contracts is
+      # a workspace dependency and a package-local install cannot resolve it.
       - name: Install
-        if: steps.guard.outputs.present == 'true'
-        working-directory: apps/web
         run: pnpm install --frozen-lockfile
 
+      # These four mirror `make gate`. typecheck and test were previously absent,
+      # so a type error or a failing test reached main through a green pipeline.
+      - name: Typecheck
+        run: pnpm --filter @influaudit/web typecheck
+
       - name: Lint
-        if: steps.guard.outputs.present == 'true'
-        working-directory: apps/web
-        run: pnpm lint
+        run: pnpm --filter @influaudit/web lint
+
+      - name: Test
+        run: pnpm --filter @influaudit/web test
 
       - name: Build
-        if: steps.guard.outputs.present == 'true'
-        working-directory: apps/web
-        run: pnpm build
+        run: pnpm --filter @influaudit/web build

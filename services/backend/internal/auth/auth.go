@@ -27,13 +27,16 @@ import (
 type Module struct {
 	handler    *handler.Handler
 	middleware gin.HandlerFunc
+	repo       repository.Repository
 }
 
 // New builds the auth module over the shared connection pool, parsing the RS256
 // signing key from jwtCfg once (inside the service constructor). It fails when
 // the key is missing or malformed so a misconfigured deployment cannot start.
 func New(pool *db.Pool, jwtCfg config.JWTConfig) (*Module, error) {
-	svc, issuer, err := service.NewService(repository.New(pool), jwtCfg)
+	repo := repository.New(pool)
+
+	svc, issuer, err := service.NewService(repo, jwtCfg)
 	if err != nil {
 		return nil, err
 	}
@@ -41,7 +44,27 @@ func New(pool *db.Pool, jwtCfg config.JWTConfig) (*Module, error) {
 	return &Module{
 		handler:    handler.New(svc),
 		middleware: handler.RequireAuth(issuer),
+		repo:       repo,
 	}, nil
+}
+
+// EmailOf returns the address a user is reachable at.
+//
+// It exists because auth is the only module that knows a user's email, and other
+// modules legitimately need to reach one — the report module, on publish, must
+// tell the creator their report is ready. Those modules declare their own
+// consumer-side port (report/port.Recipient) and the composition root adapts this
+// method onto it, so nothing outside auth imports auth to send a message.
+//
+// It reads by primary key rather than through the session in context, because the
+// caller sending the mail is not necessarily running inside the user's request:
+// a background worker has no auth context at all.
+func (m *Module) EmailOf(ctx context.Context, userID uuid.UUID) (string, error) {
+	user, err := m.repo.UserByID(ctx, userID)
+	if err != nil {
+		return "", err
+	}
+	return user.Email, nil
 }
 
 // RegisterRoutes mounts the auth endpoints under rg (typically the /v1 group).

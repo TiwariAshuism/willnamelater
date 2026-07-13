@@ -493,6 +493,19 @@ func (r reportStorage) ShareURL(key string, ttl time.Duration) (string, error) {
 	return r.s.PresignGetURL(key, ttl)
 }
 
+// reportRecipient satisfies report/port.Recipient over the auth module. The
+// report module knows a creator only as a uuid; their email address belongs to
+// auth, and this adapter is the only thing that knows both — so report still
+// imports nothing from auth.
+type reportRecipient struct{ a *auth.Module }
+
+func (r reportRecipient) EmailOf(ctx context.Context, userID uuid.UUID) (string, error) {
+	if r.a == nil {
+		return "", errs.New(errs.KindUnavailable, "app.auth_unconfigured", "the auth module is not configured")
+	}
+	return r.a.EmailOf(ctx, userID)
+}
+
 // --- small numeric / snapshot helpers ------------------------------------
 
 func meanF(xs []float64) float64 {

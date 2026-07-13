@@ -45,12 +45,14 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/platform/config"
 	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
+	"github.com/getnyx/influaudit/backend/internal/platform/email"
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
 	"github.com/getnyx/influaudit/backend/internal/platform/pdf"
 	"github.com/getnyx/influaudit/backend/internal/platform/redis"
 	"github.com/getnyx/influaudit/backend/internal/platform/storage"
 	"github.com/getnyx/influaudit/backend/internal/platform/telemetry"
 	"github.com/getnyx/influaudit/backend/internal/report"
+	reportport "github.com/getnyx/influaudit/backend/internal/report/port"
 	"github.com/getnyx/influaudit/backend/internal/scoring"
 	"github.com/getnyx/influaudit/backend/internal/whitelabel"
 )
@@ -151,11 +153,7 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 	a.Pool = pool
 	a.closers = append(a.closers, func(context.Context) error { pool.Close(); return nil })
 
-	rdb, err := redis.New(ctx, redis.Config{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password.Reveal(),
-		DB:       cfg.Redis.DB,
-	})
+	rdb, err := redis.New(ctx, redisConfig(cfg))
 	if err != nil {
 		return nil, a.abort(ctx, err)
 	}
@@ -233,6 +231,38 @@ func Build(ctx context.Context, cfg *config.Config) (*App, error) {
 // wedge process startup.
 const bootstrapTimeout = 30 * time.Second
 
+// redisConfig projects the application config onto the shared Redis client's
+// config. It exists so the cache client and the queue below cannot disagree.
+func redisConfig(cfg *config.Config) redis.Config {
+	return redis.Config{
+		Addr:          cfg.Redis.Addr,
+		Password:      cfg.Redis.Password.Reveal(),
+		DB:            cfg.Redis.DB,
+		TLS:           cfg.Redis.TLS,
+		TLSServerName: cfg.Redis.TLSServerName,
+	}
+}
+
+// RedisOpt is the single source of the asynq broker connection.
+//
+// asynq does not share the client the redis package builds — it dials Redis
+// itself from an asynq.RedisClientOpt — so the connection settings must be
+// derived once and reused everywhere. cmd/worker builds both its server and its
+// scheduler from this function, and buildModules builds the enqueuing client and
+// the inspector from it, so the queue the API writes to and the queue the worker
+// reads from cannot diverge in transport. That divergence is the failure this
+// function exists to prevent, and it is invisible when it happens: both
+// processes come up healthy and no task is ever executed.
+func RedisOpt(cfg *config.Config) asynq.RedisClientOpt {
+	rc := redisConfig(cfg)
+	return asynq.RedisClientOpt{
+		Addr:      rc.Addr,
+		Password:  rc.Password,
+		DB:        rc.DB,
+		TLSConfig: redis.TLSConfigFor(rc),
+	}
+}
+
 // buildModules constructs every business module and satisfies their cross-module
 // ports. This is the only place a module learns about another one's existence,
 // and it does so through a narrow interface rather than an import.
@@ -295,11 +325,7 @@ func (a *App) buildModules(connectors *connector.Config) error {
 
 	// The asynq client is lazy: it dials Redis on first enqueue, not here, so the
 	// audit module can be constructed even when Redis is unreachable.
-	redisOpt := asynq.RedisClientOpt{
-		Addr:     a.Config.Redis.Addr,
-		Password: a.Config.Redis.Password.Reveal(),
-		DB:       a.Config.Redis.DB,
-	}
+	redisOpt := RedisOpt(a.Config)
 	a.asynqClient = asynq.NewClient(redisOpt)
 	a.asynqInspector = asynq.NewInspector(redisOpt)
 
@@ -343,12 +369,35 @@ func (a *App) buildModules(connectors *connector.Config) error {
 			AccessKey: a.Config.Storage.AccessKey.Reveal(),
 			SecretKey: a.Config.Storage.SecretKey.Reveal(),
 			HTTP:      &http.Client{Timeout: storageHTTPTimeout},
-			PathStyle: true,
+			PathStyle: a.Config.Storage.PathStyle,
 		})
 		if err != nil {
 			return err
 		}
 		a.storage = sc
+	}
+
+	// The transactional mail relay. Constructing the client is pure (it does not
+	// dial), so it is safe to build here alongside the modules the route tests
+	// wire over nil datastores. It is skipped entirely when no host is configured
+	// — a dev machine with no relay must still be able to publish a report — and
+	// the report module then degrades its notification to a logged no-op rather
+	// than failing the publish. config.Validate requires a relay in prod.
+	var mailer reportport.Mailer
+	if a.Config.Email.Host != "" {
+		ec, err := email.New(email.Config{
+			Host:     a.Config.Email.Host,
+			Port:     a.Config.Email.Port,
+			Username: a.Config.Email.Username,
+			Password: a.Config.Email.Password.Reveal(),
+			From:     a.Config.Email.From,
+			FromName: a.Config.Email.FromName,
+			TLS:      email.TLSMode(a.Config.Email.TLS),
+		})
+		if err != nil {
+			return err
+		}
+		mailer = ec
 	}
 
 	// The report module assembles a finished audit's deliverable (JSON + on-demand
@@ -357,6 +406,10 @@ func (a *App) buildModules(connectors *connector.Config) error {
 	// persists a durable badge row (its table) and stores the PDF in object
 	// storage. The pdf client is lazy; the storage adapter degrades to an
 	// unavailable error when a.storage is nil.
+	//
+	// It notifies the creator on publish through a Mailer and a Recipient port. As
+	// with every other cross-module edge, report does not import auth: the
+	// Recipient port is satisfied by an adapter over auth.EmailOf.
 	reportMod := report.New(
 		a.Pool,
 		reportAuditReader{a: auditMod},
@@ -367,6 +420,8 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		reportStorage{s: a.storage},
 		reportCaller{},
 		reportOwnerReader{i: influencerMod},
+		mailer,
+		reportRecipient{a: authMod},
 	)
 
 	// The dataimport module is the real-data ingress for Instagram while its live

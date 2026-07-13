@@ -88,6 +88,7 @@ type Config struct {
 	JWT         JWTConfig        `koanf:"jwt"`
 	Razorpay    RazorpayConfig   `koanf:"razorpay"`
 	OTel        OTelConfig       `koanf:"otel"`
+	Email       EmailConfig      `koanf:"email"`
 	Connectors  ConnectorsConfig `koanf:"connectors"`
 
 	// masterKey is the decoded, length-checked master encryption key. It is
@@ -114,11 +115,17 @@ type PostgresConfig struct {
 	DSN Secret `koanf:"dsn"`
 }
 
-// RedisConfig holds the cache and asynq broker connection.
+// RedisConfig holds the cache and asynq broker connection. TLS is required by
+// every managed Redis and is therefore mandatory in prod; it is off by default
+// so the local compose redis works unchanged.
 type RedisConfig struct {
 	Addr     string `koanf:"addr"`
 	Password Secret `koanf:"password"`
 	DB       int    `koanf:"db"`
+	TLS      bool   `koanf:"tls"`
+	// TLSServerName overrides the certificate/SNI hostname. Empty derives it from
+	// Addr, which is correct for every managed service.
+	TLSServerName string `koanf:"tls_server_name"`
 }
 
 // CryptoConfig carries the base64-encoded 32-byte master key used to seal
@@ -151,6 +158,10 @@ type MLConfig struct {
 // prod); Region is the SigV4 signing region. PublicBaseURL, when set, is the
 // origin browser-facing links resolve to (e.g. a CDN in front of the bucket);
 // when empty the client hands out presigned URLs against Endpoint instead.
+// PathStyle selects path-style addressing (endpoint/bucket/key) over
+// virtual-host style (bucket.endpoint/key). It defaults to true because every
+// store this runs against in practice — LocalStack, MinIO, Cloudflare R2 —
+// requires it; AWS S3 accepts both and can opt out.
 type StorageConfig struct {
 	Endpoint      string `koanf:"endpoint"`
 	Region        string `koanf:"region"`
@@ -158,6 +169,7 @@ type StorageConfig struct {
 	AccessKey     Secret `koanf:"access_key"`
 	SecretKey     Secret `koanf:"secret_key"`
 	PublicBaseURL string `koanf:"public_base_url"`
+	PathStyle     bool   `koanf:"path_style"`
 }
 
 // JWTConfig holds the RS256 signing key, supplied either as a filesystem path
@@ -182,6 +194,21 @@ type RazorpayConfig struct {
 // OTelConfig holds the OpenTelemetry OTLP exporter endpoint.
 type OTelConfig struct {
 	ExporterEndpoint string `koanf:"exporter_endpoint"`
+}
+
+// EmailConfig holds the SMTP relay used for transactional mail. SMTP rather than
+// a provider API because every transactional provider speaks it — Postmark,
+// Resend, SendGrid, Mailgun, SES — so switching provider is a change of these
+// values and nothing else. TLS is one of "starttls" (default, port 587),
+// "implicit" (port 465), or "none" (a local capture server only).
+type EmailConfig struct {
+	Host     string `koanf:"host"`
+	Port     int    `koanf:"port"`
+	Username string `koanf:"username"`
+	Password Secret `koanf:"password"`
+	From     string `koanf:"from"`
+	FromName string `koanf:"from_name"`
+	TLS      string `koanf:"tls"`
 }
 
 // ConnectorsConfig locates the declarative platform-connector registry. Both
@@ -214,6 +241,9 @@ func defaults() Config {
 		Redis: RedisConfig{
 			Addr: "127.0.0.1:6379",
 			DB:   0,
+		},
+		Storage: StorageConfig{
+			PathStyle: true,
 		},
 		Connectors: ConnectorsConfig{
 			ConfigPath: "packages/config/connectors.yaml",
@@ -324,6 +354,10 @@ func (c *Config) Validate() error {
 	requireSecretInProd("storage.access_key", c.Storage.AccessKey)
 	requireSecretInProd("storage.secret_key", c.Storage.SecretKey)
 	requireSecretInProd("razorpay.key_secret", c.Razorpay.KeySecret)
+	// Absent, the ml server's shadow-prediction ingest is rejected on every call
+	// and the champion-challenger record silently stops accumulating. A prod boot
+	// that cannot log predictions is a prod boot that cannot retrain.
+	requireSecretInProd("ml.service_token", c.ML.ServiceToken)
 
 	requireInProd("gotenberg.url", c.Gotenberg.URL)
 	requireInProd("ml.base_url", c.ML.BaseURL)
@@ -337,6 +371,19 @@ func (c *Config) Validate() error {
 		add("jwt: private_key_path or private_key_pem required in prod")
 	}
 
+	// A half-configured relay is worse than none: the client would construct and
+	// then fail on the first send, long after boot. Configure it fully or not at
+	// all — an unconfigured mailer degrades notifications to a logged no-op.
+	if c.Email.Host != "" {
+		if c.Email.Port == 0 {
+			add("email.port: required when email.host is set")
+		}
+		if c.Email.From == "" {
+			add("email.from: required when email.host is set")
+		}
+	}
+
+	c.validateProdValues(prod, add)
 	c.validateMasterKey(prod, add)
 
 	if len(problems) > 0 {
@@ -344,6 +391,76 @@ func (c *Config) Validate() error {
 			"invalid configuration: "+strings.Join(problems, "; "))
 	}
 	return nil
+}
+
+// devCredentials are the well-known, publicly-committed credential values that
+// exist so the dev stack boots out of the box (deploy/docker-compose.yml,
+// .env.example). They are in git, so they are not secrets — but they are
+// structurally valid, so every emptiness and shape check passes them. Only a
+// check by value keeps them out of production.
+var devCredentials = map[string]string{
+	// deploy/docker-compose.yml's default master key.
+	"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=": "crypto.master_key",
+	// .env.example's placeholder master key (32 zero bytes).
+	"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=": "crypto.master_key",
+}
+
+// validateProdValues rejects configuration that is structurally valid — present,
+// well-typed, correctly shaped — and yet wrong for production. Every check here
+// exists because the corresponding misconfiguration fails silently at runtime
+// rather than at boot, which is the worst way for it to fail.
+func (c *Config) validateProdValues(prod bool, add func(string)) {
+	if !prod {
+		return
+	}
+
+	// PublicBaseURL has a default (http://localhost:8080), so a required-in-prod
+	// emptiness check can never catch a deployment that simply forgot to set it.
+	// The failure mode is remote and confusing: the API boots clean, then hands
+	// every OAuth provider a localhost redirect_uri and every callback dies.
+	switch {
+	case !strings.HasPrefix(c.HTTP.PublicBaseURL, "https://"):
+		add("http.public_base_url: must be an https:// origin in prod")
+	case strings.Contains(c.HTTP.PublicBaseURL, "localhost"),
+		strings.Contains(c.HTTP.PublicBaseURL, "127.0.0.1"):
+		add("http.public_base_url: must not point at localhost in prod")
+	}
+
+	// Managed Postgres is reached across a network — a peered VPC at best, the
+	// public internet at worst. sslmode=disable puts the password on the wire.
+	if strings.Contains(c.Postgres.DSN.Reveal(), "sslmode=disable") {
+		add("postgres.dsn: sslmode=disable is not permitted in prod")
+	}
+
+	// Every managed Redis accepts TLS connections only. Without this the process
+	// starts and then cannot reach its queue or its cache at all.
+	if !c.Redis.TLS {
+		add("redis.tls: must be enabled in prod")
+	}
+
+	// A prod deployment that cannot send mail cannot tell a creator their report
+	// is ready, which is the one moment the product owes them a message.
+	if c.Email.Host == "" {
+		add("email.host: required in prod")
+	}
+	if c.Email.From == "" {
+		add("email.from: required in prod")
+	}
+	// Authenticating to a relay over an unencrypted connection hands the password
+	// to anyone on the path. "none" exists for a local capture server.
+	if c.Email.TLS == "none" {
+		add(`email.tls: "none" is not permitted in prod`)
+	}
+
+	if field, ok := devCredentials[c.Crypto.MasterKey.Reveal()]; ok {
+		add(field + ": is a well-known development key committed to this repository")
+	}
+	if c.ML.ServiceToken.Reveal() == "dev-ml-service-token" {
+		add("ml.service_token: is the well-known development token")
+	}
+	if c.Storage.AccessKey.Reveal() == "test" {
+		add("storage.access_key: is the well-known LocalStack development credential")
+	}
 }
 
 // validateMasterKey decodes and length-checks the master key. A supplied key is

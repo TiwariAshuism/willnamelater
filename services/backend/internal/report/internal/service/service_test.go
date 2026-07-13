@@ -183,7 +183,7 @@ func ownedByCreator() fakeOwner {
 // Assemble/PDF tests that do not exercise the publish path.
 func newSvc(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer) *Service {
 	return New(audit, score, narrative, fraud, pdf, &fakeRepo{}, &fakeStorage{},
-		fakeCaller{id: ownerID()}, ownedByCreator())
+		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil)
 }
 
 func fullView() port.AuditView {
@@ -356,7 +356,7 @@ func TestPublishStoresPDFAndPersistsBadge(t *testing.T) {
 		fakeFraud{},
 		&fakePDF{out: []byte("%PDF-1.4 body")},
 		repo, store,
-		fakeCaller{id: ownerID()}, ownedByCreator(),
+		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil,
 	)
 
 	res, err := svc.Publish(context.Background(), audID().String())
@@ -387,7 +387,7 @@ func TestPublishRejectsScorelessAudit(t *testing.T) {
 		fakeFraud{},
 		&fakePDF{out: []byte("x")},
 		&fakeRepo{}, &fakeStorage{},
-		fakeCaller{id: ownerID()}, ownedByCreator(),
+		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil,
 	)
 	if _, err := svc.Publish(context.Background(), audID().String()); errs.KindOf(err) != errs.KindInvalid {
 		t.Fatalf("want invalid publishing a scoreless audit, got %v", err)
@@ -400,7 +400,7 @@ func TestPublicBadgeReturnsSnapshotAndShareLink(t *testing.T) {
 		Badge:      BadgeSnapshot{Overall: 90, Authenticity: ptr(80.0), Niche: "fitness", Tier: "mid"},
 	}}
 	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, repo,
-		&fakeStorage{shareURL: "https://s3/x?signed"}, fakeCaller{id: ownerID()}, ownedByCreator())
+		&fakeStorage{shareURL: "https://s3/x?signed"}, fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil)
 
 	badge, err := svc.PublicBadge(context.Background(), "some-slug")
 	if err != nil {
@@ -423,7 +423,7 @@ func newOwnedSvc(repo *fakeRepo, caller uuid.UUID, owner fakeOwner) *Service {
 		fakeFraud{},
 		&fakePDF{out: []byte("%PDF")},
 		repo, &fakeStorage{},
-		fakeCaller{id: caller}, owner,
+		fakeCaller{id: caller}, owner, nil, nil,
 	)
 }
 
@@ -565,8 +565,109 @@ func TestRevokeIsOwnerOnly(t *testing.T) {
 
 func TestPublicBadgeUnknownSlugIsNotFound(t *testing.T) {
 	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, &fakeRepo{found: false},
-		&fakeStorage{}, fakeCaller{id: ownerID()}, ownedByCreator())
+		&fakeStorage{}, fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil)
 	if _, err := svc.PublicBadge(context.Background(), "nope"); errs.KindOf(err) != errs.KindNotFound {
 		t.Fatalf("want not-found for an unknown slug, got %v", err)
+	}
+}
+
+// --- notification on publish ------------------------------------------------
+
+// fakeMailer records what was sent, and can fail on demand. A relay that is down
+// is the normal case this must survive, not an exceptional one.
+type fakeMailer struct {
+	sent []port.Message
+	err  error
+}
+
+func (m *fakeMailer) Send(_ context.Context, msg port.Message) error {
+	if m.err != nil {
+		return m.err
+	}
+	m.sent = append(m.sent, msg)
+	return nil
+}
+
+type fakeRecipient struct {
+	email string
+	err   error
+}
+
+func (r fakeRecipient) EmailOf(_ context.Context, _ uuid.UUID) (string, error) {
+	return r.email, r.err
+}
+
+// publishWith builds a service whose publish path succeeds — a scored audit owned
+// by the caller — so the only variable under test is the notification.
+func publishWith(mailer port.Mailer, rcpt port.Recipient) *Service {
+	return New(
+		fakeAudit{view: fullView()},
+		fakeScore{view: port.ScoreView{Present: true, Overall: 82, Niche: "beauty", Tier: "micro"}},
+		fakeNarrative{view: port.Narrative{Present: true, Summary: "s"}},
+		fakeFraud{},
+		&fakePDF{out: []byte("%PDF-1.4 body")},
+		&fakeRepo{slug: "durable-slug"}, &fakeStorage{},
+		fakeCaller{id: ownerID()}, ownedByCreator(),
+		mailer, rcpt,
+	)
+}
+
+func TestPublishNotifiesTheCreator(t *testing.T) {
+	mailer := &fakeMailer{}
+	svc := publishWith(mailer, fakeRecipient{email: "creator@example.com"})
+
+	res, err := svc.Publish(context.Background(), audID().String())
+	if err != nil {
+		t.Fatalf("Publish: %v", err)
+	}
+
+	if len(mailer.sent) != 1 {
+		t.Fatalf("sent %d messages, want 1", len(mailer.sent))
+	}
+	msg := mailer.sent[0]
+	if got := msg.To; len(got) != 1 || got[0] != "creator@example.com" {
+		t.Errorf("To = %v, want [creator@example.com]", got)
+	}
+	// The mail is worthless without the link it exists to deliver.
+	if !strings.Contains(msg.Text, res.PDFURL) {
+		t.Errorf("message body does not carry the share URL %q:\n%s", res.PDFURL, msg.Text)
+	}
+	if msg.Subject == "" {
+		t.Error("message has no subject")
+	}
+}
+
+// THE contract. The report is stored, the badge row is durable, and the link is
+// minted — the publish has succeeded. A mail relay having a bad minute must not
+// turn that into a reported failure, which would invite the caller to retry an
+// operation that already took effect.
+func TestPublishSucceedsWhenTheRelayIsDown(t *testing.T) {
+	cases := map[string]*Service{
+		"relay refuses the message": publishWith(
+			&fakeMailer{err: errs.New(errs.KindUnavailable, "email.dial", "relay is down")},
+			fakeRecipient{email: "creator@example.com"},
+		),
+		"recipient cannot be resolved": publishWith(
+			&fakeMailer{},
+			fakeRecipient{err: errs.New(errs.KindNotFound, "auth.no_user", "no such user")},
+		),
+		"recipient has no address": publishWith(
+			&fakeMailer{},
+			fakeRecipient{email: ""},
+		),
+		// A developer machine with no SMTP relay configured at all.
+		"no mailer configured": publishWith(nil, nil),
+	}
+
+	for name, svc := range cases {
+		t.Run(name, func(t *testing.T) {
+			res, err := svc.Publish(context.Background(), audID().String())
+			if err != nil {
+				t.Fatalf("Publish failed because of a notification problem: %v", err)
+			}
+			if res.PublicSlug == "" {
+				t.Error("publish returned no slug; the report was not actually published")
+			}
+		})
 	}
 }

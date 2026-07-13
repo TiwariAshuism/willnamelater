@@ -1,0 +1,44 @@
+# Datasources as code.
+#
+# Not clicked together in the UI — because a datasource that exists only in
+# grafana-data is a datasource that does not exist on the new VM. Everything here is
+# in git, so on migration day the new host's Grafana comes up already knowing how to
+# reach its metrics, logs, and traces.
+#
+# This file is also the entire cost of switching observability backends. There is no
+# application change to make: the app speaks OTLP to the collector and nothing else.
+
+apiVersion: 1
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    access: proxy
+    url: http://prometheus:9090
+    isDefault: true
+    jsonData:
+      timeInterval: 30s
+
+  - name: Loki
+    type: loki
+    uid: loki
+    access: proxy
+    url: http://loki:3100
+    jsonData:
+      # Links a log line to the trace it belongs to: the trace_id OpenTelemetry
+      # already puts in the structured log becomes a click through to Tempo.
+      derivedFields:
+        - datasourceUid: tempo
+          matcherRegex: '"trace_id":"(\w+)"'
+          name: TraceID
+          url: "$${__value.raw}"
+
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    access: proxy
+    url: http://tempo:3200
+    jsonData:
+      tracesToLogsV2:
+        datasourceUid: loki

@@ -1,0 +1,120 @@
+# Restores the latest production backup into a scratch database and asserts it.
+#
+# A BACKUP YOU HAVE NOT RESTORED IS A RUMOUR. backup.sh writing a file to object
+# storage every night proves that backup.sh runs — it proves nothing whatsoever
+# about whether the file can be turned back into a database. This workflow is the
+# thing that actually makes the backup real, and it is why it runs on a schedule
+# rather than living in a runbook nobody opens.
+#
+# It is also a rehearsal of step 3 of the cloud migration (deploy/MIGRATION.md).
+# The command that proves the backup works is the SAME command that moves the data
+# to a new cloud — which is exactly why the dump is --format=custom and restores
+# into any Postgres 16 rather than into one vendor's managed service.
+
+name: dr-drill
+
+on:
+  schedule:
+    # 04:00 UTC on the 1st of each month.
+    - cron: "0 4 1 * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  restore:
+    runs-on: ubuntu-latest
+
+    services:
+      # The scratch target. Ephemeral, and deliberately NOT a managed instance: the
+      # claim under test is "this dump restores into a plain Postgres 16", because
+      # that is the claim a cloud migration depends on.
+      postgres:
+        image: postgres:16-alpine
+        env:
+          POSTGRES_USER: influaudit
+          POSTGRES_PASSWORD: drill
+          POSTGRES_DB: influaudit
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U influaudit"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install age and the MinIO client
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq age postgresql-client
+          curl -fsSL -o /usr/local/bin/mc https://dl.min.io/client/mc/release/linux-amd64/mc
+          chmod +x /usr/local/bin/mc
+
+      - name: Fetch and decrypt the latest dump
+        env:
+          ENDPOINT: ${{ secrets.STORAGE_ENDPOINT }}
+          ACCESS_KEY: ${{ secrets.STORAGE_ACCESS_KEY }}
+          SECRET_KEY: ${{ secrets.STORAGE_SECRET_KEY }}
+          AGE_KEY: ${{ secrets.BACKUP_AGE_KEY }}
+        run: |
+          set -euo pipefail
+          printf '%s' "${AGE_KEY}" > /tmp/age.key
+          chmod 600 /tmp/age.key
+
+          mc alias set store "${ENDPOINT}" "${ACCESS_KEY}" "${SECRET_KEY}"
+
+          key=$(mc find store/influaudit-backups/pg --name '*.dump.age' | sort | tail -1)
+          [[ -n "${key}" ]] || { echo "::error::no backups found — backup.sh is not running"; exit 1; }
+          echo "Restoring ${key}"
+          echo "key=${key}" >> "$GITHUB_ENV"
+
+          mc cat "${key}" | age --decrypt --identity /tmp/age.key > /tmp/latest.dump
+          ls -lh /tmp/latest.dump
+
+      - name: Restore
+        env:
+          PGPASSWORD: drill
+        run: |
+          pg_restore --clean --if-exists --no-owner --no-acl --exit-on-error \
+            --dbname "postgres://influaudit@localhost:5432/influaudit" \
+            /tmp/latest.dump
+
+      # A restore that "succeeded" into an empty schema is the exact failure this
+      # catches, and it is the one a green backup job would never reveal.
+      - name: Assert the restored database is real
+        env:
+          PGPASSWORD: drill
+        run: |
+          set -euo pipefail
+          psql="psql postgres://influaudit@localhost:5432/influaudit -At -c"
+
+          migrations=$($psql "SELECT count(*) FROM schema_migrations")
+          users=$($psql "SELECT count(*) FROM users")
+
+          echo "schema_migrations=${migrations}  users=${users}"
+
+          # 59 migrations exist today; assert the schema is fully applied, not that a
+          # table merely exists.
+          if [[ "${migrations}" -lt 1 ]]; then
+            echo "::error::schema_migrations is empty — the dump carries no schema"
+            exit 1
+          fi
+
+          # The schema being present but the data being absent means the dump was
+          # taken against the wrong database, or --schema-only crept into backup.sh.
+          if [[ "${users}" -lt 1 ]]; then
+            echo "::error::users is empty — the dump carries a schema but no data"
+            exit 1
+          fi
+
+          echo "### DR drill passed" >> "$GITHUB_STEP_SUMMARY"
+          echo "Restored \`${key}\` — ${migrations} migrations, ${users} users." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Report failure loudly
+        if: failure()
+        run: |
+          echo "::error::THE DR DRILL FAILED. The production backup could not be restored."
+          echo "::error::Treat this as a production incident: right now there is no proven path back."

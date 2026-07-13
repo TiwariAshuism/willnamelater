@@ -54,6 +54,16 @@ x-backend-env: &backend-env
   # Razorpay generates the webhook secret per endpoint in its dashboard; it is a
   # different credential from the API key secret.
   INFLUAUDIT_RAZORPAY__WEBHOOK_SECRET: ${INFLUAUDIT_RAZORPAY__WEBHOOK_SECRET:-}
+  # Transactional mail. In dev this is mailpit, which accepts everything and
+  # delivers nothing — open http://localhost:8025 to read what was sent. TLS is
+  # "none" because mailpit speaks plaintext; config.Validate forbids that in prod,
+  # where the same four variables point at a real relay (Postmark, Resend, SES —
+  # they all speak SMTP, which is the whole reason the port is SMTP-shaped).
+  INFLUAUDIT_EMAIL__HOST: ${INFLUAUDIT_EMAIL__HOST:-mailpit}
+  INFLUAUDIT_EMAIL__PORT: ${INFLUAUDIT_EMAIL__PORT:-1025}
+  INFLUAUDIT_EMAIL__FROM: ${INFLUAUDIT_EMAIL__FROM:-reports@influaudit.local}
+  INFLUAUDIT_EMAIL__FROM_NAME: ${INFLUAUDIT_EMAIL__FROM_NAME:-InfluAudit}
+  INFLUAUDIT_EMAIL__TLS: ${INFLUAUDIT_EMAIL__TLS:-none}
   # Connector credentials, referenced by NAME from packages/config/connectors.yaml.
   YT_API_KEY: ${YT_API_KEY:-}
   YT_OAUTH_CLIENT_ID: ${YT_OAUTH_CLIENT_ID:-}
@@ -113,6 +123,24 @@ services:
       retries: 15
       start_period: 10s
 
+  # Catches every outbound email and delivers none of them. The web UI on :8025 is
+  # where you read what the app sent — the report-ready notification on publish is
+  # otherwise invisible in dev.
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
   gotenberg:
     image: gotenberg/gotenberg:8
     ports:
@@ -130,6 +158,10 @@ services:
     build:
       context: ..
       dockerfile: services/backend/Dockerfile
+      args:
+        # Stamped into the binaries as app.Version. `make up` passes the git
+        # describe of the working tree; CI passes the commit SHA.
+        VERSION: ${VERSION:-dev}
     entrypoint: ["/usr/local/bin/migrate"]
     environment: *backend-env
     depends_on:
@@ -161,6 +193,10 @@ services:
     build:
       context: ..
       dockerfile: services/backend/Dockerfile
+      args:
+        # Stamped into the binaries as app.Version. `make up` passes the git
+        # describe of the working tree; CI passes the commit SHA.
+        VERSION: ${VERSION:-dev}
     environment:
       <<: *backend-env
       INFLUAUDIT_HTTP__ADDR: ":8080"
@@ -193,6 +229,10 @@ services:
     build:
       context: ..
       dockerfile: services/backend/Dockerfile
+      args:
+        # Stamped into the binaries as app.Version. `make up` passes the git
+        # describe of the working tree; CI passes the commit SHA.
+        VERSION: ${VERSION:-dev}
     entrypoint: ["/usr/local/bin/worker"]
     environment: *backend-env
     volumes:

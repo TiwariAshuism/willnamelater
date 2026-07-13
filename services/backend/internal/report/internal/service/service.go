@@ -13,6 +13,7 @@ import (
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
+	"log/slog"
 	"strings"
 	"time"
 
@@ -124,16 +125,23 @@ type Service struct {
 	storage   port.Storage
 	caller    port.CallerID
 	owner     port.OwnerReader
+	// mailer and recipients notify the creator that their report is ready. Both
+	// are optional: a developer machine with no SMTP relay must still be able to
+	// publish, so a nil mailer degrades the notification to a no-op rather than
+	// failing the publish.
+	mailer     port.Mailer
+	recipients port.Recipient
 }
 
 // New wires the service. Every argument is a port the composition root
 // satisfies with an adapter over the real module; repo and storage back the
 // publish path (the durable, shareable report). caller and owner back the
 // creator-ownership gate on publish/share (Meta Platform Terms §3.c).
-func New(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, repo Repository, storage port.Storage, caller port.CallerID, owner port.OwnerReader) *Service {
+func New(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, repo Repository, storage port.Storage, caller port.CallerID, owner port.OwnerReader, mailer port.Mailer, recipients port.Recipient) *Service {
 	return &Service{
 		audit: audit, score: score, narrative: narrative, fraud: fraud,
 		pdf: pdf, repo: repo, storage: storage, caller: caller, owner: owner,
+		mailer: mailer, recipients: recipients,
 	}
 }
 
@@ -311,12 +319,59 @@ func (s *Service) Publish(ctx context.Context, auditID string) (render.PublishRe
 		return render.PublishResult{}, err
 	}
 
+	// The report is stored, the badge row is durable, and the link is minted: the
+	// publish has SUCCEEDED. Telling the creator about it is a separate, lesser
+	// concern, and a mail relay having a bad minute must not turn a completed
+	// publish into a reported failure — that would invite a retry of an operation
+	// that already took effect.
+	s.notifyPublished(ctx, durableSlug, shareURL)
+
 	return render.PublishResult{
 		PublicSlug: durableSlug,
 		BadgeURL:   "/reports/" + durableSlug,
 		PDFURL:     shareURL,
 		ExpiresAt:  now.Add(shareTTL).Format(time.RFC3339),
 	}, nil
+}
+
+// notifyPublished tells the creator their report is ready. Every failure path
+// here is logged and swallowed: see the call site in Publish.
+//
+// The recipient is the caller, and Publish has already proven through
+// requireConnectedOwner that the caller IS the connected owner of the audited
+// account — so this cannot mail a report to anyone but the creator whose data it
+// was built from.
+func (s *Service) notifyPublished(ctx context.Context, slug, shareURL string) {
+	if s.mailer == nil || s.recipients == nil {
+		return
+	}
+
+	callerID, err := s.caller.CallerID(ctx)
+	if err != nil {
+		slog.WarnContext(ctx, "could not resolve the caller to notify of a published report",
+			slog.String("slug", slug), slog.Any("error", err))
+		return
+	}
+
+	to, err := s.recipients.EmailOf(ctx, callerID)
+	if err != nil || to == "" {
+		slog.WarnContext(ctx, "could not resolve an email address to notify of a published report",
+			slog.String("slug", slug), slog.Any("error", err))
+		return
+	}
+
+	if err := s.mailer.Send(ctx, port.Message{
+		To:      []string{to},
+		Subject: "Your InfluAudit report is ready",
+		Text: "Your audit report has been published.\n\n" +
+			"Download the PDF: " + shareURL + "\n\n" +
+			"This link expires in " + shareTTL.String() + ".\n",
+	}); err != nil {
+		// Not an error for the caller: the publish succeeded. It is an operational
+		// signal that the relay is unhealthy.
+		slog.WarnContext(ctx, "a report was published but the notification could not be delivered",
+			slog.String("slug", slug), slog.Any("error", err))
+	}
 }
 
 // PublicBadge serves the unauthenticated badge projection for a published slug.

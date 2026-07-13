@@ -21,12 +21,17 @@ RUN python -m venv /opt/venv
 ENV PATH="/opt/venv/bin:$PATH"
 
 # Copy the manifest alone first so dependency resolution caches independently of
-# source edits.
+# source edits. setuptools resolves [tool.setuptools] packages at metadata time,
+# so EVERY declared package directory must exist here — pyproject declares both
+# app and training, and a missing one fails the build outright rather than
+# yielding a partial install.
 COPY pyproject.toml ./
 COPY app/__init__.py ./app/
+COPY training/__init__.py ./training/
 RUN pip install .
 
 COPY app/ ./app/
+COPY training/ ./training/
 RUN pip install --no-deps .
 
 # ---- runtime ----------------------------------------------------------------

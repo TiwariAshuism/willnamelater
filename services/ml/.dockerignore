@@ -1,0 +1,26 @@
+# Build context filter for services/ml, which builds from its own directory.
+#
+# The venv is the one that matters: it is a host-built, platform-specific tree
+# that would be uploaded to the daemon on every build and — if ever COPYd — would
+# shadow the venv the image installs at /opt/venv.
+.venv/
+venv/
+__pycache__/
+**/__pycache__/
+*.pyc
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+
+# Trained model artifacts are mounted at runtime (INFLUAUDIT_ML_ARTIFACTS), never
+# baked into the image: an image that carries a champion cannot be rolled back
+# independently of the model it was built with.
+artifacts/
+
+# tests/ is not installed by pyproject and is not needed to serve.
+tests/
+
+.env
+.env.*
+*.md

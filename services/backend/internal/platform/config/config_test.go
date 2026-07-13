@@ -142,6 +142,7 @@ func TestValidateMissingRequiredAggregation(t *testing.T) {
 		"razorpay.key_secret",
 		"gotenberg.url",
 		"ml.base_url",
+		"ml.service_token",
 		"storage.endpoint",
 		"storage.bucket",
 		"razorpay.key_id",
@@ -263,5 +264,248 @@ func TestSecretNeverLeaks(t *testing.T) {
 	// Reveal is the sanctioned escape hatch and must return the real value.
 	if s.Reveal() != plaintext {
 		t.Errorf("Reveal = %q, want %q", s.Reveal(), plaintext)
+	}
+}
+
+// prodEnv returns an environment that satisfies every prod requirement, so a
+// test can introduce exactly one defect and attribute the resulting error to it.
+// It is deliberately built from valid-but-not-well-known values: the dev
+// credentials committed to this repository are themselves a prod defect, which
+// is what TestValidateRejectsDevCredentialsInProd asserts.
+func prodEnv(overrides ...string) []string {
+	env := []string{
+		"INFLUAUDIT_ENVIRONMENT=prod",
+		"INFLUAUDIT_HTTP__PUBLIC_BASE_URL=https://api.influaudit.com",
+		"INFLUAUDIT_POSTGRES__DSN=postgres://u:p@db.example:5432/influaudit?sslmode=require",
+		"INFLUAUDIT_REDIS__ADDR=cache.example:6380",
+		"INFLUAUDIT_REDIS__TLS=true",
+		"INFLUAUDIT_CRYPTO__MASTER_KEY=" + base64.StdEncoding.EncodeToString([]byte("a-real-32-byte-production-key!!!")),
+		"INFLUAUDIT_ANTHROPIC__API_KEY=sk-ant-real",
+		"INFLUAUDIT_GOTENBERG__URL=http://gotenberg:3000",
+		"INFLUAUDIT_ML__BASE_URL=http://ml:8000",
+		"INFLUAUDIT_ML__SERVICE_TOKEN=a-real-service-token",
+		"INFLUAUDIT_STORAGE__ENDPOINT=https://acct.r2.cloudflarestorage.com",
+		"INFLUAUDIT_STORAGE__REGION=auto",
+		"INFLUAUDIT_STORAGE__BUCKET=influaudit",
+		"INFLUAUDIT_STORAGE__ACCESS_KEY=a-real-access-key",
+		"INFLUAUDIT_STORAGE__SECRET_KEY=a-real-secret-key",
+		"INFLUAUDIT_JWT__PRIVATE_KEY_PEM=-----BEGIN PRIVATE KEY-----x-----END PRIVATE KEY-----",
+		"INFLUAUDIT_RAZORPAY__KEY_ID=rzp_live_x",
+		"INFLUAUDIT_RAZORPAY__KEY_SECRET=a-real-razorpay-secret",
+		"INFLUAUDIT_OTEL__EXPORTER_ENDPOINT=otel-collector:4317",
+		"INFLUAUDIT_EMAIL__HOST=smtp.postmarkapp.com",
+		"INFLUAUDIT_EMAIL__PORT=587",
+		"INFLUAUDIT_EMAIL__FROM=reports@influaudit.com",
+	}
+	return append(env, overrides...)
+}
+
+// TestProdEnvIsItselfValid guards the fixture: if prodEnv stops being a clean
+// prod configuration, every test below would pass for the wrong reason.
+func TestProdEnvIsItselfValid(t *testing.T) {
+	if _, err := load("", func() []string { return prodEnv() }); err != nil {
+		t.Fatalf("prodEnv must be a valid prod config, got: %v", err)
+	}
+}
+
+// TestValidateRejectsSilentProdMisconfiguration covers the configurations that
+// are structurally valid — present, correctly typed, correctly shaped — and yet
+// wrong for prod. Each one previously booted clean and failed later at runtime,
+// which is the failure mode these checks exist to convert into a boot error.
+func TestValidateRejectsSilentProdMisconfiguration(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     []string
+		wantErr string
+	}{
+		{
+			// The default is http://localhost:8080, so an emptiness check can never
+			// catch a deployment that simply never set it.
+			name:    "public base url left at its localhost default",
+			env:     prodEnv("INFLUAUDIT_HTTP__PUBLIC_BASE_URL=http://localhost:8080"),
+			wantErr: "http.public_base_url",
+		},
+		{
+			name:    "public base url is not https",
+			env:     prodEnv("INFLUAUDIT_HTTP__PUBLIC_BASE_URL=http://api.influaudit.com"),
+			wantErr: "http.public_base_url: must be an https:// origin",
+		},
+		{
+			name:    "postgres dsn disables tls",
+			env:     prodEnv("INFLUAUDIT_POSTGRES__DSN=postgres://u:p@db.example:5432/x?sslmode=disable"),
+			wantErr: "postgres.dsn: sslmode=disable",
+		},
+		{
+			// Every managed Redis is TLS-only; without this the process starts and
+			// then cannot reach its queue or its cache at all.
+			name:    "redis tls disabled",
+			env:     prodEnv("INFLUAUDIT_REDIS__TLS=false"),
+			wantErr: "redis.tls: must be enabled in prod",
+		},
+		{
+			name:    "ml service token absent",
+			env:     prodEnv("INFLUAUDIT_ML__SERVICE_TOKEN="),
+			wantErr: "ml.service_token: required in prod",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := load("", func() []string { return tc.env })
+			if err == nil {
+				t.Fatalf("load succeeded; want error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestValidateRejectsDevCredentialsInProd is the important one. Every value here
+// is committed to this repository in plain sight — and every one of them is valid
+// base64, the right length, and non-empty, so it passes every structural check.
+// Only a check by value keeps it out of production.
+func TestValidateRejectsDevCredentialsInProd(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     []string
+		wantErr string
+	}{
+		{
+			name:    "the compose default master key",
+			env:     prodEnv("INFLUAUDIT_CRYPTO__MASTER_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8="),
+			wantErr: "crypto.master_key: is a well-known development key",
+		},
+		{
+			name:    "the .env.example placeholder master key",
+			env:     prodEnv("INFLUAUDIT_CRYPTO__MASTER_KEY=" + b64Key(crypto.KeySize)),
+			wantErr: "crypto.master_key: is a well-known development key",
+		},
+		{
+			name:    "the compose default ml service token",
+			env:     prodEnv("INFLUAUDIT_ML__SERVICE_TOKEN=dev-ml-service-token"),
+			wantErr: "ml.service_token: is the well-known development token",
+		},
+		{
+			name:    "the LocalStack access key",
+			env:     prodEnv("INFLUAUDIT_STORAGE__ACCESS_KEY=test"),
+			wantErr: "storage.access_key: is the well-known LocalStack development credential",
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := load("", func() []string { return tc.env })
+			if err == nil {
+				t.Fatalf("load succeeded with a committed dev credential in prod; want %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// TestDevToleratesDevCredentials is the other half of the contract: the values
+// rejected above are exactly the ones that must keep the local stack booting out
+// of the box.
+func TestDevToleratesDevCredentials(t *testing.T) {
+	cfg, err := load("", func() []string {
+		return []string{
+			"INFLUAUDIT_ENVIRONMENT=dev",
+			"INFLUAUDIT_CRYPTO__MASTER_KEY=AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=",
+			"INFLUAUDIT_ML__SERVICE_TOKEN=dev-ml-service-token",
+			"INFLUAUDIT_STORAGE__ACCESS_KEY=test",
+		}
+	})
+	if err != nil {
+		t.Fatalf("dev must tolerate the committed dev credentials, got: %v", err)
+	}
+	if len(cfg.MasterKey()) != crypto.KeySize {
+		t.Errorf("master key not decoded: got %d bytes", len(cfg.MasterKey()))
+	}
+}
+
+// TestStoragePathStyleDefaultsOn guards the default that LocalStack, MinIO and
+// Cloudflare R2 all depend on. A plain bool would default to false and silently
+// switch every deployment to virtual-host addressing.
+func TestStoragePathStyleDefaultsOn(t *testing.T) {
+	cfg, err := load("", func() []string { return nil })
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if !cfg.Storage.PathStyle {
+		t.Error("storage.path_style = false by default; want true")
+	}
+
+	off, err := load("", func() []string { return []string{"INFLUAUDIT_STORAGE__PATH_STYLE=false"} })
+	if err != nil {
+		t.Fatalf("load: %v", err)
+	}
+	if off.Storage.PathStyle {
+		t.Error("storage.path_style stayed true; env must be able to turn it off")
+	}
+}
+
+// TestValidateRequiresAMailRelayInProd: a deployment that cannot send mail cannot
+// tell a creator their report is ready, which is the one moment the product owes
+// them a message. And a half-configured relay is worse than none — it constructs
+// cleanly and fails on the first send, long after boot.
+func TestValidateRequiresAMailRelayInProd(t *testing.T) {
+	tests := []struct {
+		name    string
+		env     []string
+		wantErr string
+	}{
+		{
+			name:    "no relay at all",
+			env:     prodEnv("INFLUAUDIT_EMAIL__HOST=", "INFLUAUDIT_EMAIL__FROM="),
+			wantErr: "email.host: required in prod",
+		},
+		{
+			name:    "host without a from address",
+			env:     prodEnv("INFLUAUDIT_EMAIL__FROM="),
+			wantErr: "email.from",
+		},
+		{
+			// Authenticating to a relay in the clear hands the password to anyone on
+			// the path. "none" exists for a local capture server and nothing else.
+			name:    "plaintext relay",
+			env:     prodEnv("INFLUAUDIT_EMAIL__TLS=none"),
+			wantErr: `email.tls: "none" is not permitted in prod`,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			_, err := load("", func() []string { return tc.env })
+			if err == nil {
+				t.Fatalf("load succeeded; want error containing %q", tc.wantErr)
+			}
+			if !strings.Contains(err.Error(), tc.wantErr) {
+				t.Errorf("error = %q, want substring %q", err.Error(), tc.wantErr)
+			}
+		})
+	}
+}
+
+// A half-configured relay must fail at boot in EVERY environment, not just prod:
+// the failure it prevents (construct clean, die on first send) is not prod-specific.
+func TestValidateRejectsHalfConfiguredRelayInDev(t *testing.T) {
+	_, err := load("", func() []string {
+		return []string{
+			"INFLUAUDIT_ENVIRONMENT=dev",
+			"INFLUAUDIT_EMAIL__HOST=smtp.example.com",
+			// no port, no from
+		}
+	})
+	if err == nil {
+		t.Fatal("load succeeded with a half-configured relay; want a validation error")
+	}
+	for _, want := range []string{"email.port", "email.from"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("error missing %q; got: %v", want, err)
+		}
 	}
 }

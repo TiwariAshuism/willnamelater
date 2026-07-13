@@ -14,6 +14,11 @@ JWT_KEY      := deploy/dev-secrets/jwt-dev.pem
 WEB          := @influaudit/web
 CONTRACTS    := @influaudit/contracts
 
+# VERSION stamps the built binaries (services/backend/Dockerfile threads it into
+# -X app.Version). CI overrides it with the commit SHA; locally it describes the
+# working tree, so a locally-built image is never mistaken for a released one.
+VERSION      ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
+
 # Fail loudly inside a recipe rather than limping past a failed command.
 SHELL := bash
 .SHELLFLAGS := -eu -o pipefail -c
@@ -26,14 +31,14 @@ SHELL := bash
 
 .PHONY: up
 up: dev-secrets ## Build and start the full stack (postgres, redis, localstack S3, gotenberg, ml, api, worker) detached
-	$(COMPOSE) up -d --build
+	VERSION=$(VERSION) $(COMPOSE) up -d --build
 	@echo ""
-	@echo "Stack up. API: http://localhost:8080  ·  S3 (LocalStack): http://localhost:4566"
+	@echo "Stack up ($(VERSION)). API: http://localhost:8080  ·  S3 (LocalStack): http://localhost:4566"
 	@echo "Follow logs with: make logs"
 
 .PHONY: up-fg
 up-fg: dev-secrets ## Start the full stack in the foreground (Ctrl-C to stop)
-	$(COMPOSE) up --build
+	VERSION=$(VERSION) $(COMPOSE) up --build
 
 .PHONY: down
 down: ## Stop the stack, keeping data volumes
@@ -219,7 +224,56 @@ test: backend-test web-test ## Run backend + web test suites
 lint: backend-lint web-lint ## Lint backend + web
 
 .PHONY: gate
-gate: backend-lint backend-test openapi-check web-lint web-test ## The full local gate (mirrors CI)
+gate: backend-lint backend-test openapi-check web-typecheck web-lint web-test ## The full local gate (mirrors CI)
+
+.PHONY: web-typecheck
+web-typecheck: ## Typecheck the web app
+	pnpm --filter $(WEB) typecheck
+
+.PHONY: docker-build
+docker-build: ## Build all three production images locally (catches a broken Dockerfile before CI does)
+	docker build -f services/backend/Dockerfile --build-arg VERSION=$(VERSION) -t influaudit-backend:$(VERSION) .
+	docker build -f services/ml/Dockerfile -t influaudit-ml:$(VERSION) services/ml
+	docker build -f apps/web/Dockerfile -t influaudit-web:$(VERSION) .
+
+# ---------------------------------------------------------------------------
+# Production
+#
+# These drive the VM over SSH. The key on the far end is restricted to a forced
+# command (deploy/scripts/ssh-entrypoint.sh), so these are the ONLY two operations
+# it can perform — a leaked key cannot get a shell.
+#
+# See deploy/ARCHITECTURE.md and deploy/MIGRATION.md.
+# ---------------------------------------------------------------------------
+
+PROD_SSH ?= deploy@$(shell echo $${INFLUAUDIT_PROD_HOST:-prod.influaudit.com})
+
+.PHONY: secrets-edit
+secrets-edit: ## Edit the encrypted production secrets (decrypts to a temp file, re-encrypts on save)
+	sops deploy/secrets/prod.enc.env
+
+.PHONY: prod-deploy
+prod-deploy: ## Deploy a version to production. Usage: make prod-deploy VERSION=<git-sha>
+	@test -n "$(VERSION)" || { echo "VERSION is required, e.g. make prod-deploy VERSION=abc123..."; exit 1; }
+	ssh $(PROD_SSH) "deploy $(VERSION)"
+
+.PHONY: prod-rollback
+prod-rollback: ## Roll production back to a previously deployed version. Usage: make prod-rollback VERSION=<git-sha>
+	@test -n "$(VERSION)" || { echo "VERSION is required, e.g. make prod-rollback VERSION=abc123..."; exit 1; }
+	@echo "NOTE: this restores the IMAGE, not the SCHEMA. See deploy/scripts/rollback.sh."
+	ssh $(PROD_SSH) "rollback $(VERSION)"
+
+.PHONY: prod-logs
+prod-logs: ## Follow production logs
+	ssh $(PROD_SSH) "docker compose -f /opt/influaudit/deploy/docker-compose.prod.yml logs -f --tail=200"
+
+.PHONY: backup-now
+backup-now: ## Run the portable pg_dump backup immediately
+	ssh $(PROD_SSH) "sudo /opt/influaudit/deploy/scripts/backup.sh"
+
+.PHONY: dr-drill
+dr-drill: ## Restore the latest production backup into a scratch database and assert it (a backup you have not restored is a rumour)
+	gh workflow run dr-drill.yml
 
 .PHONY: help
 help: ## Show this help

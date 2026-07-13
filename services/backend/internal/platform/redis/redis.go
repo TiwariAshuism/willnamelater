@@ -5,6 +5,8 @@ package redis
 
 import (
 	"context"
+	"crypto/tls"
+	"net"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -41,6 +43,45 @@ type Config struct {
 	ReadTimeout time.Duration
 	// WriteTimeout bounds a single socket write.
 	WriteTimeout time.Duration
+	// TLS encrypts the connection. Every managed Redis (Memorystore, Azure Cache,
+	// ElastiCache with in-transit encryption, Upstash) accepts TLS connections
+	// only — Azure goes as far as disabling the plaintext port outright — so this
+	// is on in every deployed environment and off only against the local compose
+	// redis. config.Validate refuses to boot prod without it.
+	TLS bool
+	// TLSServerName overrides the name presented in SNI and checked against the
+	// server certificate. Empty derives it from Addr, which is what every managed
+	// service wants; set it only when connecting through a tunnel or an IP whose
+	// certificate names a different host.
+	TLSServerName string
+}
+
+// TLSConfigFor returns the TLS configuration implied by cfg, or nil when TLS is
+// off.
+//
+// It is exported because asynq dials Redis itself rather than sharing the client
+// this package builds (asynq.RedisClientOpt carries its own *tls.Config), and it
+// must be handed the identical settings. A mismatch does not fail loudly: both
+// processes start, the API enqueues onto one endpoint, the worker consumes from
+// another, and no task ever runs. One function, one source of truth.
+func TLSConfigFor(cfg Config) *tls.Config {
+	if !cfg.TLS {
+		return nil
+	}
+	name := cfg.TLSServerName
+	if name == "" {
+		// SplitHostPort fails on a bare host with no port. Addr is then already
+		// the server name, so the error is the answer.
+		if host, _, err := net.SplitHostPort(cfg.Addr); err == nil {
+			name = host
+		} else {
+			name = cfg.Addr
+		}
+	}
+	return &tls.Config{
+		MinVersion: tls.VersionTLS12,
+		ServerName: name,
+	}
 }
 
 func (c Config) withDefaults() Config {
@@ -73,6 +114,7 @@ func New(ctx context.Context, cfg Config) (*redis.Client, error) {
 		DialTimeout:  cfg.DialTimeout,
 		ReadTimeout:  cfg.ReadTimeout,
 		WriteTimeout: cfg.WriteTimeout,
+		TLSConfig:    TLSConfigFor(cfg),
 	})
 
 	if err := Check(ctx, client); err != nil {

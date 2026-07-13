@@ -165,3 +165,37 @@ type Storage interface {
 	Put(ctx context.Context, key, contentType string, data []byte) error
 	ShareURL(key string, ttl time.Duration) (string, error)
 }
+
+// Mailer delivers a transactional message. The report module reaches it only
+// through this port, so it depends on no mail SDK and on no provider: the real
+// implementation is the platform SMTP client, and every transactional provider
+// worth using (Postmark, Resend, SendGrid, Mailgun, SES) speaks SMTP. Changing
+// provider is therefore a change of four environment variables, not a rewrite —
+// which is the whole reason this port is SMTP-shaped rather than modelled on any
+// one vendor's REST API.
+//
+// Send is best-effort at every call site. A publish that has already stored the
+// PDF and minted a share URL has SUCCEEDED; reporting it as failed because a mail
+// relay blinked would be a lie, and would invite the caller to retry an operation
+// that already took effect.
+type Mailer interface {
+	Send(ctx context.Context, msg Message) error
+}
+
+// Message is a single transactional email. Text is required — a text-only client
+// must still read something sensible — and HTML is optional; when present the two
+// are sent as the alternative parts of a multipart/alternative body.
+type Message struct {
+	To      []string
+	Subject string
+	Text    string
+	HTML    string
+}
+
+// Recipient resolves the address a user is reachable at. The report module knows
+// a report's owner only as a uuid; their email address belongs to auth. The real
+// implementation adapts the auth module, so report never imports it — the same
+// arrangement as every other cross-module edge here.
+type Recipient interface {
+	EmailOf(ctx context.Context, userID uuid.UUID) (string, error)
+}

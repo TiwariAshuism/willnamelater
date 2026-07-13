@@ -1,0 +1,32 @@
+# SOPS encrypts the VALUES in deploy/secrets/*.enc.env and leaves the KEYS in
+# plaintext. That is the whole trick: the file is committed to git, a diff shows
+# which secret rotated without revealing any of them, and the secrets have a home
+# that survives a laptop being lost and a person leaving.
+#
+# Why not the alternatives:
+#   - A plain .env on the VM is not a hole on the VM (root owns everything anyway),
+#     but the secrets then live nowhere: no history, no review, no recovery.
+#   - Docker secrets need swarm mode — an orchestrator, to solve a problem one node
+#     does not have.
+#   - A fetch-at-boot SecretsProvider with cloud adapters is the trap: it puts a
+#     cloud SDK into a codebase whose defining property is having none, it makes the
+#     migration HARDER (now the app must learn a new secret backend per cloud), and
+#     it is the only option that cannot boot when the secret service is down.
+#     The seam for it already exists (SecretLookup, internal/oauth/oauth.go) if the
+#     day ever comes. Do not pre-build it.
+#
+# Two recipients, so there are two independent ways to decrypt and losing one key
+# does not lose the secrets:
+#   ops  — a human key, held offline.
+#   ci   — the deploy key; its private half is the SOPS_AGE_KEY GitHub secret.
+#
+# Rotate a recipient with:  sops updatekeys deploy/secrets/prod.enc.env
+#
+# Replace the two public keys below with your own (`age-keygen`); the placeholders
+# are not usable.
+
+creation_rules:
+  - path_regex: deploy/secrets/.*\.enc\.env$
+    age: >-
+      age1ops0000000000000000000000000000000000000000000000000000000,
+      age1ci00000000000000000000000000000000000000000000000000000000

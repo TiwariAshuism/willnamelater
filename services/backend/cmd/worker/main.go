@@ -57,12 +57,15 @@ func run(configPath string) error {
 	}
 	defer closeApp(a)
 
+	// One broker connection for the server, the scheduler, and (in the API
+	// process) the enqueuing client. app.RedisOpt is the only place these settings
+	// are derived, so the queue this worker consumes from is by construction the
+	// queue the API enqueues onto — including its TLS setting, which every managed
+	// Redis requires.
+	redisOpt := app.RedisOpt(cfg)
+
 	srv := asynq.NewServer(
-		asynq.RedisClientOpt{
-			Addr:     cfg.Redis.Addr,
-			Password: cfg.Redis.Password.Reveal(),
-			DB:       cfg.Redis.DB,
-		},
+		redisOpt,
 		asynq.Config{
 			Concurrency: concurrency,
 			// Audits are long-running and expensive in third-party quota, so a
@@ -75,12 +78,6 @@ func run(configPath string) error {
 	// Task handlers are registered by the modules that own them.
 	mux := asynq.NewServeMux()
 	a.RegisterTasks(mux)
-
-	redisOpt := asynq.RedisClientOpt{
-		Addr:     cfg.Redis.Addr,
-		Password: cfg.Redis.Password.Reveal(),
-		DB:       cfg.Redis.DB,
-	}
 
 	// The scheduler enqueues the app's periodic tasks (the nightly corpus
 	// recompute) on their cron cadence; the server above consumes them. They are
