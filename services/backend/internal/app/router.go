@@ -87,6 +87,9 @@ func (a *App) mountModules(r *gin.Engine) {
 	m.Billing.RegisterRoutes(protected, public)
 
 	m.OAuth.RegisterRoutes(protected)
+	// OAuth-as-signup: anonymous connect that creates the account + session. It
+	// mounts on the PUBLIC group precisely because the caller has no session yet.
+	m.OAuth.RegisterPublicRoutes(public)
 
 	// Meta's deauthorize and data-deletion callbacks mount on the PUBLIC group:
 	// Meta holds no session, and the signed_request HMAC'd with our app secret is
@@ -119,6 +122,13 @@ func (a *App) mountModules(r *gin.Engine) {
 	// The data-import upload endpoint is caller-scoped: a creator uploads their
 	// own data.
 	m.DataImport.RegisterRoutes(protected)
+
+	// Public acquisition-funnel surfaces. Analytics ingest (funnel events +
+	// external share-opens) and the email/media-kit waitlist are unauthenticated
+	// first-party endpoints; the optional analytics aggregate read is caller-gated.
+	m.Analytics.RegisterPublicRoutes(public)
+	m.Analytics.RegisterProtectedRoutes(protected)
+	m.Waitlist.RegisterPublicRoutes(public)
 
 	// Admin routes all require a signed-in caller; the admin-only ones (the review
 	// queue, resolve, dashboards, label export) additionally enforce the admin

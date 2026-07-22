@@ -215,6 +215,70 @@ func (r *PostgresRepository) AddHandle(ctx context.Context, id string, req model
 	return toHandleResponse(handle), nil
 }
 
+// UpsertInstagramInfluencer finds or creates the influencer for a connected
+// Instagram account, owned by ownerUserID, and ensures the account's handle is on
+// record. It backs the OAuth-signup path: the account is identified by its stable
+// Instagram business-account id (carried as the handle's platform_user_id), so
+// re-connecting the same account resolves to the SAME influencer rather than
+// duplicating it, and an unclaimed profile that already carries this account is
+// claimed by the connecting user. Returns the influencer id.
+func (r *PostgresRepository) UpsertInstagramInfluencer(ctx context.Context, ownerUserID uuid.UUID, accountID, handle string) (uuid.UUID, error) {
+	if ownerUserID == uuid.Nil {
+		return uuid.Nil, errs.New(errs.KindInvalid, "influencer.owner_required", "an owner user id is required")
+	}
+	if accountID == "" {
+		return uuid.Nil, errs.New(errs.KindInvalid, "influencer.account_required", "an instagram account id is required")
+	}
+
+	var influencerID uuid.UUID
+	err := db.InTx(ctx, r.pool, func(tx pgx.Tx) error {
+		var existing string
+		lookupErr := tx.QueryRow(ctx,
+			"SELECT influencer_id::text FROM influencer_handle WHERE platform = 'instagram' AND platform_user_id = $1",
+			accountID,
+		).Scan(&existing)
+		switch {
+		case lookupErr == nil:
+			id, perr := uuid.Parse(existing)
+			if perr != nil {
+				return errs.Wrap(perr, errs.KindInternal, "influencer.bad_id", "could not read influencer id")
+			}
+			influencerID = id
+			// Claim an unclaimed profile for the connecting creator; never reassign one
+			// that already belongs to someone else.
+			if _, err := tx.Exec(ctx,
+				"UPDATE influencer SET user_id = $1 WHERE id = $2 AND user_id IS NULL", ownerUserID, id); err != nil {
+				return errs.Wrap(err, errs.KindInternal, "influencer.claim_failed", "could not claim influencer")
+			}
+			return nil
+		case !notFound(lookupErr):
+			return errs.Wrap(lookupErr, errs.KindInternal, "influencer.lookup_failed", "could not look up connected account")
+		}
+
+		display := handle
+		if display == "" {
+			display = "creator"
+		}
+		if err := tx.QueryRow(ctx,
+			"INSERT INTO influencer (display_name, user_id) VALUES ($1, $2) RETURNING id",
+			display, ownerUserID,
+		).Scan(&influencerID); err != nil {
+			return errs.Wrap(err, errs.KindInternal, "influencer.create_failed", "could not create influencer")
+		}
+		if _, err := tx.Exec(ctx,
+			"INSERT INTO influencer_handle (influencer_id, platform, handle, platform_user_id) VALUES ($1, 'instagram', $2, $3)",
+			influencerID, handle, accountID,
+		); err != nil {
+			return mapHandleWriteError(err)
+		}
+		return recomputeTier(ctx, tx, influencerID.String())
+	})
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return influencerID, nil
+}
+
 // DeleteHandle removes a handle owned by the influencer and recomputes the
 // influencer's tier from the remaining handles, within one transaction. It
 // returns errs.KindNotFound when no such handle exists for that influencer.

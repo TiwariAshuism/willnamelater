@@ -162,8 +162,12 @@ func (c *Connector) Capabilities() []connector.Capability {
 		connector.CapabilityProfile,
 		connector.CapabilityMetrics,
 		connector.CapabilityRecentPosts,
-		connector.CapabilityAudienceBreakdown,
 		connector.CapabilityComments,
+		// Audience demographics are NOT advertised: they require the YouTube
+		// Analytics API under an OAuth owner scope, which this key-based public
+		// fetch cannot use. A structural, permanent gap is not something we can
+		// serve, so it is not claimed — and a request for it is silently left nil
+		// rather than marking every YouTube audit perpetually "partial".
 	}
 }
 
@@ -263,13 +267,11 @@ func (c *Connector) Fetch(ctx context.Context, req connector.FetchRequest) (conn
 		}
 	}
 
-	// Audience demographics require the YouTube Analytics API under an OAuth
-	// owner scope, which this key-based public fetch cannot use. Rather than
-	// fabricate a distribution we leave Snapshot.Audience nil and mark the
-	// snapshot partial so the orchestrator records the gap honestly.
-	if req.Wants(connector.CapabilityAudienceBreakdown) {
-		snap.Partial = true
-	}
+	// Audience demographics are not served by this key-based public fetch (see
+	// Capabilities). A request for them leaves Snapshot.Audience nil — never a
+	// fabricated distribution — and does NOT mark the snapshot partial: the gap is
+	// structural and permanent, not a transient shortfall, and the score's Audience
+	// Quality factor drops honestly when Audience is nil.
 
 	return snap, nil
 }

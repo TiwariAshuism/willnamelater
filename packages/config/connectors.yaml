@@ -59,6 +59,12 @@ connectors:
       scopes:
         - instagram_basic
         - instagram_manage_insights
+        # Comment quality/sentiment (PRD §8, the one accepted scope expansion). It
+        # unlocks reading comment text for the display-only quality classifier; the
+        # signal is shown with its denominator and caveats but never feeds the score
+        # (see the ML firewall in services/ml/app/features/fraud_vector.py). Widens
+        # the Meta App Review surface.
+        - instagram_manage_comments
         - pages_read_engagement
         - pages_show_list
     capabilities:

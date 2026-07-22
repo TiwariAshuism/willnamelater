@@ -100,39 +100,61 @@ func TestPercentileScoreBounds(t *testing.T) {
 	}
 }
 
-// TestAudienceSizeSubscore checks the log-scale FOLLOWER-COUNT mapping at its
-// anchors. It was TestReachSubscore, asserting Confidence: 1 — the component was
-// named for a thing it never measured (reach) and carried full certainty on a
-// purchasable number, which made buying followers RAISE the audit score. The
-// confidence expectation below is now audienceSizeConfidence (0.5), deliberately
-// capped so the component cannot dominate the composite.
-func TestAudienceSizeSubscore(t *testing.T) {
+// TestAudienceQualitySubscore covers the honest-degradation contract of the
+// Audience Quality factor: it is DROPPED (Support 0) when no demographics are
+// present or the account is below the 100-follower Meta threshold, and it scores
+// legibility + concentration when they are.
+func TestAudienceQualitySubscore(t *testing.T) {
 	t.Parallel()
 
-	tests := []struct {
-		name        string
-		followers   int64
-		wantVal     float64
-		wantSupport float64
-	}{
-		{"none", 0, 0, 0},
-		{"floor", 1_000, 0, audienceSizeConfidence},
-		{"ceil", 10_000_000, 100, audienceSizeConfidence},
-		{"above ceil clamps", 100_000_000, 100, audienceSizeConfidence},
-		{"geometric midpoint", 100_000, 50, audienceSizeConfidence}, // sqrt(1e3*1e7)=1e5
+	aud := &connector.AudienceBreakdown{
+		Countries: map[string]float64{"US": 0.6, "GB": 0.3},
+		AgeGroups: map[string]float64{"18-24": 0.5, "25-34": 0.4},
+		Gender:    map[string]float64{"female": 0.8, "male": 0.2},
 	}
-	for _, tt := range tests {
-		tt := tt
-		t.Run(tt.name, func(t *testing.T) {
-			t.Parallel()
-			got := audienceSizeSubscore(tt.followers)
-			if !approx(got.Value, tt.wantVal) {
-				t.Fatalf("value = %v, want %v", got.Value, tt.wantVal)
-			}
-			if !approx(got.Support, tt.wantSupport) {
-				t.Fatalf("support = %v, want %v", got.Support, tt.wantSupport)
-			}
-		})
+	withAud := connector.Snapshot{Followers: 50_000, Audience: aud}
+	noAud := connector.Snapshot{Followers: 50_000}
+	tooSmall := connector.Snapshot{Followers: 80, Audience: aud}
+
+	if s := audienceQualitySubscore([]connector.Snapshot{noAud}, 50_000); s.Support != 0 {
+		t.Fatalf("absent audience should drop the factor, got support %v", s.Support)
+	}
+	if s := audienceQualitySubscore([]connector.Snapshot{tooSmall}, 80); s.Support != 0 {
+		t.Fatalf("under 100 followers should drop the factor, got support %v", s.Support)
+	}
+	got := audienceQualitySubscore([]connector.Snapshot{withAud}, 50_000)
+	if got.Support <= 0 || got.SupportKind != contract.SupportCoverage || got.Basis != contract.BasisClosedForm {
+		t.Fatalf("present audience = %+v, want measured coverage/closed_form", got)
+	}
+	// All three dimensions reported -> full coverage; a clean, concentrated audience
+	// scores well above neutral.
+	if !approx(got.Support, 1) {
+		t.Fatalf("three dimensions should be full coverage, got %v", got.Support)
+	}
+	if got.Value <= neutralScore {
+		t.Fatalf("a legible, concentrated audience should score above neutral, got %v", got.Value)
+	}
+}
+
+// TestBrandFitSubscore covers the caption-driven Brand-Fit factor: dropped when no
+// captions exist, and a track record of disclosed brand work scores above neutral.
+func TestBrandFitSubscore(t *testing.T) {
+	t.Parallel()
+
+	if s := brandFitSubscore([]connector.Snapshot{{Posts: []connector.Post{{Likes: 10}}}}); s.Support != 0 {
+		t.Fatalf("no captions should drop the factor, got support %v", s.Support)
+	}
+	sponsored := []connector.Snapshot{{Posts: []connector.Post{
+		{Caption: "brand collab #ad"},
+		{Caption: "another #sponsored post"},
+		{Caption: "just a normal caption"},
+	}}}
+	got := brandFitSubscore(sponsored)
+	if got.Support <= 0 || got.SupportKind != contract.SupportCoverage {
+		t.Fatalf("captioned posts = %+v, want measured coverage", got)
+	}
+	if got.Value <= neutralScore {
+		t.Fatalf("a disclosed brand-work track record should score above neutral, got %v", got.Value)
 	}
 }
 
@@ -321,11 +343,11 @@ func TestSubscoreBasisIsAlwaysStamped(t *testing.T) {
 		t.Fatalf("compute: %v", err)
 	}
 	subs := map[string]contract.Subscore{
-		"reach":        got.Reach,
-		"engagement":   got.EngagementQuality,
-		"authenticity": got.Authenticity,
-		"consistency":  got.Consistency,
-		"content":      got.ContentQuality,
+		"engagement_authenticity": got.EngagementAuthenticity,
+		"audience_quality":        got.AudienceQuality,
+		"consistency_reliability": got.ConsistencyReliability,
+		"brand_fit_clarity":       got.BrandFitClarity,
+		"authenticity_signal":     got.FraudAuthenticity,
 	}
 	validBasis := map[string]bool{contract.BasisClosedForm: true, contract.BasisCorpus: true}
 	validKind := map[string]bool{
@@ -343,15 +365,17 @@ func TestSubscoreBasisIsAlwaysStamped(t *testing.T) {
 		}
 	}
 
-	// The content subscore's support is postCount/10 — DATA COVERAGE. Three posts in
-	// baseInput means 0.3 of the coverage the proxy can use, and it must say so
-	// rather than call the number a confidence.
-	if got.ContentQuality.SupportKind != contract.SupportCoverage {
+	// The content-depth sub-signal's support is postCount/10 — DATA COVERAGE. Three
+	// posts in baseInput means 0.3 of the coverage the proxy can use, and it must say
+	// so rather than call the number a confidence. (Depth now feeds Engagement
+	// Authenticity; it is asserted here on the sub-signal function directly.)
+	depth := contentSubscore(in.Snapshots)
+	if depth.SupportKind != contract.SupportCoverage {
 		t.Fatalf("content support kind = %q, want coverage — postCount/10 is not a confidence",
-			got.ContentQuality.SupportKind)
+			depth.SupportKind)
 	}
-	if !approx(got.ContentQuality.Support, 0.3) {
-		t.Fatalf("content coverage = %v, want 0.3 (3 of 10 posts)", got.ContentQuality.Support)
+	if !approx(depth.Support, 0.3) {
+		t.Fatalf("content coverage = %v, want 0.3 (3 of 10 posts)", depth.Support)
 	}
 	// Ten posts saturate coverage at 1.0 — and the proxy is exactly as unvalidated as
 	// it was at one post. Full coverage is not a claim of correctness.
@@ -413,11 +437,10 @@ func TestComputeIsolatesEachWeight(t *testing.T) {
 		w    Weights
 		want float64
 	}{
-		{"reach only", Weights{Reach: 1}, effective(base.Reach)},
-		{"engagement only", Weights{EngagementQuality: 1}, effective(base.EngagementQuality)},
-		{"authenticity only", Weights{Authenticity: 1}, effective(base.Authenticity)},
-		{"consistency only", Weights{Consistency: 1}, effective(base.Consistency)},
-		{"content only", Weights{ContentQuality: 1}, effective(base.ContentQuality)},
+		{"engagement authenticity only", Weights{EngagementAuthenticity: 1}, effective(base.EngagementAuthenticity)},
+		{"audience quality only", Weights{AudienceQuality: 1}, effective(base.AudienceQuality)},
+		{"consistency only", Weights{ConsistencyReliability: 1}, effective(base.ConsistencyReliability)},
+		{"brand fit only", Weights{BrandFitClarity: 1}, effective(base.BrandFitClarity)},
 	}
 	for _, tt := range tests {
 		tt := tt
@@ -446,7 +469,7 @@ func TestComputeWeightsNormalize(t *testing.T) {
 	if err != nil {
 		t.Fatalf("compute a: %v", err)
 	}
-	in.Weights = Weights{Reach: 0.60, EngagementQuality: 0.60, Authenticity: 0.50, Consistency: 0.20, ContentQuality: 0.10}
+	in.Weights = Weights{EngagementAuthenticity: 0.60, AudienceQuality: 0.60, ConsistencyReliability: 0.40, BrandFitClarity: 0.40}
 	b, err := Compute(in)
 	if err != nil {
 		t.Fatalf("compute b: %v", err)
@@ -467,38 +490,84 @@ func TestComputeRejectsZeroWeights(t *testing.T) {
 }
 
 // TestComputeDropsZeroConfidenceSubscore is the no-invented-evidence guarantee: a
-// component we could not measure is DROPPED and its weight renormalized away. It
-// used to contribute its full weight at an invented value of 50, so a third of a
-// headline number could be fabricated neutrality while the customer read a
-// confident-looking score.
+// factor we could not measure is DROPPED and its weight renormalized away. It used
+// to contribute its full weight at an invented value of 50.
 //
-// The account here is a 10M-follower snapshot with no posts and no fraud pass:
-// only audience size is measured. Its raw 100 shrinks to 75 at confidence 0.5,
-// and 75 is the whole composite.
+// The account here has posts and a fraud pass (so Engagement Authenticity is
+// measured) but no captions (so Brand-Fit is unmeasured). Brand-Fit's weight is
+// renormalized away and the composite is Engagement Authenticity's effective value
+// alone — never dragged by an invented Brand-Fit 50.
 func TestComputeDropsZeroConfidenceSubscore(t *testing.T) {
 	t.Parallel()
 
 	in := baseInput()
-	in.Snapshots = []connector.Snapshot{{Platform: connector.PlatformYouTube, Followers: 10_000_000}}
-	in.Fraud = contract.FraudInput{} // no fraud pass ran -> authenticity is {50, 0}
-	in.Weights = Weights{Reach: 1, Authenticity: 0.5}
+	in.Snapshots = []connector.Snapshot{{
+		Platform:  connector.PlatformYouTube,
+		Followers: 50_000,
+		Posts:     []connector.Post{{Likes: 1_000, Comments: 50}}, // no caption -> brand-fit absent
+	}}
+	in.Fraud = contract.FraudInput{Present: true, RiskScore: ptr(10.0), Confidence: 0.8}
+	in.Weights = Weights{EngagementAuthenticity: 1, BrandFitClarity: 0.5}
 
 	got, err := Compute(in)
 	if err != nil {
 		t.Fatalf("compute: %v", err)
 	}
-	if got.Authenticity.Support != 0 {
-		t.Fatalf("authenticity support = %v, want 0 (unmeasured)", got.Authenticity.Support)
+	if got.BrandFitClarity.Support != 0 {
+		t.Fatalf("brand-fit support = %v, want 0 (no captions)", got.BrandFitClarity.Support)
+	}
+	if got.AudienceQuality.Support != 0 {
+		t.Fatalf("audience-quality support = %v, want 0 (no demographics)", got.AudienceQuality.Support)
 	}
 
-	want := effective(got.Reach) // 50 + 0.5*(100-50) = 75
+	want := effective(got.EngagementAuthenticity)
 	if !approx(got.Overall, want) {
-		t.Fatalf("overall = %v, want %v (audience size alone, weight renormalized)", got.Overall, want)
+		t.Fatalf("overall = %v, want %v (engagement authenticity alone, weight renormalized)", got.Overall, want)
 	}
-	// The old behaviour: authenticity's 0.5 weight carrying an invented 50.
+	// The old behaviour would have been brand-fit's 0.5 weight carrying an invented 50.
 	fabricated := (1*want + 0.5*neutralScore) / 1.5
 	if approx(got.Overall, fabricated) {
-		t.Fatalf("overall = %v: unmeasured authenticity still contributed an invented 50", got.Overall)
+		t.Fatalf("overall = %v: unmeasured brand-fit still contributed an invented 50", got.Overall)
+	}
+}
+
+// TestComputeMinEvidenceBoundary pins the exact 50%-weight threshold. A
+// sub-100-follower, caption-less audit with posts, a fraud pass and a cadence
+// series measures Engagement Authenticity (.30) + Consistency (.20) = exactly 0.50
+// of the weight — it PASSES by a hair. Strip the cadence series and only .30
+// remains, which correctly yields ErrInsufficientEvidence. This boundary is
+// load-bearing: a future weight tweak must not silently cross it.
+func TestComputeMinEvidenceBoundary(t *testing.T) {
+	t.Parallel()
+
+	tbase := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+	timedPosts := []connector.Post{
+		{PublishedAt: tbase, Likes: 500, Comments: 30},
+		{PublishedAt: tbase.AddDate(0, 0, 3), Likes: 520, Comments: 28},
+		{PublishedAt: tbase.AddDate(0, 0, 6), Likes: 480, Comments: 26},
+	}
+	untimedPosts := []connector.Post{
+		{Likes: 500, Comments: 30}, {Likes: 520, Comments: 28}, {Likes: 480, Comments: 26},
+	}
+
+	// Exactly 0.50 evidenced (EA + Consistency): passes.
+	in := baseInput()
+	in.Snapshots = []connector.Snapshot{{Platform: connector.PlatformInstagram, Followers: 90, Posts: timedPosts}}
+	in.Fraud = contract.FraudInput{Present: true, RiskScore: ptr(20.0), Confidence: 0.7}
+	in.Weights = BootstrapWeights()
+	got, err := Compute(in)
+	if err != nil {
+		t.Fatalf("at exactly 0.50 evidenced weight the score must publish, got %v", err)
+	}
+	if got.AudienceQuality.Support != 0 || got.BrandFitClarity.Support != 0 {
+		t.Fatalf("audience/brand-fit must be dropped under 100 followers / no captions, got %+v", got)
+	}
+
+	// Only 0.30 evidenced (EA alone, no cadence series): withheld.
+	thin := in
+	thin.Snapshots = []connector.Snapshot{{Platform: connector.PlatformInstagram, Followers: 90, Posts: untimedPosts}}
+	if _, err := Compute(thin); !errors.Is(err, ErrInsufficientEvidence) {
+		t.Fatalf("err = %v, want ErrInsufficientEvidence below the 0.50 floor", err)
 	}
 }
 
@@ -547,8 +616,18 @@ func TestComputeStampsVersionsAndLabel(t *testing.T) {
 func TestContributingPlatformsPartial(t *testing.T) {
 	t.Parallel()
 
+	tbase := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	snaps := []connector.Snapshot{
-		{Platform: connector.PlatformYouTube, Followers: 40_000, Posts: []connector.Post{{Likes: 100, Comments: 5}}},
+		{
+			Platform:  connector.PlatformYouTube,
+			Followers: 40_000,
+			Posts: []connector.Post{
+				{PublishedAt: tbase, Caption: "look #ad", Likes: 100, Comments: 5},
+				{PublishedAt: tbase.AddDate(0, 0, 3), Caption: "hi", Likes: 110, Comments: 6},
+				{PublishedAt: tbase.AddDate(0, 0, 6), Caption: "tip", Likes: 90, Comments: 4},
+			},
+			Audience: &connector.AudienceBreakdown{Countries: map[string]float64{"US": 0.7, "GB": 0.2}},
+		},
 		{Platform: connector.PlatformInstagram}, // fully empty: rate-limited before any data
 	}
 	in := baseInput()
@@ -652,9 +731,9 @@ func TestContentDepthRewardsInteraction(t *testing.T) {
 func baseInput() Input {
 	base := time.Date(2026, 2, 1, 12, 0, 0, 0, time.UTC)
 	posts := []connector.Post{
-		{PublishedAt: base, Likes: 2_000, Comments: 120, Shares: 40},
-		{PublishedAt: base.AddDate(0, 0, 3), Likes: 2_400, Comments: 150, Shares: 55},
-		{PublishedAt: base.AddDate(0, 0, 6), Likes: 1_900, Comments: 100, Shares: 30},
+		{PublishedAt: base, Caption: "new drop #ad", Likes: 2_000, Comments: 120, Shares: 40},
+		{PublishedAt: base.AddDate(0, 0, 3), Caption: "loving this", Likes: 2_400, Comments: 150, Shares: 55},
+		{PublishedAt: base.AddDate(0, 0, 6), Caption: "tutorial time", Likes: 1_900, Comments: 100, Shares: 30},
 	}
 	metrics := []connector.MetricPoint{
 		{At: base, Name: "subscribers", Value: 49_000},
@@ -666,6 +745,13 @@ func baseInput() Input {
 		Followers: 50_000,
 		Posts:     posts,
 		Metrics:   metrics,
+		// Audience present so the Audience Quality factor is measured in the composite
+		// tests. A well-defined, US-concentrated audience.
+		Audience: &connector.AudienceBreakdown{
+			Countries: map[string]float64{"US": 0.6, "GB": 0.2, "CA": 0.1},
+			AgeGroups: map[string]float64{"18-24": 0.5, "25-34": 0.4},
+			Gender:    map[string]float64{"female": 0.7, "male": 0.3},
+		},
 	}
 	return Input{
 		Niche:     "beauty",

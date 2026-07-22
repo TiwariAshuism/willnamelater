@@ -55,21 +55,30 @@ const (
 
 // Metric names emitted for an account and its media.
 const (
-	metricFollowers  = "followers"
-	metricMediaCount = "media_count"
-	metricReach      = "reach"
-	metricSaved      = "saved"
+	metricFollowers      = "followers"
+	metricMediaCount     = "media_count"
+	metricReach          = "reach"
+	metricSaved          = "saved"
+	metricReachRatio     = "reach_ratio"      // per-media reach / account followers (PRD reach ratio)
+	metricReelsWatchTime = "reels_watch_time" // Reels average watch time, seconds (VERIFIED per PRD §7)
 )
 
 // Graph API insight metric tokens requested per media. impressions and shares
 // map onto Post fields; reach and saved are surfaced as time-stamped
 // MetricPoints (real per-media readings, never fabricated).
 const (
-	insightImpressions = "impressions"
-	insightReach       = "reach"
-	insightSaved       = "saved"
-	insightShares      = "shares"
+	insightImpressions       = "impressions"
+	insightReach             = "reach"
+	insightSaved             = "saved"
+	insightShares            = "shares"
+	insightReelsAvgWatchTime = "ig_reels_avg_watch_time"
 )
+
+// mediaTypeVideo is the media_type value under which the Reels average-watch-time
+// insight is valid. Requesting it on a non-video media returns an unavailable
+// error, so it is fetched only for video media and in a SEPARATE best-effort call
+// so a rejection never costs the media its core reach/saved insights.
+const mediaTypeVideo = "VIDEO"
 
 // Account-level follower-demographics insight. The Graph API exposes audience
 // composition via the follower_demographics metric with a total_value query and
@@ -197,7 +206,10 @@ func (c *Connector) CostOf(req connector.FetchRequest) int {
 		cost += ceilDiv(nPosts, mediaPageSize)
 	}
 	if req.Wants(connector.CapabilityRecentPosts) && nPosts > 0 {
-		cost += nPosts // one insights call per media
+		// One core insights call per media, plus (worst case) one Reels
+		// watch-time call per media when the media is video. The bound is loose on
+		// purpose — it over-reserves rather than risk a mid-fetch bucket miss.
+		cost += 2 * nPosts
 	}
 	if req.Wants(connector.CapabilityComments) && nPosts > 0 {
 		cost += nPosts * c.maxCommentPagesPerMedia
@@ -273,7 +285,7 @@ func (c *Connector) Fetch(ctx context.Context, req connector.FetchRequest) (conn
 	// reach/saved are appended as time-stamped MetricPoints. A quota/rate-limit
 	// error keeps whatever was gathered and degrades to partial.
 	if req.Wants(connector.CapabilityRecentPosts) && len(posts) > 0 {
-		extra, ierr := c.enrichInsights(ctx, token, posts)
+		extra, ierr := c.enrichInsights(ctx, token, posts, snap.Followers)
 		snap.Metrics = append(snap.Metrics, extra...)
 		if ierr != nil {
 			if degradable(ierr) {

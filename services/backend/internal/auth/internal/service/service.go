@@ -72,7 +72,7 @@ var _ AuthService = (*authService)(nil)
 // same key pair. A dummy password hash is computed once so the login path runs
 // an argon2 verification even when the account is absent, closing the timing
 // side channel that would otherwise reveal which emails are registered.
-func NewService(repo repository.Repository, jwtCfg config.JWTConfig) (AuthService, *token.Issuer, error) {
+func NewService(repo repository.Repository, jwtCfg config.JWTConfig) (FullService, *token.Issuer, error) {
 	issuer, err := token.NewIssuer(jwtCfg)
 	if err != nil {
 		return nil, nil, err

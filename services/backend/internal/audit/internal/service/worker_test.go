@@ -298,6 +298,45 @@ func TestRun_PersistsFraudResultWithCliqueCount(t *testing.T) {
 	}
 }
 
+// TestRun_ClassifiesAndPersistsCommentQuality covers the display-only comment
+// classifier: a successful run invokes it and persists the summary keyed on the
+// job, so the report can render the pill. It is deliberately separate from the
+// fraud pass and the score — the ML firewall keeps it out of every number.
+func TestRun_ClassifiesAndPersistsCommentQuality(t *testing.T) {
+	registered := map[connector.Platform]connector.Connector{
+		connector.PlatformInstagram: fakeConnector{platform: connector.PlatformInstagram, snap: goodSnapshot(connector.PlatformInstagram)},
+	}
+	h := newHarness([]port.Connection{connectionFor(connector.PlatformInstagram)}, registered)
+	ratio := 0.18
+	h.classifier.summary = port.CommentQualitySummary{
+		Present:          true,
+		AnalyzedCount:    110,
+		LowQualityCount:  20,
+		LowQualityRatio:  &ratio,
+		SufficientSample: true,
+		Counts:           map[string]int{"genuine": 90, "generic": 20},
+		RateKey:          "generic_comment_rate_v1",
+		ModelVersion:     "heuristic-comments-v1",
+	}
+	job := seedQueuedJob(h)
+
+	runTask(t, h, job.ID)
+
+	if h.classifier.calls == 0 {
+		t.Fatal("the comment classifier was never invoked")
+	}
+	cq, ok := h.repo.commentQualityOf(job.ID)
+	if !ok {
+		t.Fatal("comment quality was not persisted for the audit")
+	}
+	if !cq.Present || cq.AnalyzedCount != 110 || cq.RateKey != "generic_comment_rate_v1" {
+		t.Fatalf("persisted comment quality wrong: %+v", cq)
+	}
+	if cq.LowQualityRatio == nil || *cq.LowQualityRatio != 0.18 {
+		t.Fatalf("low_quality_ratio = %v, want 0.18", cq.LowQualityRatio)
+	}
+}
+
 // The fraud row feeds both the brand's deliverable and the training feature
 // store, so an unmeasured signal must reach the database as NULL. A 0 would
 // assert "we analyzed the commenters and found no coordination" — a claim nobody

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -113,10 +114,19 @@ func bootstrapRepo() *fakeRepo {
 }
 
 func sampleSnapshots() []connector.Snapshot {
+	base := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
 	return []connector.Snapshot{{
 		Platform:  connector.PlatformYouTube,
 		Followers: 50_000,
-		Posts:     []connector.Post{{Likes: 2_000, Comments: 120, Shares: 30}},
+		Posts: []connector.Post{
+			{PublishedAt: base, Caption: "new drop #ad", Likes: 2_000, Comments: 120, Shares: 30},
+			{PublishedAt: base.AddDate(0, 0, 3), Caption: "hey all", Likes: 2_100, Comments: 110, Shares: 25},
+			{PublishedAt: base.AddDate(0, 0, 6), Caption: "quick tip", Likes: 1_900, Comments: 100, Shares: 20},
+		},
+		Audience: &connector.AudienceBreakdown{
+			Countries: map[string]float64{"US": 0.6, "GB": 0.2},
+			Gender:    map[string]float64{"female": 0.7, "male": 0.3},
+		},
 	}}
 }
 
@@ -176,7 +186,7 @@ func TestScorePersistsAndStamps(t *testing.T) {
 	if row.Breakdown.ObservedEngagementRate == nil {
 		t.Fatal("observed engagement rate not persisted for corpus recompute")
 	}
-	if _, ok := row.Breakdown.Subscores[contract.ComponentConsistency]; !ok {
+	if _, ok := row.Breakdown.Subscores[contract.ComponentConsistencyReliability]; !ok {
 		t.Fatal("consistency subscore missing from breakdown")
 	}
 }

@@ -46,6 +46,11 @@ const (
 		`{"name":"saved","period":"lifetime","values":[{"value":120}]},` +
 		`{"name":"shares","period":"lifetime","values":[{"value":60}]}]}`
 
+	// reelsBody is the separate Reels average-watch-time insight, valid only on
+	// video media (media2 is media_type VIDEO in mediaBodyTwo).
+	reelsBody = `{"data":[{"name":"ig_reels_avg_watch_time","period":"lifetime",` +
+		`"values":[{"value":12}]}]}`
+
 	commentsBodyMedia1 = `{"data":[{"id":"c1","text":"love this","timestamp":"2021-09-02T08:00:00+0000",` +
 		`"username":"fan_a","from":{"id":"user_a","username":"fan_a"}}],"paging":{"cursors":{"after":""}}}`
 
@@ -282,7 +287,7 @@ func TestCostOf(t *testing.T) {
 		{
 			name: "recent posts default 25",
 			req:  connector.FetchRequest{Capabilities: []connector.Capability{connector.CapabilityRecentPosts}},
-			want: 1 + 1 + 25, // user + 1 media page + 25 insights calls
+			want: 1 + 1 + 25*2, // user + 1 media page + 25 media * (core insights + reels) calls
 		},
 		{
 			name: "comments only default 25",
@@ -295,8 +300,8 @@ func TestCostOf(t *testing.T) {
 				MaxPosts:     60,
 				Capabilities: []connector.Capability{connector.CapabilityRecentPosts, connector.CapabilityComments},
 			},
-			// user(1) + media ceil(60/25)=3 + insights 60 + comments 60*2=120
-			want: 1 + 3 + 60 + 120,
+			// user(1) + media ceil(60/25)=3 + insights 60*2=120 + comments 60*2=120
+			want: 1 + 3 + 120 + 120,
 		},
 		{
 			name: "audience adds its three breakdown calls",
@@ -309,8 +314,8 @@ func TestCostOf(t *testing.T) {
 		{
 			name: "empty capabilities means all",
 			req:  connector.FetchRequest{},
-			// user(1) + media(1) + insights 25 + comments 25*2=50 + audience 3
-			want: 1 + 1 + 25 + 50 + 3,
+			// user(1) + media(1) + insights 25*2=50 + comments 25*2=50 + audience 3
+			want: 1 + 1 + 50 + 50 + 3,
 		},
 	}
 	for _, tt := range tests {
@@ -328,7 +333,7 @@ func TestFetchSuccessFull(t *testing.T) {
 	doer := newStubDoer(t, map[string][]stubResponse{
 		"user":     {ok(userBody)},
 		"media":    {ok(mediaBodyTwo)},
-		"insights": {ok(insightsBodyMedia1), ok(insightsBodyMedia2)},
+		"insights": {ok(insightsBodyMedia1), ok(insightsBodyMedia2), ok(reelsBody)},
 		"comments": {ok(commentsBodyMedia1), ok(commentsBodyMedia2)},
 	})
 	c := newTestConnector(t, doer)
@@ -356,11 +361,13 @@ func TestFetchSuccessFull(t *testing.T) {
 		t.Fatalf("followers = %d", snap.Followers)
 	}
 
-	// followers + media_count, then reach + saved for each of the two media.
-	if len(snap.Metrics) != 6 {
-		t.Fatalf("metrics = %d, want 6", len(snap.Metrics))
+	// account followers + media_count (2), then per media: reach + saved +
+	// reach_ratio (both media), plus reels_watch_time for the one video media.
+	// 2 + 2 + 2 + 2 + 1 = 9.
+	if len(snap.Metrics) != 9 {
+		t.Fatalf("metrics = %d, want 9", len(snap.Metrics))
 	}
-	var sawFollowers, sawReach, sawSaved bool
+	var sawFollowers, sawReach, sawSaved, sawRatio, sawReels bool
 	for _, m := range snap.Metrics {
 		switch m.Name {
 		case metricFollowers:
@@ -369,10 +376,15 @@ func TestFetchSuccessFull(t *testing.T) {
 			sawReach = true
 		case metricSaved:
 			sawSaved = true
+		case metricReachRatio:
+			// reach ratio is a real reach divided by the real follower base.
+			sawRatio = m.Value > 0 && m.Value < 1
+		case metricReelsWatchTime:
+			sawReels = m.Value == 12
 		}
 	}
-	if !sawFollowers || !sawReach || !sawSaved {
-		t.Fatalf("expected followers/reach/saved metrics, got %+v", snap.Metrics)
+	if !sawFollowers || !sawReach || !sawSaved || !sawRatio || !sawReels {
+		t.Fatalf("expected followers/reach/saved/reach_ratio/reels metrics, got %+v", snap.Metrics)
 	}
 
 	if len(snap.Posts) != 2 {
@@ -575,7 +587,7 @@ func TestFetchPartialOnCommentQuota(t *testing.T) {
 	doer := newStubDoer(t, map[string][]stubResponse{
 		"user":     {ok(userBody)},
 		"media":    {ok(mediaBodyTwo)},
-		"insights": {ok(insightsBodyMedia1), ok(insightsBodyMedia2)},
+		"insights": {ok(insightsBodyMedia1), ok(insightsBodyMedia2), ok(reelsBody)},
 		"comments": {{status: http.StatusBadRequest, body: appRateLimitBody}},
 	})
 	c := newTestConnector(t, doer)
@@ -648,6 +660,7 @@ func TestFetchInsightsUnavailableSkipsMedia(t *testing.T) {
 		"insights": {
 			{status: http.StatusBadRequest, body: insightsUnavailableBody},
 			ok(insightsBodyMedia2),
+			ok(reelsBody),
 		},
 	})
 	c := newTestConnector(t, doer)
@@ -670,9 +683,49 @@ func TestFetchInsightsUnavailableSkipsMedia(t *testing.T) {
 	if snap.Posts[1].Views != 9000 || snap.Posts[1].Shares != 60 {
 		t.Fatalf("second media should enrich: %+v", snap.Posts[1])
 	}
-	// Base followers/media_count plus only media2's reach/saved.
-	if len(snap.Metrics) != 4 {
-		t.Fatalf("metrics = %d, want 4", len(snap.Metrics))
+	// Base followers/media_count (2) plus only media2's reach/saved/reach_ratio/reels (4).
+	if len(snap.Metrics) != 6 {
+		t.Fatalf("metrics = %d, want 6", len(snap.Metrics))
+	}
+}
+
+// TestFetchReelsUnavailableKeepsCoreInsights pins the isolation contract: a video
+// media whose Reels watch-time metric is unavailable keeps its core
+// reach/saved/reach_ratio insights and does NOT mark the snapshot partial. The
+// reels call is separate precisely so its failure never costs the media its core
+// figures.
+func TestFetchReelsUnavailableKeepsCoreInsights(t *testing.T) {
+	t.Parallel()
+	doer := newStubDoer(t, map[string][]stubResponse{
+		"user":  {ok(userBody)},
+		"media": {ok(mediaBodyTwo)},
+		"insights": {
+			ok(insightsBodyMedia1), // media1 (IMAGE) core — no reels call
+			ok(insightsBodyMedia2), // media2 (VIDEO) core
+			{status: http.StatusBadRequest, body: insightsUnavailableBody}, // media2 reels unavailable
+		},
+	})
+	c := newTestConnector(t, doer)
+
+	snap, err := c.Fetch(context.Background(), connector.FetchRequest{
+		Handle:       "@x",
+		AccountID:    testAccountID,
+		Token:        validToken(),
+		Capabilities: []connector.Capability{connector.CapabilityMetrics, connector.CapabilityRecentPosts},
+	})
+	if err != nil {
+		t.Fatalf("Fetch: %v", err)
+	}
+	if snap.Partial {
+		t.Fatal("an unavailable reels metric must not mark the snapshot partial")
+	}
+	if snap.Posts[1].Views != 9000 || snap.Posts[1].Shares != 60 {
+		t.Fatalf("video media core insights must survive a missing reels metric: %+v", snap.Posts[1])
+	}
+	for _, m := range snap.Metrics {
+		if m.Name == metricReelsWatchTime {
+			t.Fatal("no reels watch time should be emitted when the metric is unavailable")
+		}
 	}
 }
 
@@ -830,7 +883,7 @@ func TestFetchCommentsHonorTotalCap(t *testing.T) {
 	doer := newStubDoer(t, map[string][]stubResponse{
 		"user":     {ok(userBody)},
 		"media":    {ok(mediaBodyTwo)},
-		"insights": {ok(insightsBodyMedia1), ok(insightsBodyMedia2)},
+		"insights": {ok(insightsBodyMedia1), ok(insightsBodyMedia2), ok(reelsBody)},
 		"comments": {ok(commentsBodyMedia1)},
 	})
 	c, err := New(Config{

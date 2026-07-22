@@ -192,11 +192,10 @@ func TestPlatformAndCapabilities(t *testing.T) {
 		t.Fatalf("platform = %q", c.Platform())
 	}
 	want := map[connector.Capability]bool{
-		connector.CapabilityProfile:           true,
-		connector.CapabilityMetrics:           true,
-		connector.CapabilityRecentPosts:       true,
-		connector.CapabilityAudienceBreakdown: true,
-		connector.CapabilityComments:          true,
+		connector.CapabilityProfile:     true,
+		connector.CapabilityMetrics:     true,
+		connector.CapabilityRecentPosts: true,
+		connector.CapabilityComments:    true,
 	}
 	got := c.Capabilities()
 	if len(got) != len(want) {
@@ -511,7 +510,13 @@ func TestFetchCommentsDisabledSkipsVideo(t *testing.T) {
 	}
 }
 
-func TestFetchPartialOnAudience(t *testing.T) {
+// TestFetchAudienceRequestIsNilNotPartial pins the structural-gap contract: the
+// key-based YouTube fetch does not serve audience demographics, so a request for
+// them leaves Audience nil WITHOUT marking the snapshot partial. The gap is
+// permanent, not a transient shortfall, and the score's Audience Quality factor
+// drops honestly on a nil Audience — flagging every YouTube audit "partial" would
+// be misleading.
+func TestFetchAudienceRequestIsNilNotPartial(t *testing.T) {
 	t.Parallel()
 	doer := newStubDoer(t, map[string][]stubResponse{
 		"channels": {ok(channelBodyVisible)},
@@ -525,8 +530,8 @@ func TestFetchPartialOnAudience(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Fetch: %v", err)
 	}
-	if !snap.Partial {
-		t.Fatal("audience request the public API cannot serve should be partial")
+	if snap.Partial {
+		t.Fatal("a structural audience gap must not mark the whole audit partial")
 	}
 	if snap.Audience != nil {
 		t.Fatal("audience must be nil, never fabricated")

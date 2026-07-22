@@ -60,22 +60,21 @@ func Tiers() []string {
 	return []string{tierNano, tierMicro, tierMid, tierMacro, tierMega}
 }
 
-// Weights is an active weight set: the five component weights and the version
-// that produced them. The weights need not pre-sum to one — Compute normalizes
-// them — so an operator can INSERT a new vertical's weights without hand-checking
-// that they total exactly 1.0.
+// Weights is an active weight set: the four hireability-factor weights (PRD §6)
+// and the version that produced them. The weights need not pre-sum to one —
+// Compute normalizes them — so an operator can INSERT a new vertical's weights
+// without hand-checking that they total exactly 1.0.
 type Weights struct {
-	Reach             float64
-	EngagementQuality float64
-	Authenticity      float64
-	Consistency       float64
-	ContentQuality    float64
-	Version           int
+	EngagementAuthenticity float64
+	AudienceQuality        float64
+	ConsistencyReliability float64
+	BrandFitClarity        float64
+	Version                int
 }
 
-// sum returns the total of the five component weights.
+// sum returns the total of the four factor weights.
 func (w Weights) sum() float64 {
-	return w.Reach + w.EngagementQuality + w.Authenticity + w.Consistency + w.ContentQuality
+	return w.EngagementAuthenticity + w.AudienceQuality + w.ConsistencyReliability + w.BrandFitClarity
 }
 
 // Benchmark is an active benchmark generation for one (niche, tier, metric)

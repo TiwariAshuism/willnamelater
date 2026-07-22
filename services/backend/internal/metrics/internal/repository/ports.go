@@ -25,6 +25,10 @@ type IngestRepository interface {
 	// InsertComments writes rows into comment_sample. Rows carry only the keyed
 	// author hash, never a raw author id.
 	InsertComments(ctx context.Context, tx pgx.Tx, rows []model.CommentRow) error
+	// InsertAudienceDemographics writes observed demographic buckets into
+	// audience_demographic, upserting on the bucket key so a re-audit refreshes
+	// rather than duplicates. Only observed buckets are passed; absence is no row.
+	InsertAudienceDemographics(ctx context.Context, tx pgx.Tx, rows []model.AudienceDemographicRow) error
 }
 
 // SaltStore reads and seeds the sealed, application-wide pseudonymization salt

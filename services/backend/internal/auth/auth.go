@@ -28,6 +28,20 @@ type Module struct {
 	handler    *handler.Handler
 	middleware gin.HandlerFunc
 	repo       repository.Repository
+	svc        service.FullService
+}
+
+// SessionTokens is a freshly issued session in the shape the composition root
+// hands to the oauth signup flow: an access/refresh pair plus the user it belongs
+// to. The refresh token is the one-time opaque secret; it is never persisted in
+// the clear.
+type SessionTokens struct {
+	AccessToken  string
+	RefreshToken string
+	TokenType    string
+	ExpiresIn    int64
+	UserID       uuid.UUID
+	Email        string
 }
 
 // New builds the auth module over the shared connection pool, parsing the RS256
@@ -45,6 +59,37 @@ func New(pool *db.Pool, jwtCfg config.JWTConfig) (*Module, error) {
 		handler:    handler.New(svc),
 		middleware: handler.RequireAuth(issuer),
 		repo:       repo,
+		svc:        svc,
+	}, nil
+}
+
+// ProvisionUser finds or creates a PASSWORDLESS (social-only) account for email
+// and returns its user id. The composition root adapts it onto the oauth module's
+// signup UserProvisioner port (OAuth-as-signup). It is not an HTTP route.
+func (m *Module) ProvisionUser(ctx context.Context, email string) (uuid.UUID, error) {
+	user, err := m.svc.ProvisionSocialUser(ctx, email)
+	if err != nil {
+		return uuid.Nil, err
+	}
+	return user.ID, nil
+}
+
+// IssueSession mints a fresh token pair + session for an existing user id, the
+// same way login does. The composition root adapts it onto the oauth module's
+// signup SessionIssuer port so a completed OAuth-as-signup lands the creator in a
+// session. It is not an HTTP route.
+func (m *Module) IssueSession(ctx context.Context, userID uuid.UUID) (SessionTokens, error) {
+	resp, err := m.svc.IssueSession(ctx, userID, "", "")
+	if err != nil {
+		return SessionTokens{}, err
+	}
+	return SessionTokens{
+		AccessToken:  resp.AccessToken,
+		RefreshToken: resp.RefreshToken,
+		TokenType:    resp.TokenType,
+		ExpiresIn:    resp.ExpiresIn,
+		UserID:       resp.User.ID,
+		Email:        resp.User.Email,
 	}, nil
 }
 

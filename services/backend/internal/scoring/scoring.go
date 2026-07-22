@@ -151,15 +151,16 @@ func (m *Module) ReportView(ctx context.Context, influencerID uuid.UUID) (Report
 			SupportKind: sub.SupportKind,
 			Confidence:  sub.Support,
 		})
-		// The authenticity headline is only asserted when the subscore rests on an
-		// actual measurement. With zero support the engine's value is the NEUTRAL
-		// MIDPOINT (50) — a placeholder meaning "we don't know", not a finding — and
-		// copying it into the headline would print "Authenticity: 50/100" to a brand
-		// for an account nobody examined. nil here, and the deliverable says so.
-		if name == "authenticity" && sub.Support > 0 {
-			v := sub.Value
-			view.Authenticity = &v
-		}
+	}
+	// The authenticity headline is the fraud/bot sub-signal (carried out of the
+	// Engagement Authenticity factor), asserted ONLY when it rests on an actual
+	// measurement. With zero support the engine's value is the NEUTRAL MIDPOINT
+	// (50) — "we don't know", not a finding — and copying it into the headline
+	// would print "Authenticity: 50/100" to a brand for an account nobody examined.
+	// nil here, and the deliverable says so.
+	if a := resp.AuthenticitySignal; a != nil && a.Support > 0 {
+		v := a.Value
+		view.Authenticity = &v
 	}
 	return view, nil
 }

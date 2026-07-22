@@ -26,11 +26,30 @@ type Report struct {
 	// false when no fraud pass produced a signal, in which case the block is
 	// omitted rather than shown as a misleading zero.
 	Fraud FraudBlock `json:"fraud"`
+	// CommentQuality is a DISPLAY-only pill (never scored). Available is false when
+	// no classification ran or no comments were available; the block is then omitted.
+	CommentQuality CommentQualityBlock `json:"comment_quality"`
 	// Narrative is the advisory content. NarrativeAvailable is false when the
 	// ml/llm step was skipped or failed; the report then shows the score alone.
 	Narrative          Narrative `json:"narrative"`
 	NarrativeAvailable bool      `json:"narrative_available"`
 	FinishedAt         string    `json:"finished_at,omitempty"`
+}
+
+// CommentQualityBlock is the display-only comment-quality summary. It NEVER feeds
+// the score (the ML firewall). LowQualityRatio is a pointer: nil below the
+// classifier's minimum sample, where the report shows the bucket counts and states
+// the rate is not established rather than printing a fabricated 0%. It always
+// carries the denominator (AnalyzedCount), never extrapolates the sampled comments
+// to the whole account, and is captioned that a high rate is not fraud.
+type CommentQualityBlock struct {
+	Available        bool           `json:"available"`
+	AnalyzedCount    int            `json:"analyzed_count"`
+	LowQualityCount  int            `json:"low_quality_count"`
+	LowQualityRatio  *float64       `json:"low_quality_ratio,omitempty"`
+	SufficientSample bool           `json:"sufficient_sample"`
+	Counts           map[string]int `json:"counts,omitempty"`
+	ModelVersion     string         `json:"model_version,omitempty"`
 }
 
 // FraudBlock is the coordinated-inauthenticity estimate presented as a headline.
@@ -272,6 +291,16 @@ const reportHTML = `<!doctype html>
   </table>
   {{if not .Fraud.CoordinationAnalyzed}}
   <p class="note">Coordination was <strong>not assessed</strong>: this platform returned no comment data, so no commenter graph could be built. This is not a finding of "no coordination" — it means we could not look.</p>
+  {{end}}
+  {{end}}
+
+  {{if .CommentQuality.Available}}
+  <h2>Comment quality</h2>
+  <p class="note">A rule-based read of {{.CommentQuality.AnalyzedCount}} sampled comments &mdash; these comments only, never extrapolated to the account. Model {{.CommentQuality.ModelVersion}}. The rule set leans English, so it under-reads other languages, and a high generic rate is <strong>not</strong> fraud: fan and meme audiences leave oceans of genuine emoji.</p>
+  {{if and .CommentQuality.SufficientSample .CommentQuality.LowQualityRatio}}
+  <p>Low-quality (generic / emoji-only / duplicate) comments: {{fracP .CommentQuality.LowQualityRatio}}% of the {{.CommentQuality.AnalyzedCount}} sampled.</p>
+  {{else}}
+  <p>Of {{.CommentQuality.AnalyzedCount}} sampled, {{.CommentQuality.LowQualityCount}} read as low-quality. Too few to state a reliable rate, so no percentage is shown rather than an unreliable one.</p>
   {{end}}
   {{end}}
 

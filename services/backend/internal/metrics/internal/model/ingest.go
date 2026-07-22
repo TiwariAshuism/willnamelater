@@ -40,6 +40,20 @@ type PostRow struct {
 	ViewCount    int64
 }
 
+// AudienceDemographicRow is one observed demographic bucket destined for the
+// audience_demographic table (migration 000031). One row per bucket that was
+// actually reported: an absent dimension or bucket is simply no row, never a
+// zero-filled fraction.
+type AudienceDemographicRow struct {
+	InfluencerID uuid.UUID
+	AuditJobID   uuid.UUID
+	Platform     string
+	Dimension    string // age | gender | country
+	Bucket       string
+	Fraction     float64
+	CapturedAt   time.Time
+}
+
 // CommentRow is one row to insert into comment_sample (migrations 000009,
 // 000014).
 //

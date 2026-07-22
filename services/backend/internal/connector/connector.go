@@ -152,10 +152,15 @@ type Post struct {
 	URL         string
 	PublishedAt time.Time
 	Caption     string
-	Likes       int64
-	Comments    int64
-	Shares      int64
-	Views       int64
+	// MediaType is the platform's content-format label (e.g. Instagram's
+	// "IMAGE"/"VIDEO"/"CAROUSEL_ALBUM"), or "" when the platform does not report
+	// one. It gates format-specific insight requests (a Reels watch-time metric is
+	// only valid on video media) and is a future input to format-diversity scoring.
+	MediaType string
+	Likes     int64
+	Comments  int64
+	Shares    int64
+	Views     int64
 }
 
 // Comment is a single comment left on a Post, carrying just enough to build a

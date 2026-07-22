@@ -93,6 +93,33 @@ func (m *Module) NicheOf(ctx context.Context, influencerID uuid.UUID) (string, e
 	return *resp.Niche, nil
 }
 
+// UpsertInstagramInfluencer finds or creates the influencer for a connected
+// Instagram account owned by ownerUserID, ensuring its handle is on record, and
+// returns the influencer id. The composition root adapts it onto the oauth
+// module's signup provisioner port (OAuth-as-signup): connecting an account both
+// creates the account's profile and claims it for the connecting creator. It is
+// not an HTTP route.
+func (m *Module) UpsertInstagramInfluencer(ctx context.Context, ownerUserID uuid.UUID, accountID, handle string) (uuid.UUID, error) {
+	return m.repo.UpsertInstagramInfluencer(ctx, ownerUserID, accountID, handle)
+}
+
+// InstagramHandleOf returns the influencer's Instagram handle, and false when it
+// has none on record. The composition root adapts it onto the report module's
+// HandleReader port so the public /@handle badge can freeze the creator's handle
+// at publish time. It is not an HTTP route.
+func (m *Module) InstagramHandleOf(ctx context.Context, influencerID uuid.UUID) (string, bool, error) {
+	profile, err := m.AuditProfileOf(ctx, influencerID)
+	if err != nil {
+		return "", false, err
+	}
+	for _, h := range profile.Handles {
+		if h.Platform == connector.PlatformInstagram && h.Handle != "" {
+			return h.Handle, true, nil
+		}
+	}
+	return "", false, nil
+}
+
 // RegisterRoutes mounts the influencer endpoints under rg. Every endpoint here
 // identifies or mutates a specific influencer, so the composition root applies
 // the auth middleware to the group it passes in.

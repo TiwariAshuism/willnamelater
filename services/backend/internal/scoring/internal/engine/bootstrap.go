@@ -10,8 +10,10 @@ const MetricEngagementRate = "engagement_rate"
 const BootstrapLabel = "industry-bootstrap v1"
 
 // bootstrapVersion is the version number of the cold-start generation. Corpus
-// recomputation writes strictly higher versions.
-const bootstrapVersion = 1
+// recomputation writes strictly higher versions. It is 2 as of the CreatorTrust
+// 4-factor hireability reshape: v1 was the retired 5-factor influence weighting,
+// deactivated by migration 000030, and a v2 weight row carries the new keys.
+const bootstrapVersion = 2
 
 // Benchmark provenance sources. They are the two values benchmark.source may
 // take (the column CHECKs them), and they decide whether a subscore built on the
@@ -77,19 +79,21 @@ const BootstrapPriorSupport = 0.25
 // count nobody counted.
 const bootstrapSampleSize = 0
 
-// BootstrapWeights returns the cold-start weight set: the composite weighting
-// mandated by the PRD (0.30 reach, 0.30 engagement quality, 0.25 authenticity,
-// 0.10 consistency, 0.05 content quality). It is seeded under the baseline
-// (niche, tier) cell; a vertical that needs a different weighting is an INSERT of
-// an active row for its own (niche, tier), never a code change.
+// BootstrapWeights returns the cold-start weight set: the 4-factor hireability
+// weighting mandated by the PRD §6 (0.30 Engagement Authenticity, 0.30 Audience
+// Quality, 0.20 Consistency & Reliability, 0.20 Brand-Fit Clarity). These are v1
+// HEURISTICS, not learned coefficients — there is no campaign-outcome data to
+// calibrate against yet, which is why the score never claims a success
+// probability. It is seeded under the baseline (niche, tier) cell; a vertical
+// that needs a different weighting is an INSERT of an active row for its own
+// (niche, tier), never a code change.
 func BootstrapWeights() Weights {
 	return Weights{
-		Reach:             0.30,
-		EngagementQuality: 0.30,
-		Authenticity:      0.25,
-		Consistency:       0.10,
-		ContentQuality:    0.05,
-		Version:           bootstrapVersion,
+		EngagementAuthenticity: 0.30,
+		AudienceQuality:        0.30,
+		ConsistencyReliability: 0.20,
+		BrandFitClarity:        0.20,
+		Version:                bootstrapVersion,
 	}
 }
 

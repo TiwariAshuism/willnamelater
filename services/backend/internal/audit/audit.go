@@ -50,6 +50,7 @@ func New(
 	connections port.Connections,
 	caller port.CallerID,
 	features port.FeatureRecorder,
+	classifier port.CommentClassifier,
 ) *Module {
 	svc := service.New(
 		repository.New(pool),
@@ -63,6 +64,7 @@ func New(
 		connections,
 		caller,
 		features,
+		classifier,
 	)
 
 	return &Module{
@@ -159,5 +161,41 @@ func (m *Module) FraudResultOf(ctx context.Context, auditJobID uuid.UUID) (Fraud
 		CliqueMembershipFraction: fr.CliqueMembershipFraction,
 		Confidence:               fr.Confidence,
 		ModelVersion:             fr.ModelVersion,
+	}, true, nil
+}
+
+// CommentQualityView is the per-audit comment-quality summary in the shape the
+// report module consumes. It is a DISPLAY signal only — never a score input.
+// LowQualityRatio is nil below the classifier's minimum sample; the report then
+// shows the counts and says the rate is not stated, never 0%.
+type CommentQualityView struct {
+	Present          bool
+	AnalyzedCount    int
+	LowQualityCount  int
+	LowQualityRatio  *float64
+	SufficientSample bool
+	Counts           map[string]int
+	RateKey          string
+	ModelVersion     string
+}
+
+// CommentQualityOf returns the stored comment-quality summary for an audit job.
+// found is false when no row was written for it. The composition root adapts it
+// onto the report module's CommentQualityReader port. It is not an HTTP route and
+// not caller-scoped; consumers authorize the audit first.
+func (m *Module) CommentQualityOf(ctx context.Context, auditJobID uuid.UUID) (CommentQualityView, bool, error) {
+	cq, found, err := m.svc.CommentQualityOf(ctx, auditJobID)
+	if err != nil || !found {
+		return CommentQualityView{}, found, err
+	}
+	return CommentQualityView{
+		Present:          cq.Present,
+		AnalyzedCount:    cq.AnalyzedCount,
+		LowQualityCount:  cq.LowQualityCount,
+		LowQualityRatio:  cq.LowQualityRatio,
+		SufficientSample: cq.SufficientSample,
+		Counts:           cq.Counts,
+		RateKey:          cq.RateKey,
+		ModelVersion:     cq.ModelVersion,
 	}, true, nil
 }

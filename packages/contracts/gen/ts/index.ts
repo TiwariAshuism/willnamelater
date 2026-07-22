@@ -38,10 +38,18 @@ export type PublicBadge = Schemas["report.PublicBadge"];
 export type ScoreResponse = Schemas["scoring.ScoreResponse"];
 export type ScoreHistoryResponse = Schemas["scoring.ScoreHistoryResponse"];
 export type ScorePoint = Schemas["scoring.ScorePoint"];
+export type FactorPresentation = Schemas["scoring.FactorPresentation"];
+export type Subscore = Schemas["scoring.Subscore"];
 
 // --- oauth ---
 export type AuthorizeResponse = Schemas["oauth.AuthorizeResponse"];
 export type ConnectionResponse = Schemas["oauth.ConnectionResponse"];
+export type SignupStartRequest = Schemas["oauth.SignupStartRequest"];
+export type AuthSession = Schemas["oauth.AuthSession"];
+
+// --- public funnel (analytics + waitlist) ---
+export type AnalyticsIngestRequest = Schemas["analytics.IngestRequest"];
+export type WaitlistCaptureRequest = Schemas["waitlist.CaptureRequest"];
 
 // --- influencers ---
 export type InfluencerResponse = Schemas["influencer.InfluencerResponse"];

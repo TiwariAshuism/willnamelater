@@ -23,7 +23,20 @@ import (
 // The Component names key the scoring_weights.weights JSON object and the score
 // breakdown. They are stable strings: a persisted weight set or score row is
 // read back by these keys, so they must never be renamed casually.
+//
+// The four v2 keys below are the CreatorTrust hireability composite (PRD §6):
+// Engagement Authenticity, Audience Quality, Consistency & Reliability, and
+// Brand-Fit Clarity. The five v1 keys beneath them are the retired influence
+// composite; they are KEPT, never deleted, because historical score.breakdown
+// jsonb was written with them and must still decode (see Subscore.UnmarshalJSON).
 const (
+	// v2 — the 4-factor hireability composite.
+	ComponentEngagementAuthenticity = "engagement_authenticity"
+	ComponentAudienceQuality        = "audience_quality"
+	ComponentConsistencyReliability = "consistency_reliability"
+	ComponentBrandFitClarity        = "brand_fit_clarity"
+
+	// v1 — retired influence composite. Historical-decode only; never scored.
 	ComponentReach             = "reach"
 	ComponentEngagementQuality = "engagement_quality"
 	ComponentAuthenticity      = "authenticity"
@@ -201,8 +214,8 @@ func (s *Subscore) UnmarshalJSON(b []byte) error {
 	return nil
 }
 
-// Score is the computed influence + authenticity result for one audit. Overall
-// is the weighted composite of the five subscores on a 0..100 scale. The version
+// Score is the computed hireability result for one audit. Overall is the
+// weighted composite of the four factors (PRD §6) on a 0..100 scale. The version
 // stamps pin the exact weight set and benchmark generation used, so the score is
 // reproducible even after newer weights or benchmarks become active.
 type Score struct {
@@ -211,12 +224,22 @@ type Score struct {
 	Niche        string
 	Tier         string
 
-	Overall           float64
-	Reach             Subscore
-	EngagementQuality Subscore
-	Authenticity      Subscore
-	Consistency       Subscore
-	ContentQuality    Subscore
+	Overall float64
+	// The four composite factors (weights sum ~1.0; see engine.BootstrapWeights):
+	// Engagement Authenticity .30, Audience Quality .30, Consistency & Reliability
+	// .20, Brand-Fit Clarity .20.
+	EngagementAuthenticity Subscore
+	AudienceQuality        Subscore
+	ConsistencyReliability Subscore
+	BrandFitClarity        Subscore
+
+	// FraudAuthenticity is the fraud/bot-derived authenticity sub-signal. It is a
+	// SUB-SIGNAL of Engagement Authenticity, NOT a composite component of its own —
+	// it is carried here only so the report/badge can surface the constructive
+	// authenticity headline (PRD §8.2) when it rests on a real measurement. Its
+	// Support is 0 (SupportNone) when no fraud pass produced a usable signal, and
+	// the headline is then withheld rather than certifying an unexamined account.
+	FraudAuthenticity Subscore
 
 	// OverallConfidence is the weight-blended SUPPORT across the subscores. It
 	// mixes support kinds (coverage, prior, confidence), so it is a summary of how

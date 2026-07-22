@@ -25,6 +25,7 @@ import (
 
 	"github.com/getnyx/influaudit/backend/internal/admin"
 	"github.com/getnyx/influaudit/backend/internal/alerts"
+	"github.com/getnyx/influaudit/backend/internal/analytics"
 	"github.com/getnyx/influaudit/backend/internal/audit"
 	"github.com/getnyx/influaudit/backend/internal/auth"
 	"github.com/getnyx/influaudit/backend/internal/billing"
@@ -54,6 +55,7 @@ import (
 	"github.com/getnyx/influaudit/backend/internal/report"
 	reportport "github.com/getnyx/influaudit/backend/internal/report/port"
 	"github.com/getnyx/influaudit/backend/internal/scoring"
+	"github.com/getnyx/influaudit/backend/internal/waitlist"
 	"github.com/getnyx/influaudit/backend/internal/whitelabel"
 )
 
@@ -112,6 +114,11 @@ type Modules struct {
 	Report     *report.Module
 	DataImport *dataimport.Module
 	Admin      *admin.Module
+
+	// Public acquisition-funnel modules: first-party funnel + share-open analytics,
+	// and the email-capture / media-kit waitlist. Both expose public ingest routes.
+	Analytics *analytics.Module
+	Waitlist  *waitlist.Module
 
 	// Deferred-feature scaffolds. They are mounted so their shape is a real,
 	// documented part of the contract, but every operation returns 501 until the
@@ -293,6 +300,8 @@ func (a *App) buildModules(connectors *connector.Config) error {
 	// oauth declares an Identity port rather than importing auth. auth.UserID
 	// reads the identity its middleware established; the adapter closes over
 	// nothing and carries no state.
+	influencerMod := influencer.New(a.Pool)
+
 	oauthMod, err := oauth.New(
 		a.Pool,
 		a.Redis,
@@ -301,12 +310,16 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		oauth.Config{RedirectBaseURL: a.Config.HTTP.PublicBaseURL},
 		identityFromAuth{},
 		os.Getenv,
+		// OAuth-as-signup provisioners: an anonymous connect creates the user +
+		// influencer and mints a session. auth backs user provisioning and session
+		// issuance; influencer upserts the connected account's profile.
+		oauthUserProvisioner{auth: authMod},
+		oauthInfluencerProvisioner{inf: influencerMod},
+		oauthSessionIssuer{auth: authMod},
 	)
 	if err != nil {
 		return err
 	}
-
-	influencerMod := influencer.New(a.Pool)
 
 	// scoring keys its benchmarks on (niche, tier). Tier it derives from live
 	// follower counts, but niche is a content category only the influencer module
@@ -355,6 +368,9 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		// recorded best-effort as a training row, enriched with the score's
 		// niche/tier/verification and a real reach label when one exists.
 		mlopsFeatureRecorder{mlops: mlopsMod, scoring: scoringMod},
+		// The display-only comment-quality classifier. Best-effort and firewalled
+		// away from the score/fraud vector — it only feeds the report pill.
+		auditCommentClassifier{c: mlClient},
 	)
 
 	// Object storage for published report PDFs. Constructing the client is pure
@@ -410,18 +426,29 @@ func (a *App) buildModules(connectors *connector.Config) error {
 	// It notifies the creator on publish through a Mailer and a Recipient port. As
 	// with every other cross-module edge, report does not import auth: the
 	// Recipient port is satisfied by an adapter over auth.EmailOf.
+	// Public-funnel modules: first-party funnel + share-open analytics, and the
+	// email-capture / media-kit waitlist. Both are plain data sinks with public
+	// ingest routes; report emits external-open events through analytics.
+	analyticsMod := analytics.New(a.Pool)
+	waitlistMod := waitlist.New(a.Pool)
+
 	reportMod := report.New(
 		a.Pool,
 		reportAuditReader{a: auditMod},
 		reportScoreReader{s: scoringMod},
 		reportNarrativeReader{l: llmMod},
 		reportFraudReader{a: auditMod},
+		reportCommentQualityReader{a: auditMod},
 		pdf.New(a.Config.Gotenberg.URL, httpDoerForPDF),
 		reportStorage{s: a.storage},
 		reportCaller{},
 		reportOwnerReader{i: influencerMod},
 		mailer,
 		reportRecipient{a: authMod},
+		// handles freezes the creator's Instagram handle into the public /@handle
+		// badge; opens records external share-opens (the PRD primary metric).
+		reportHandleReader{i: influencerMod},
+		reportOpenRecorder{a: analyticsMod},
 	)
 
 	// The dataimport module is the real-data ingress for Instagram while its live
@@ -459,6 +486,8 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		Report:     reportMod,
 		DataImport: dataImportMod,
 		Admin:      adminMod,
+		Analytics:  analyticsMod,
+		Waitlist:   waitlistMod,
 		Alerts:     alerts.New(),
 		BulkAudit:  bulkaudit.New(),
 		Whitelabel: whitelabel.New(),
@@ -481,6 +510,64 @@ func (identityFromAuth) UserID(ctx context.Context) (uuid.UUID, error) {
 			"this endpoint requires authentication")
 	}
 	return id, nil
+}
+
+// --- OAuth-as-signup provisioners: oauth ports -> auth / influencer ------
+
+// oauthUserProvisioner adapts auth.ProvisionUser onto oauth's UserProvisioner. A
+// signup finds or creates a passwordless account for the captured email.
+type oauthUserProvisioner struct{ auth *auth.Module }
+
+func (a oauthUserProvisioner) FindOrCreateUserByEmail(ctx context.Context, email string) (uuid.UUID, error) {
+	return a.auth.ProvisionUser(ctx, email)
+}
+
+// oauthInfluencerProvisioner adapts influencer.UpsertInstagramInfluencer onto
+// oauth's InfluencerProvisioner: connecting an account creates (or claims) its
+// profile owned by the new user.
+type oauthInfluencerProvisioner struct{ inf *influencer.Module }
+
+func (a oauthInfluencerProvisioner) UpsertInstagramInfluencer(ctx context.Context, in oauth.InfluencerSignup) (uuid.UUID, error) {
+	return a.inf.UpsertInstagramInfluencer(ctx, in.OwnerUserID, in.InstagramAccountID, in.Handle)
+}
+
+// oauthSessionIssuer adapts auth.IssueSession onto oauth's SessionIssuer, so a
+// completed signup lands the creator in a session (the same tokens login mints).
+type oauthSessionIssuer struct{ auth *auth.Module }
+
+func (a oauthSessionIssuer) IssueSession(ctx context.Context, userID uuid.UUID) (oauth.Session, error) {
+	t, err := a.auth.IssueSession(ctx, userID)
+	if err != nil {
+		return oauth.Session{}, err
+	}
+	return oauth.Session{
+		AccessToken:  t.AccessToken,
+		RefreshToken: t.RefreshToken,
+		TokenType:    t.TokenType,
+		ExpiresIn:    t.ExpiresIn,
+		UserID:       t.UserID,
+		Email:        t.Email,
+	}, nil
+}
+
+// --- Report public-funnel ports: report -> influencer / analytics -------
+
+// reportHandleReader adapts influencer.InstagramHandleOf onto report's
+// HandleReader, so publish can freeze the creator's Instagram handle into the
+// public /@handle badge.
+type reportHandleReader struct{ i *influencer.Module }
+
+func (r reportHandleReader) InstagramHandleOf(ctx context.Context, influencerID uuid.UUID) (string, bool, error) {
+	return r.i.InstagramHandleOf(ctx, influencerID)
+}
+
+// reportOpenRecorder adapts analytics.RecordShareOpen onto report's OpenRecorder,
+// so every public badge/handle read records an external share-open — the PRD's
+// primary success metric. It is best-effort; report never imports analytics.
+type reportOpenRecorder struct{ a *analytics.Module }
+
+func (r reportOpenRecorder) RecordOpen(ctx context.Context, slug string, owner bool) error {
+	return r.a.RecordShareOpen(ctx, slug, owner)
 }
 
 // Close releases every constructed dependency in reverse order. It joins all

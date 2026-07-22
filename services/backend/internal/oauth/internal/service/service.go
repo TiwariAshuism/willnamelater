@@ -16,20 +16,31 @@ import (
 // issued tokens bound to their owner, and persists them through TokenStore. It
 // holds no plaintext credential beyond the moment of sealing.
 type Service struct {
-	cfg       Config
-	platforms map[connector.Platform]connector.PlatformConfig
-	identity  Identity
-	states    StateStore
-	tokens    TokenStore
-	sealer    Sealer
-	provider  ProviderClient
-	secrets   SecretLookup
+	cfg         Config
+	platforms   map[connector.Platform]connector.PlatformConfig
+	identity    Identity
+	states      StateStore
+	tokens      TokenStore
+	sealer      Sealer
+	provider    ProviderClient
+	secrets     SecretLookup
+	users       UserProvisioner
+	influencers InfluencerProvisioner
+	sessions    SessionIssuer
 }
 
-var _ OAuthService = (*Service)(nil)
+var (
+	_ OAuthService  = (*Service)(nil)
+	_ SignupService = (*Service)(nil)
+)
 
 // New constructs the oauth service. It fails fast on an invalid Config or a nil
 // collaborator so a misconfigured module cannot start.
+//
+// users, influencers, and sessions back the OAuth-as-signup flow. They are
+// required: signup is a first-class capability of this module, so a deployment
+// that cannot provision an account should fail to start rather than 500 on the
+// first anonymous connect.
 func New(
 	cfg Config,
 	connectors *connector.Config,
@@ -39,12 +50,16 @@ func New(
 	sealer Sealer,
 	provider ProviderClient,
 	secrets SecretLookup,
+	users UserProvisioner,
+	influencers InfluencerProvisioner,
+	sessions SessionIssuer,
 ) (*Service, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
 	}
 	if connectors == nil || identity == nil || states == nil || tokens == nil ||
-		sealer == nil || provider == nil || secrets == nil {
+		sealer == nil || provider == nil || secrets == nil ||
+		users == nil || influencers == nil || sessions == nil {
 		return nil, errs.New(errs.KindInternal, "oauth.misconfigured",
 			"oauth service is missing a required dependency")
 	}
@@ -55,14 +70,17 @@ func New(
 	}
 
 	return &Service{
-		cfg:       cfg,
-		platforms: platforms,
-		identity:  identity,
-		states:    states,
-		tokens:    tokens,
-		sealer:    sealer,
-		provider:  provider,
-		secrets:   secrets,
+		cfg:         cfg,
+		platforms:   platforms,
+		identity:    identity,
+		states:      states,
+		tokens:      tokens,
+		sealer:      sealer,
+		provider:    provider,
+		secrets:     secrets,
+		users:       users,
+		influencers: influencers,
+		sessions:    sessions,
 	}, nil
 }
 
@@ -171,8 +189,7 @@ func (s *Service) Callback(ctx context.Context, provider string) (model.Connecti
 		CodeVerifier:   data.CodeVerifier,
 	})
 	if err != nil {
-		return model.ConnectionResponse{}, errs.Wrap(err, errs.KindUnavailable, "oauth.exchange_failed",
-			"could not exchange the authorization code")
+		return model.ConnectionResponse{}, classifyExchangeError(err)
 	}
 	if res.AccessToken == "" || res.ProviderAccountID == "" {
 		return model.ConnectionResponse{}, errs.New(errs.KindUnavailable, "oauth.exchange_failed",

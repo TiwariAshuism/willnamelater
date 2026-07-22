@@ -101,6 +101,11 @@ type ShareGrant struct {
 type Repository interface {
 	UpsertReport(ctx context.Context, rec ReportRecord) (publicSlug string, err error)
 	GetByPublicSlug(ctx context.Context, slug string) (PublishedReport, bool, error)
+	// GetByHandle returns the newest LIVE published report for an Instagram handle,
+	// resolved through the handle frozen into the badge snapshot at publish time.
+	// It is the durable /@handle alias over the opaque slug and applies the same
+	// liveness filter as GetByPublicSlug: a revoked or expired badge is invisible.
+	GetByHandle(ctx context.Context, handle string) (PublishedReport, bool, error)
 	// ReportIDOf resolves the stored report row for an audit job.
 	ReportIDOf(ctx context.Context, auditJobID uuid.UUID) (uuid.UUID, bool, error)
 	// RevokeByAuditJob withdraws a published report: the slug stops resolving.
@@ -116,32 +121,41 @@ type Repository interface {
 
 // Service assembles and renders audit reports over the module's ports.
 type Service struct {
-	audit     port.AuditReader
-	score     port.ScoreReader
-	narrative port.NarrativeReader
-	fraud     port.FraudReader
-	pdf       port.PDFRenderer
-	repo      Repository
-	storage   port.Storage
-	caller    port.CallerID
-	owner     port.OwnerReader
+	audit          port.AuditReader
+	score          port.ScoreReader
+	narrative      port.NarrativeReader
+	fraud          port.FraudReader
+	commentQuality port.CommentQualityReader
+	pdf            port.PDFRenderer
+	repo           Repository
+	storage        port.Storage
+	caller         port.CallerID
+	owner          port.OwnerReader
 	// mailer and recipients notify the creator that their report is ready. Both
 	// are optional: a developer machine with no SMTP relay must still be able to
 	// publish, so a nil mailer degrades the notification to a no-op rather than
 	// failing the publish.
 	mailer     port.Mailer
 	recipients port.Recipient
+	// handles freezes the creator's Instagram handle into the badge at publish
+	// time so the /@handle alias resolves later. opens counts public badge reads
+	// for the external-share-open metric. Both are optional: a nil handles reader
+	// publishes an empty handle (slug-only badge), and a nil opens recorder makes
+	// counting a no-op — neither may block a publish or a public read.
+	handles port.HandleReader
+	opens   port.OpenRecorder
 }
 
 // New wires the service. Every argument is a port the composition root
 // satisfies with an adapter over the real module; repo and storage back the
 // publish path (the durable, shareable report). caller and owner back the
 // creator-ownership gate on publish/share (Meta Platform Terms §3.c).
-func New(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, repo Repository, storage port.Storage, caller port.CallerID, owner port.OwnerReader, mailer port.Mailer, recipients port.Recipient) *Service {
+func New(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, commentQuality port.CommentQualityReader, pdf port.PDFRenderer, repo Repository, storage port.Storage, caller port.CallerID, owner port.OwnerReader, mailer port.Mailer, recipients port.Recipient, handles port.HandleReader, opens port.OpenRecorder) *Service {
 	return &Service{
 		audit: audit, score: score, narrative: narrative, fraud: fraud,
-		pdf: pdf, repo: repo, storage: storage, caller: caller, owner: owner,
-		mailer: mailer, recipients: recipients,
+		commentQuality: commentQuality, pdf: pdf, repo: repo, storage: storage,
+		caller: caller, owner: owner, mailer: mailer, recipients: recipients,
+		handles: handles, opens: opens,
 	}
 }
 
@@ -228,6 +242,29 @@ func (s *Service) Assemble(ctx context.Context, auditID string) (render.Report, 
 		}
 	}
 
+	// Comment quality is a DISPLAY pill only (never scored). It is shown when a
+	// classification ran and had comments to look at; the rate is stated only above
+	// the classifier's minimum sample, otherwise the counts stand with a plain "rate
+	// not established" — never a fabricated 0%. The reader is optional so the module
+	// builds and tests without it.
+	if s.commentQuality != nil {
+		cq, err := s.commentQuality.CommentQualityOf(ctx, view.ID)
+		if err != nil {
+			return render.Report{}, err
+		}
+		if cq.Found && cq.Present {
+			report.CommentQuality = render.CommentQualityBlock{
+				Available:        true,
+				AnalyzedCount:    cq.AnalyzedCount,
+				LowQualityCount:  cq.LowQualityCount,
+				LowQualityRatio:  cq.LowQualityRatio,
+				SufficientSample: cq.SufficientSample,
+				Counts:           cq.Counts,
+				ModelVersion:     cq.ModelVersion,
+			}
+		}
+	}
+
 	return report, nil
 }
 
@@ -297,11 +334,17 @@ func (s *Service) Publish(ctx context.Context, auditID string) (render.PublishRe
 	sum := sha256.Sum256(pdf)
 	now := time.Now().UTC()
 
+	// Freeze the creator's public Instagram handle into the badge so the /@handle
+	// alias resolves later without re-reading any live account data. An influencer
+	// with no handle on record publishes a slug-only badge (empty handle) rather
+	// than a fabricated one; a handle lookup failure is not fatal to the publish.
+	handle := s.instagramHandle(ctx, report.InfluencerID)
+
 	durableSlug, err := s.repo.UpsertReport(ctx, ReportRecord{
 		AuditJobID:  auditJobID,
 		StorageKey:  key,
 		PublicSlug:  slug,
-		Badge:       badgeFrom(report, now),
+		Badge:       badgeFrom(report, handle, now),
 		SizeBytes:   int64(len(pdf)),
 		Checksum:    hex.EncodeToString(sum[:]),
 		GeneratedAt: now,
@@ -386,12 +429,43 @@ func (s *Service) PublicBadge(ctx context.Context, slug string) (render.PublicBa
 	if !found {
 		return render.PublicBadge{}, errs.New(errs.KindNotFound, "report.badge_not_found", "no published report with that link")
 	}
+	// The badge resolved, so this read is a genuine external open. Count it against
+	// the durable slug (stable across the slug and the /@handle alias) as non-owner:
+	// the public read carries no proven caller identity.
+	s.recordOpen(ctx, slug)
+	return s.projectBadge(rec)
+}
 
+// PublicBadgeByHandle serves the same unauthenticated badge projection as
+// PublicBadge, resolved by the creator's public Instagram handle (the /@handle
+// alias) rather than by opaque slug. It returns the newest LIVE report for the
+// handle; an unknown or fully-revoked/expired handle is a not-found, never an
+// empty badge. Like the slug read, a successful resolve is counted as a non-owner
+// external open — the metric the acquisition funnel exists to move.
+func (s *Service) PublicBadgeByHandle(ctx context.Context, handle string) (render.PublicBadge, error) {
+	handle = strings.TrimSpace(handle)
+	if handle == "" {
+		return render.PublicBadge{}, errs.New(errs.KindInvalid, "report.handle_required", "a handle is required")
+	}
+	rec, found, err := s.repo.GetByHandle(ctx, handle)
+	if err != nil {
+		return render.PublicBadge{}, err
+	}
+	if !found {
+		return render.PublicBadge{}, errs.New(errs.KindNotFound, "report.badge_not_found", "no published report for that handle")
+	}
+	s.recordOpen(ctx, handle)
+	return s.projectBadge(rec)
+}
+
+// projectBadge turns a stored snapshot into the public projection and attaches a
+// fresh presigned link to the rendered PDF. No private data and no other module
+// are read; the projection is exactly the frozen snapshot plus that link.
+func (s *Service) projectBadge(rec PublishedReport) (render.PublicBadge, error) {
 	pdfURL, err := s.storage.ShareURL(rec.StorageKey, shareTTL)
 	if err != nil {
 		return render.PublicBadge{}, err
 	}
-
 	return render.PublicBadge{
 		Handle:           rec.Badge.Handle,
 		Overall:          rec.Badge.Overall,
@@ -403,6 +477,21 @@ func (s *Service) PublicBadge(ctx context.Context, slug string) (render.PublicBa
 		GeneratedAt:      rec.Badge.GeneratedAt,
 		PDFURL:           pdfURL,
 	}, nil
+}
+
+// recordOpen counts one public badge read as an external (non-owner) open. It is
+// best-effort by design: the public read is unauthenticated, so an open is
+// honestly attributed as non-owner, and a counting failure must never fail a read
+// that already served the badge. A nil recorder (analytics not wired) is a no-op.
+// ref is the durable slug or handle the badge was reached by.
+func (s *Service) recordOpen(ctx context.Context, ref string) {
+	if s.opens == nil {
+		return
+	}
+	if err := s.opens.RecordOpen(ctx, ref, false); err != nil {
+		slog.WarnContext(ctx, "a public badge was served but its open could not be recorded",
+			slog.String("ref", ref), slog.Any("error", err))
+	}
 }
 
 // requireConnectedOwner asserts the caller is the creator who owns the connected
@@ -531,16 +620,43 @@ func (s *Service) RevokeAllForUser(ctx context.Context, userID uuid.UUID) (int64
 	return s.repo.RevokeGrantsByUser(ctx, userID, time.Now().UTC())
 }
 
+// instagramHandle resolves the influencer's public Instagram handle for the badge
+// snapshot. It is best-effort: a nil handles reader (analytics/influencer not
+// wired), an unparseable id, a lookup error, or an influencer with no handle on
+// record all yield an empty handle, and the badge is then reachable only by its
+// opaque slug. It never fails the publish and never invents a handle.
+func (s *Service) instagramHandle(ctx context.Context, influencerID string) string {
+	if s.handles == nil {
+		return ""
+	}
+	id, err := uuid.Parse(influencerID)
+	if err != nil {
+		return ""
+	}
+	handle, found, err := s.handles.InstagramHandleOf(ctx, id)
+	if err != nil {
+		slog.WarnContext(ctx, "could not resolve an Instagram handle for a published badge",
+			slog.String("influencer_id", influencerID), slog.Any("error", err))
+		return ""
+	}
+	if !found {
+		return ""
+	}
+	return strings.TrimSpace(handle)
+}
+
 // badgeFrom snapshots the public-safe subset of an assembled report: the
-// headline score and its benchmark context. Only fields already present on the
-// assembled report are taken, never derived or invented; the handle is left
-// empty because the report document does not carry one.
-func badgeFrom(r render.Report, now time.Time) BadgeSnapshot {
+// headline score and its benchmark context, plus the creator's public Instagram
+// handle resolved at publish time. Only fields already present on the assembled
+// report (or the freshly-resolved handle) are taken, never derived or invented; an
+// unknown handle is frozen as the empty string, not a placeholder.
+func badgeFrom(r render.Report, handle string, now time.Time) BadgeSnapshot {
 	generated := r.FinishedAt
 	if generated == "" {
 		generated = now.Format("2006-01-02 15:04 UTC")
 	}
 	return BadgeSnapshot{
+		Handle:           handle,
 		Overall:          r.Score.Overall,
 		Authenticity:     r.Score.Authenticity,
 		Niche:            r.Score.Niche,

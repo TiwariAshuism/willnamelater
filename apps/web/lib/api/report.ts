@@ -27,3 +27,9 @@ export function publishReport(
 export function getPublicBadge(slug: string): Promise<PublicBadge> {
   return backendFetch<PublicBadge>(`/reports/${encodeURIComponent(slug)}`);
 }
+
+/** GET /handle/{handle} — the PUBLIC badge for a creator's handle (the /@handle
+ * alias). Resolves the newest live published report for that handle. Unauth. */
+export function getPublicBadgeByHandle(handle: string): Promise<PublicBadge> {
+  return backendFetch<PublicBadge>(`/handle/${encodeURIComponent(handle)}`);
+}

@@ -310,6 +310,7 @@ func (c *Connector) listMedia(ctx context.Context, token, accountID string, limi
 				URL:         m.Permalink,
 				PublishedAt: parseTime(m.Timestamp),
 				Caption:     m.Caption,
+				MediaType:   m.MediaType,
 				Likes:       m.LikeCount,
 				Comments:    m.CommentsCount,
 			})
@@ -330,13 +331,17 @@ func (c *Connector) listMedia(ctx context.Context, token, accountID string, limi
 // (reach, impressions, saved, shares). impressions maps onto Post.Views (falling
 // back to reach when impressions is absent, as some media types report only
 // reach) and shares onto Post.Shares; reach and saved are returned as
-// time-stamped MetricPoints. Posts are mutated in place.
+// time-stamped MetricPoints, as is a per-media reach ratio (reach / account
+// followers) when both are known. For video media it additionally makes a
+// SEPARATE best-effort Reels average-watch-time call, so a media type that does
+// not support that metric never costs the media its core insights. Posts are
+// mutated in place.
 //
 // A media whose insights are unavailable is skipped (errInsightsUnavailable),
 // not fatal. On a quota or rate-limit error it returns the MetricPoints gathered
 // so far alongside the error, letting the caller degrade to a partial snapshot.
-func (c *Connector) enrichInsights(ctx context.Context, token string, posts []connector.Post) ([]connector.MetricPoint, error) {
-	points := make([]connector.MetricPoint, 0, len(posts)*2)
+func (c *Connector) enrichInsights(ctx context.Context, token string, posts []connector.Post, followers int64) ([]connector.MetricPoint, error) {
+	points := make([]connector.MetricPoint, 0, len(posts)*3)
 
 	for i := range posts {
 		if err := ctx.Err(); err != nil {
@@ -365,12 +370,59 @@ func (c *Connector) enrichInsights(ctx context.Context, token string, posts []co
 		}
 		if v, ok := metrics[insightReach]; ok {
 			points = append(points, connector.MetricPoint{At: posts[i].PublishedAt, Name: metricReach, Value: float64(v)})
+			// Reach ratio: how far the post escaped the follower bubble. Emitted only
+			// when the follower base is a real positive count — never divided by an
+			// unknown or zero, which would fabricate a ratio.
+			if followers > 0 {
+				points = append(points, connector.MetricPoint{
+					At: posts[i].PublishedAt, Name: metricReachRatio, Value: float64(v) / float64(followers),
+				})
+			}
 		}
 		if v, ok := metrics[insightSaved]; ok {
 			points = append(points, connector.MetricPoint{At: posts[i].PublishedAt, Name: metricSaved, Value: float64(v)})
 		}
+
+		// Reels average watch time is valid only on video media. A separate,
+		// best-effort call isolates its failure from the core insights above.
+		if posts[i].MediaType == mediaTypeVideo {
+			watch, werr := c.reelsWatchTime(ctx, token, posts[i].ID)
+			if werr != nil {
+				if errors.Is(werr, errInsightsUnavailable) {
+					continue // not a reel after all; the core insights still stand
+				}
+				return points, werr // quota/rate-limit -> caller marks partial
+			}
+			if watch != nil {
+				points = append(points, connector.MetricPoint{
+					At: posts[i].PublishedAt, Name: metricReelsWatchTime, Value: *watch,
+				})
+			}
+		}
 	}
 	return points, nil
+}
+
+// reelsWatchTime fetches the Reels average-watch-time insight for one video
+// media, in a call separate from the core insights so its unavailability never
+// costs the media its reach/saved figures. It returns (nil, nil) when the metric
+// is simply not reported, (nil, errInsightsUnavailable) when the media does not
+// support it (skip, not fatal), and (nil, err) on a quota/rate-limit error the
+// caller degrades to partial. The value is the average watch time in seconds.
+func (c *Connector) reelsWatchTime(ctx context.Context, token, mediaID string) (*float64, error) {
+	params := url.Values{}
+	params.Set("metric", insightReelsAvgWatchTime)
+
+	var resp insightsResponse
+	if err := c.get(ctx, token, mediaID+"/insights", params, &resp); err != nil {
+		return nil, err
+	}
+	metrics := insightValues(resp)
+	if v, ok := metrics[insightReelsAvgWatchTime]; ok {
+		f := float64(v)
+		return &f, nil
+	}
+	return nil, nil
 }
 
 // insightValues reduces an insights response to a name→scalar map, skipping any

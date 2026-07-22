@@ -101,6 +101,46 @@ func (r *PostgresRepository) GetByPublicSlug(ctx context.Context, slug string) (
 	return service.PublishedReport{StorageKey: storageKey, Badge: badge, GeneratedAt: generated}, true, nil
 }
 
+// GetByHandle loads the newest LIVE published report for an Instagram handle,
+// resolved through the handle frozen into badge_jsonb at publish time (the
+// /@handle alias over the opaque slug). It applies the same liveness filter as
+// GetByPublicSlug — not revoked, not expired — so a withdrawn certificate is
+// indistinguishable from one that never existed. Only slug-bearing (actually
+// published) rows are considered, and the most recently generated one wins when a
+// handle has several. found is false, with no error, when no live report matches.
+//
+// The handle match is case-insensitive and trimmed: an Instagram handle is not
+// case-sensitive, and the alias must resolve however the visitor typed it.
+func (r *PostgresRepository) GetByHandle(ctx context.Context, handle string) (service.PublishedReport, bool, error) {
+	const q = `SELECT storage_key, COALESCE(badge_jsonb, '{}'::jsonb), COALESCE(generated_at, created_at)
+		FROM report
+		WHERE public_slug IS NOT NULL
+		  AND revoked_at IS NULL
+		  AND (expires_at IS NULL OR expires_at > now())
+		  AND lower(btrim(badge_jsonb->>'handle')) = lower(btrim($1))
+		  AND COALESCE(badge_jsonb->>'handle', '') <> ''
+		ORDER BY COALESCE(generated_at, created_at) DESC
+		LIMIT 1`
+
+	var (
+		storageKey string
+		badgeRaw   []byte
+		generated  time.Time
+	)
+	if err := r.pool.QueryRow(ctx, q, handle).Scan(&storageKey, &badgeRaw, &generated); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return service.PublishedReport{}, false, nil
+		}
+		return service.PublishedReport{}, false, errs.Wrap(err, errs.KindInternal, "report.read_failed", "could not read published report")
+	}
+
+	var badge service.BadgeSnapshot
+	if err := json.Unmarshal(badgeRaw, &badge); err != nil {
+		return service.PublishedReport{}, false, errs.Wrap(err, errs.KindInternal, "report.badge_decode", "could not decode badge snapshot")
+	}
+	return service.PublishedReport{StorageKey: storageKey, Badge: badge, GeneratedAt: generated}, true, nil
+}
+
 // ReportIDOf resolves the stored pdf report row for an audit job. found is false
 // when the audit has never been published.
 func (r *PostgresRepository) ReportIDOf(ctx context.Context, auditJobID uuid.UUID) (uuid.UUID, bool, error) {

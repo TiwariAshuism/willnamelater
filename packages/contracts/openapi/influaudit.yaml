@@ -284,6 +284,33 @@ components:
       - metric
       - threshold
       type: object
+    analytics.IngestRequest:
+      properties:
+        audit_job_id:
+          type: string
+        event_type:
+          type: string
+        influencer_id:
+          type: string
+        props:
+          format: byte
+          type: string
+        public_slug:
+          type: string
+        session_id:
+          type: string
+      required:
+      - event_type
+      type: object
+    analytics.SummaryResponse:
+      properties:
+        counts:
+          additionalProperties:
+            type: integer
+          type: object
+      required:
+      - counts
+      type: object
     audit.AuditResponse:
       properties:
         error_code:
@@ -1202,6 +1229,29 @@ components:
       - s3_key
       - version
       type: object
+    oauth.AuthSession:
+      properties:
+        access_token:
+          type: string
+        email:
+          type: string
+        expires_in:
+          type: integer
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+        user_id:
+          format: uuid
+          type: string
+      required:
+      - access_token
+      - email
+      - expires_in
+      - refresh_token
+      - token_type
+      - user_id
+      type: object
     oauth.AuthorizeResponse:
       properties:
         authorization_url:
@@ -1254,6 +1304,38 @@ components:
           type: string
       required:
       - signed_request
+      type: object
+    oauth.SignupStartRequest:
+      properties:
+        email:
+          type: string
+      required:
+      - email
+      type: object
+    report.CommentQualityBlock:
+      properties:
+        analyzed_count:
+          type: integer
+        available:
+          type: boolean
+        counts:
+          additionalProperties:
+            type: integer
+          type: object
+        low_quality_count:
+          type: integer
+        low_quality_ratio:
+          nullable: true
+          type: number
+        model_version:
+          type: string
+        sufficient_sample:
+          type: boolean
+      required:
+      - analyzed_count
+      - available
+      - low_quality_count
+      - sufficient_sample
       type: object
     report.FraudBlock:
       properties:
@@ -1343,6 +1425,8 @@ components:
       properties:
         audit_id:
           type: string
+        comment_quality:
+          $ref: "#/components/schemas/report.CommentQualityBlock"
         finished_at:
           type: string
         fraud:
@@ -1363,6 +1447,7 @@ components:
           type: string
       required:
       - audit_id
+      - comment_quality
       - fraud
       - influencer_id
       - narrative
@@ -1446,6 +1531,26 @@ components:
       - fix
       - weakness
       type: object
+    scoring.FactorPresentation:
+      properties:
+        authenticity_note:
+          type: string
+        availability:
+          type: string
+        band:
+          type: string
+        improvement_line:
+          type: string
+        key:
+          type: string
+        label:
+          type: string
+      required:
+      - availability
+      - band
+      - key
+      - label
+      type: object
     scoring.ScoreHistoryResponse:
       properties:
         influencer_id:
@@ -1479,6 +1584,8 @@ components:
       properties:
         audit_job_id:
           type: string
+        authenticity_signal:
+          $ref: "#/components/schemas/scoring.Subscore"
         benchmark_label:
           type: string
         benchmark_version:
@@ -1492,6 +1599,12 @@ components:
         created_at:
           format: date-time
           type: string
+        engagement_rate_band:
+          type: string
+        factors:
+          items:
+            $ref: "#/components/schemas/scoring.FactorPresentation"
+          type: array
         influencer_id:
           type: string
         niche:
@@ -1515,6 +1628,7 @@ components:
       - confidence
       - contributing_platforms
       - created_at
+      - factors
       - niche
       - overall
       - subscores
@@ -1535,6 +1649,21 @@ components:
       required:
       - support
       - value
+      type: object
+    waitlist.CaptureRequest:
+      properties:
+        email:
+          type: string
+        influencer_id:
+          type: string
+        props:
+          format: byte
+          type: string
+        source:
+          type: string
+      required:
+      - email
+      - source
       type: object
     whitelabel.UpdateWhitelabelRequest:
       properties:
@@ -2150,6 +2279,44 @@ paths:
               schema:
                 $ref: "#/components/schemas/campaign.CampaignResponse"
           description: OK
+  /events:
+    post:
+      operationId: Ingest
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/analytics.IngestRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /events/summary:
+    get:
+      operationId: Summary
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/analytics.SummaryResponse"
+          description: OK
+  /handle/{handle}:
+    get:
+      operationId: GetPublicBadgeByHandle
+      parameters:
+      - in: path
+        name: handle
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.PublicBadge"
+          description: OK
   /imports/instagram:
     post:
       operationId: ImportInstagram
@@ -2407,6 +2574,32 @@ paths:
       responses:
         "200":
           description: OK
+  /oauth/meta/signup/callback:
+    get:
+      operationId: CallbackSignup
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.AuthSession"
+          description: OK
+  /oauth/meta/signup/start:
+    post:
+      operationId: AuthorizeSignup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/oauth.SignupStartRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.AuthorizeResponse"
+          description: OK
   /oauth/{provider}:
     delete:
       operationId: Disconnect
@@ -2466,6 +2659,18 @@ paths:
             application/json:
               schema:
                 $ref: "#/components/schemas/report.PublicBadge"
+          description: OK
+  /waitlist:
+    post:
+      operationId: Capture
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/waitlist.CaptureRequest"
+        required: true
+      responses:
+        "200":
           description: OK
   /whitelabel:
     get:

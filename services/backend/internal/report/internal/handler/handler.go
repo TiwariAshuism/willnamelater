@@ -43,6 +43,11 @@ func (h *Handler) Register(rg gin.IRouter) {
 // reads only the frozen snapshot captured at publish time, never private data.
 func (h *Handler) RegisterPublic(rg gin.IRouter) {
 	rg.GET("/reports/:slug", h.getPublicBadge)
+	// The /@handle acquisition page. `@` is not gin-router-safe as a static
+	// segment, so the durable route is /handle/:handle; the composition root
+	// rewrites an incoming /@handle onto it. It is an alias — the opaque slug
+	// stays the durable key — and serves the same public projection.
+	rg.GET("/handle/:handle", h.getPublicBadgeByHandle)
 }
 
 // get handles GET /audits/:id/report and returns the assembled report as JSON.
@@ -112,6 +117,18 @@ func (h *Handler) share(c *gin.Context) {
 // projection for a published report.
 func (h *Handler) getPublicBadge(c *gin.Context) {
 	badge, err := h.svc.PublicBadge(c.Request.Context(), c.Param("slug"))
+	if err != nil {
+		httpx.RenderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, badge)
+}
+
+// getPublicBadgeByHandle handles GET /handle/:handle (the /@handle alias): the
+// same unauthenticated badge projection, resolved to the newest live report for
+// the creator's Instagram handle.
+func (h *Handler) getPublicBadgeByHandle(c *gin.Context) {
+	badge, err := h.svc.PublicBadgeByHandle(c.Request.Context(), c.Param("handle"))
 	if err != nil {
 		httpx.RenderError(c, err)
 		return

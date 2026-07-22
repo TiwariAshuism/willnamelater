@@ -36,4 +36,7 @@ type ReportAPI interface {
 
 	// GET /reports/:slug
 	GetPublicBadge(ctx context.Context, slug string) (render.PublicBadge, error)
+
+	// GET /handle/:handle
+	GetPublicBadgeByHandle(ctx context.Context, handle string) (render.PublicBadge, error)
 }

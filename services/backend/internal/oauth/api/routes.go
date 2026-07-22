@@ -23,6 +23,25 @@ type OAuthAPI interface {
 	// GET /oauth/:provider/callback
 	Callback(ctx context.Context, provider string) (model.ConnectionResponse, error)
 
+	// POST /oauth/meta/signup/start
+	//
+	// PUBLIC. Begins the anonymous OAuth-as-signup flow: a visitor with no account
+	// supplies only an email and receives the Meta consent URL. The account is
+	// created on the callback from the captured email plus the resolved Meta
+	// identity. Unauthenticated by design — there is no user yet. The handler is
+	// hand-written (query/session concerns apigen cannot express); declared here so
+	// the contract documents the route.
+	AuthorizeSignup(ctx context.Context, body model.SignupStartRequest) (model.AuthorizeResponse, error)
+
+	// GET /oauth/meta/signup/callback
+	//
+	// PUBLIC. Completes the anonymous authorization: exchanges the code, provisions
+	// the user + influencer + connection, and returns a session (access + refresh
+	// tokens) so the web can log the new account in. A Meta login with no linked
+	// Instagram Business account is rejected with a distinct, guided-fix error
+	// (oauth.instagram_business_account_required) rather than a generic failure.
+	CallbackSignup(ctx context.Context) (model.AuthSession, error)
+
 	// GET /oauth/connections
 	Connections(ctx context.Context) ([]model.ConnectionResponse, error)
 

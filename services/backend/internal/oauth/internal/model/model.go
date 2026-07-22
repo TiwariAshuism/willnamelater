@@ -39,11 +39,49 @@ type ConnectionResponse struct {
 // the flow (so a callback cannot be replayed against another account) and holds
 // the PKCE verifier that proves, at the token exchange, that this is the same
 // client that requested the code.
+//
+// A signup flow (Signup = true) has no user yet: it is begun by an anonymous
+// visitor, so UserID is the zero value and the captured Email is what the
+// callback provisions the account from. Email is the ONLY field carried across
+// the redirect for a signup, so it is validated before the state is minted and
+// never read back out of a URL.
 type StateData struct {
 	UserID       uuid.UUID `json:"user_id"`
 	Platform     string    `json:"platform"`
 	Provider     string    `json:"provider"`
 	CodeVerifier string    `json:"code_verifier"`
+	// Signup marks a state minted by the anonymous OAuth-as-signup flow. It
+	// distinguishes a signup callback from a connect callback so one flow's state
+	// can never be replayed against the other endpoint.
+	Signup bool `json:"signup,omitempty"`
+	// Email is the address captured when an anonymous visitor began signup. It is
+	// the identity the callback creates the account from. Empty for the connect
+	// flow, which already knows its user.
+	Email string `json:"email,omitempty"`
+}
+
+// AuthSession is the token bundle a completed signup hands back so the web can
+// establish a logged-in session (set cookies) for the freshly created account.
+// It mirrors the auth module's login response; the SessionIssuer port produces
+// it without this module ever importing auth.
+//
+// It carries no password, no session secret beyond the tokens the client is
+// meant to hold, and never a decrypted OAuth token — the platform credential
+// stays sealed in the database.
+type AuthSession struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	TokenType    string    `json:"token_type"`
+	ExpiresIn    int64     `json:"expires_in"`
+	UserID       uuid.UUID `json:"user_id"`
+	Email        string    `json:"email"`
+}
+
+// SignupStartRequest is the body of POST /oauth/meta/signup/start: the email an
+// anonymous visitor gives before connecting Instagram. The account is created
+// from this address plus the Meta identity resolved on the callback.
+type SignupStartRequest struct {
+	Email string `json:"email" binding:"required"`
 }
 
 // EncryptedToken is a token record ready to persist: every secret is already

@@ -122,6 +122,33 @@ type FraudInput struct {
 	RefinedScore *float64
 }
 
+// CommentQualitySummary is the ml-agnostic comment-quality result the
+// orchestrator gets from the comment classifier. It is a DISPLAY signal only: it
+// never touches the score or the fraud vector (the ML service's firewall forbids
+// it until its weight is fitted against real outcomes). Present is false when no
+// comments were available to classify. LowQualityRatio is a POINTER — nil below
+// the classifier's minimum sample, where a rate would assert a precision nobody
+// has; it is never rendered as 0%.
+type CommentQualitySummary struct {
+	Present          bool
+	AnalyzedCount    int
+	LowQualityCount  int
+	LowQualityRatio  *float64
+	SufficientSample bool
+	Counts           map[string]int
+	RateKey          string
+	ModelVersion     string
+}
+
+// CommentClassifier assigns rule-based quality buckets to the comments an audit
+// sampled and returns a display-only summary. The real implementation is the ml
+// client, adapted by app so no ml type leaks into the audit module. It may be nil
+// (the audit runs identically without it); the call is best-effort, so an
+// unavailable classifier never fails the audit — the summary is simply absent.
+type CommentClassifier interface {
+	ClassifyComments(ctx context.Context, snapshots []connector.Snapshot) (CommentQualitySummary, error)
+}
+
 // ScoreResult is the narrow score summary the orchestrator threads from the
 // scorer into the report input. The full, persisted score row is the scoring
 // module's concern (it is keyed on the audit job id the Scorer is given).

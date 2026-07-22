@@ -6,6 +6,7 @@ package repository
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/google/uuid"
@@ -267,6 +268,65 @@ func (r *PostgresRepository) UpsertFraudResult(ctx context.Context, jobID uuid.U
 		return errs.Wrap(err, errs.KindInternal, "audit.fraud_write_failed", "could not persist fraud result")
 	}
 	return nil
+}
+
+// UpsertCommentQuality writes the per-audit comment-quality summary keyed on the
+// job id, overwriting a prior run. Counts is marshalled to jsonb; a nil map
+// writes SQL NULL. LowQualityRatio nil writes SQL NULL — "not enough sample to
+// state a rate", never 0.
+func (r *PostgresRepository) UpsertCommentQuality(ctx context.Context, jobID uuid.UUID, cq model.CommentQuality) error {
+	var countsJSON []byte
+	if cq.Counts != nil {
+		var err error
+		if countsJSON, err = json.Marshal(cq.Counts); err != nil {
+			return errs.Wrap(err, errs.KindInternal, "audit.comment_quality_encode", "could not encode comment counts")
+		}
+	}
+	const q = "INSERT INTO comment_quality " +
+		"(audit_job_id, present, analyzed_count, low_quality_count, low_quality_ratio, " +
+		"sufficient_sample, counts, rate_key, model_version) " +
+		"VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, $9) " +
+		"ON CONFLICT (audit_job_id) DO UPDATE SET " +
+		"present = EXCLUDED.present, analyzed_count = EXCLUDED.analyzed_count, " +
+		"low_quality_count = EXCLUDED.low_quality_count, low_quality_ratio = EXCLUDED.low_quality_ratio, " +
+		"sufficient_sample = EXCLUDED.sufficient_sample, counts = EXCLUDED.counts, " +
+		"rate_key = EXCLUDED.rate_key, model_version = EXCLUDED.model_version"
+
+	if _, err := r.pool.Exec(ctx, q,
+		jobID, cq.Present, cq.AnalyzedCount, cq.LowQualityCount, cq.LowQualityRatio,
+		cq.SufficientSample, countsJSON, cq.RateKey, cq.ModelVersion,
+	); err != nil {
+		return errs.Wrap(err, errs.KindInternal, "audit.comment_quality_write_failed", "could not persist comment quality")
+	}
+	return nil
+}
+
+// GetCommentQuality returns the stored comment-quality summary for a job. found
+// is false, with no error, when no row was written for it.
+func (r *PostgresRepository) GetCommentQuality(ctx context.Context, jobID uuid.UUID) (model.CommentQuality, bool, error) {
+	const q = "SELECT present, analyzed_count, low_quality_count, low_quality_ratio, " +
+		"sufficient_sample, counts, rate_key, model_version FROM comment_quality WHERE audit_job_id = $1"
+
+	var (
+		cq         model.CommentQuality
+		countsJSON []byte
+	)
+	err := r.pool.QueryRow(ctx, q, jobID).Scan(
+		&cq.Present, &cq.AnalyzedCount, &cq.LowQualityCount, &cq.LowQualityRatio,
+		&cq.SufficientSample, &countsJSON, &cq.RateKey, &cq.ModelVersion,
+	)
+	if err != nil {
+		if notFound(err) {
+			return model.CommentQuality{}, false, nil
+		}
+		return model.CommentQuality{}, false, errs.Wrap(err, errs.KindInternal, "audit.comment_quality_read_failed", "could not load comment quality")
+	}
+	if len(countsJSON) > 0 {
+		if err := json.Unmarshal(countsJSON, &cq.Counts); err != nil {
+			return model.CommentQuality{}, false, errs.Wrap(err, errs.KindInternal, "audit.comment_quality_decode", "could not decode comment counts")
+		}
+	}
+	return cq, true, nil
 }
 
 // GetFraudResult returns the stored fraud estimate for a job. found is false,

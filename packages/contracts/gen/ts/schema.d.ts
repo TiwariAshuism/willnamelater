@@ -532,6 +532,54 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/events": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["Ingest"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/events/summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["Summary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/handle/{handle}": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetPublicBadgeByHandle"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/imports/instagram": {
         parameters: {
             query?: never;
@@ -740,6 +788,38 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/oauth/meta/signup/callback": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["CallbackSignup"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/oauth/meta/signup/start": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["AuthorizeSignup"];
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/oauth/{provider}": {
         parameters: {
             query?: never;
@@ -798,6 +878,22 @@ export interface paths {
         get: operations["GetPublicBadge"];
         put?: never;
         post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
+    "/waitlist": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get?: never;
+        put?: never;
+        post: operations["Capture"];
         delete?: never;
         options?: never;
         head?: never;
@@ -928,6 +1024,20 @@ export interface components {
             influencer_id: string;
             metric: string;
             threshold: number;
+        };
+        "analytics.IngestRequest": {
+            audit_job_id?: string;
+            event_type: string;
+            influencer_id?: string;
+            /** Format: byte */
+            props?: string;
+            public_slug?: string;
+            session_id?: string;
+        };
+        "analytics.SummaryResponse": {
+            counts: {
+                [key: string]: number;
+            };
         };
         "audit.AuditResponse": {
             error_code?: string;
@@ -1278,6 +1388,15 @@ export interface components {
             s3_key: string;
             version: string;
         };
+        "oauth.AuthSession": {
+            access_token: string;
+            email: string;
+            expires_in: number;
+            refresh_token: string;
+            token_type: string;
+            /** Format: uuid */
+            user_id: string;
+        };
         "oauth.AuthorizeResponse": {
             authorization_url: string;
             state: string;
@@ -1298,6 +1417,20 @@ export interface components {
         };
         "oauth.SignedRequest": {
             signed_request: string;
+        };
+        "oauth.SignupStartRequest": {
+            email: string;
+        };
+        "report.CommentQualityBlock": {
+            analyzed_count: number;
+            available: boolean;
+            counts?: {
+                [key: string]: number;
+            };
+            low_quality_count: number;
+            low_quality_ratio?: number | null;
+            model_version?: string;
+            sufficient_sample: boolean;
         };
         "report.FraudBlock": {
             available: boolean;
@@ -1333,6 +1466,7 @@ export interface components {
         };
         "report.Report": {
             audit_id: string;
+            comment_quality: components["schemas"]["report.CommentQualityBlock"];
             finished_at?: string;
             fraud: components["schemas"]["report.FraudBlock"];
             influencer_id: string;
@@ -1371,6 +1505,14 @@ export interface components {
             fix: string;
             weakness: string;
         };
+        "scoring.FactorPresentation": {
+            authenticity_note?: string;
+            availability: string;
+            band: string;
+            improvement_line?: string;
+            key: string;
+            label: string;
+        };
         "scoring.ScoreHistoryResponse": {
             influencer_id: string;
             points: components["schemas"]["scoring.ScorePoint"][];
@@ -1384,12 +1526,15 @@ export interface components {
         };
         "scoring.ScoreResponse": {
             audit_job_id: string;
+            authenticity_signal?: components["schemas"]["scoring.Subscore"];
             benchmark_label: string;
             benchmark_version: number;
             confidence: number;
             contributing_platforms: string[];
             /** Format: date-time */
             created_at: string;
+            engagement_rate_band?: string;
+            factors: components["schemas"]["scoring.FactorPresentation"][];
             influencer_id?: string;
             niche: string;
             overall: number;
@@ -1405,6 +1550,13 @@ export interface components {
             support: number;
             support_kind?: string;
             value: number;
+        };
+        "waitlist.CaptureRequest": {
+            email: string;
+            influencer_id?: string;
+            /** Format: byte */
+            props?: string;
+            source: string;
         };
         "whitelabel.UpdateWhitelabelRequest": {
             brand_name: string;
@@ -2301,6 +2453,70 @@ export interface operations {
             };
         };
     };
+    Ingest: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["analytics.IngestRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
+            };
+        };
+    };
+    Summary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["analytics.SummaryResponse"];
+                };
+            };
+        };
+    };
+    GetPublicBadgeByHandle: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                handle: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["report.PublicBadge"];
+                };
+            };
+        };
+    };
     ImportInstagram: {
         parameters: {
             query?: never;
@@ -2654,6 +2870,50 @@ export interface operations {
             };
         };
     };
+    CallbackSignup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["oauth.AuthSession"];
+                };
+            };
+        };
+    };
+    AuthorizeSignup: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["oauth.SignupStartRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["oauth.AuthorizeResponse"];
+                };
+            };
+        };
+    };
     Disconnect: {
         parameters: {
             query?: never;
@@ -2737,6 +2997,28 @@ export interface operations {
                 content: {
                     "application/json": components["schemas"]["report.PublicBadge"];
                 };
+            };
+        };
+    };
+    Capture: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        requestBody: {
+            content: {
+                "application/json": components["schemas"]["waitlist.CaptureRequest"];
+            };
+        };
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content?: never;
             };
         };
     };

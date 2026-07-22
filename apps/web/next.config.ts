@@ -24,6 +24,13 @@ const nextConfig: NextConfig = {
   // have. Do not introduce a build-time public env var without understanding that
   // it welds the image to the environment it was built for.
   output: "standalone",
+
+  // The public handle page is served at the pretty URL creatortrust.com/@handle
+  // (PRD §5). Rewrite it onto the real route so the "@" stays in the address bar
+  // while /handle/[handle] does the rendering.
+  async rewrites() {
+    return [{ source: "/@:handle", destination: "/handle/:handle" }];
+  },
 };
 
 export default nextConfig;

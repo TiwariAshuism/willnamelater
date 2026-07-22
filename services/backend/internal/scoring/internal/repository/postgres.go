@@ -32,13 +32,14 @@ func New(pool *db.Pool) *PostgresRepository {
 var _ Repository = (*PostgresRepository)(nil)
 
 // weightsJSON is the wire shape of the scoring_weights.weights column: a
-// component-keyed object read back into an engine.Weights.
+// factor-keyed object read back into an engine.Weights. The keys are the v2
+// hireability factors; a v1 (influence) weight row decodes to all-zero here and
+// is never active after migration 000030.
 type weightsJSON struct {
-	Reach             float64 `json:"reach"`
-	EngagementQuality float64 `json:"engagement_quality"`
-	Authenticity      float64 `json:"authenticity"`
-	Consistency       float64 `json:"consistency"`
-	ContentQuality    float64 `json:"content_quality"`
+	EngagementAuthenticity float64 `json:"engagement_authenticity"`
+	AudienceQuality        float64 `json:"audience_quality"`
+	ConsistencyReliability float64 `json:"consistency_reliability"`
+	BrandFitClarity        float64 `json:"brand_fit_clarity"`
 }
 
 // ActiveWeights reads the active weight set for a (niche, tier) cell.
@@ -61,12 +62,11 @@ func (r *PostgresRepository) ActiveWeights(ctx context.Context, niche, tier stri
 		return engine.Weights{}, false, errs.Wrap(err, errs.KindInternal, "scoring.decode_weights", "could not decode scoring weights")
 	}
 	return engine.Weights{
-		Reach:             wj.Reach,
-		EngagementQuality: wj.EngagementQuality,
-		Authenticity:      wj.Authenticity,
-		Consistency:       wj.Consistency,
-		ContentQuality:    wj.ContentQuality,
-		Version:           version,
+		EngagementAuthenticity: wj.EngagementAuthenticity,
+		AudienceQuality:        wj.AudienceQuality,
+		ConsistencyReliability: wj.ConsistencyReliability,
+		BrandFitClarity:        wj.BrandFitClarity,
+		Version:                version,
 	}, true, nil
 }
 
@@ -104,22 +104,22 @@ func (r *PostgresRepository) UpsertScore(ctx context.Context, row model.ScoreRow
 	}
 
 	const q = `INSERT INTO score
-		(audit_job_id, influencer_id, overall, authenticity, engagement, audience_quality,
-		 content_quality, weights_version, benchmark_version, contributing_platforms, breakdown,
+		(audit_job_id, influencer_id, overall, engagement_authenticity, audience_quality,
+		 consistency, brand_fit, weights_version, benchmark_version, contributing_platforms, breakdown,
 		 verification_tier)
 		VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10::platform[], $11::jsonb, $12)
 		ON CONFLICT (audit_job_id) DO UPDATE SET
-			influencer_id          = EXCLUDED.influencer_id,
-			overall                = EXCLUDED.overall,
-			authenticity           = EXCLUDED.authenticity,
-			engagement             = EXCLUDED.engagement,
-			audience_quality       = EXCLUDED.audience_quality,
-			content_quality        = EXCLUDED.content_quality,
-			weights_version        = EXCLUDED.weights_version,
-			benchmark_version      = EXCLUDED.benchmark_version,
-			contributing_platforms = EXCLUDED.contributing_platforms,
-			breakdown              = EXCLUDED.breakdown,
-			verification_tier      = EXCLUDED.verification_tier`
+			influencer_id           = EXCLUDED.influencer_id,
+			overall                 = EXCLUDED.overall,
+			engagement_authenticity = EXCLUDED.engagement_authenticity,
+			audience_quality        = EXCLUDED.audience_quality,
+			consistency             = EXCLUDED.consistency,
+			brand_fit               = EXCLUDED.brand_fit,
+			weights_version         = EXCLUDED.weights_version,
+			benchmark_version       = EXCLUDED.benchmark_version,
+			contributing_platforms  = EXCLUDED.contributing_platforms,
+			breakdown               = EXCLUDED.breakdown,
+			verification_tier       = EXCLUDED.verification_tier`
 
 	platforms := row.ContributingPlatforms
 	if platforms == nil {
@@ -130,8 +130,8 @@ func (r *PostgresRepository) UpsertScore(ctx context.Context, row model.ScoreRow
 		tier = contract.VerificationUnverified
 	}
 	if _, err := r.pool.Exec(ctx, q,
-		row.AuditJobID, row.InfluencerID, row.Overall, row.Authenticity, row.Engagement,
-		row.AudienceQuality, row.ContentQuality, row.WeightsVersion, row.BenchmarkVersion,
+		row.AuditJobID, row.InfluencerID, row.Overall, row.EngagementAuthenticity,
+		row.AudienceQuality, row.Consistency, row.BrandFit, row.WeightsVersion, row.BenchmarkVersion,
 		platforms, breakdown, tier,
 	); err != nil {
 		return errs.Wrap(err, errs.KindUnavailable, "scoring.upsert_score", "could not persist score")
@@ -212,11 +212,10 @@ func scanScore(row scanRow) (model.ScoreRow, error) {
 // InsertWeightsIfAbsent seeds a weight set, doing nothing if it already exists.
 func (r *PostgresRepository) InsertWeightsIfAbsent(ctx context.Context, niche, tier string, w engine.Weights, active bool) error {
 	payload, err := json.Marshal(weightsJSON{
-		Reach:             w.Reach,
-		EngagementQuality: w.EngagementQuality,
-		Authenticity:      w.Authenticity,
-		Consistency:       w.Consistency,
-		ContentQuality:    w.ContentQuality,
+		EngagementAuthenticity: w.EngagementAuthenticity,
+		AudienceQuality:        w.AudienceQuality,
+		ConsistencyReliability: w.ConsistencyReliability,
+		BrandFitClarity:        w.BrandFitClarity,
 	})
 	if err != nil {
 		return errs.Wrap(err, errs.KindInternal, "scoring.encode_weights", "could not encode weights")
@@ -225,7 +224,7 @@ func (r *PostgresRepository) InsertWeightsIfAbsent(ctx context.Context, niche, t
 	const q = `INSERT INTO scoring_weights (niche, tier, version, weights, active, notes)
 	           VALUES ($1, $2, $3, $4::jsonb, $5, $6)
 	           ON CONFLICT (niche, tier, version) DO NOTHING`
-	if _, err := r.pool.Exec(ctx, q, niche, tier, w.Version, payload, active, "industry-bootstrap v1"); err != nil {
+	if _, err := r.pool.Exec(ctx, q, niche, tier, w.Version, payload, active, "creator-score 4-factor v2"); err != nil {
 		return errs.Wrap(err, errs.KindUnavailable, "scoring.seed_weights", "could not seed scoring weights")
 	}
 	return nil

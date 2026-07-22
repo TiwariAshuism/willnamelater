@@ -3,7 +3,7 @@ import { notFound } from "next/navigation";
 import { requireToken } from "@/lib/auth";
 import { getAudit } from "@/lib/api/audits";
 import { getReport } from "@/lib/api/report";
-import { getScoreHistory } from "@/lib/api/scoring";
+import { getScoreHistory, getLatestScore } from "@/lib/api/scoring";
 import { ApiError } from "@/lib/api/http";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { AuditStatusBadge } from "@/components/audits/AuditStatusBadge";
@@ -12,7 +12,10 @@ import { ScoreTrendChart } from "@/components/audits/ScoreTrendChart";
 import { ReportView } from "@/components/audits/ReportView";
 import { DownloadPdfButton } from "@/components/audits/DownloadPdfButton";
 import { ShareReport } from "@/components/audits/ShareReport";
-import type { Report, ScorePoint } from "@influaudit/contracts";
+import { FactorCards } from "@/components/funnel/FactorCards";
+import { MediaKitCta } from "@/components/funnel/MediaKitCta";
+import { TrackView } from "@/components/funnel/TrackView";
+import type { Report, ScorePoint, ScoreResponse } from "@influaudit/contracts";
 
 const PENDING = new Set(["queued", "running"]);
 const HAS_RESULT = new Set(["partial", "succeeded"]);
@@ -37,18 +40,23 @@ export default async function AuditDetailPage({
   // best-effort so a still-running or failed audit renders without crashing.
   let report: Report | null = null;
   let history: ScorePoint[] = [];
+  let score: ScoreResponse | null = null;
   if (resultReady) {
     const influencerId = audit.influencer_id;
-    const [reportResult, historyResult] = await Promise.allSettled([
+    const [reportResult, historyResult, scoreResult] = await Promise.allSettled([
       getReport(id, token),
       influencerId
         ? getScoreHistory(influencerId, token)
+        : Promise.reject(new Error("no influencer id")),
+      influencerId
+        ? getLatestScore(influencerId, token)
         : Promise.reject(new Error("no influencer id")),
     ]);
     if (reportResult.status === "fulfilled") report = reportResult.value;
     if (historyResult.status === "fulfilled") {
       history = historyResult.value.points ?? [];
     }
+    if (scoreResult.status === "fulfilled") score = scoreResult.value;
   }
 
   return (
@@ -110,6 +118,31 @@ export default async function AuditDetailPage({
         </Card>
       )}
 
+      {/* Per-factor breakdown with plain-language improvement lines (PRD §8). */}
+      {score && score.factors && score.factors.length > 0 && (
+        <Card>
+          <TrackView
+            event="score_shown"
+            extras={{
+              influencer_id: audit.influencer_id,
+              audit_job_id: audit.id,
+            }}
+          />
+          <CardTitle className="mb-1">Your four factors</CardTitle>
+          <p className="mb-4 text-sm text-[var(--muted)]">
+            How brand-ready you are, factor by factor. Bands are relative to your
+            follower tier and are directional in v1.
+            {score.engagement_rate_band &&
+              score.engagement_rate_band !== "not_assessed" &&
+              ` Engagement rate: ${score.engagement_rate_band.replace(
+                /_/g,
+                " ",
+              )}.`}
+          </p>
+          <FactorCards factors={score.factors} />
+        </Card>
+      )}
+
       {/* Full report */}
       {report && <ReportView report={report} />}
 
@@ -124,6 +157,9 @@ export default async function AuditDetailPage({
           <ShareReport auditId={audit.id} />
         </Card>
       )}
+
+      {/* Phase-2 seam: measure media-kit demand (story F1/F3). */}
+      {report && report.score?.available && <MediaKitCta />}
 
       {isPending && (
         <p className="text-sm text-[var(--ink-secondary)]">

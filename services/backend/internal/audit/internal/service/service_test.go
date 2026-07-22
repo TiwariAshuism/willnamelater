@@ -25,6 +25,7 @@ type harness struct {
 	reporter    *fakeReporter
 	connectors  fakeConnectors
 	connections *fakeConnections
+	classifier  *fakeClassifier
 	caller      uuid.UUID
 }
 
@@ -38,9 +39,10 @@ func newHarness(conns []port.Connection, registered map[connector.Platform]conne
 	reporter := &fakeReporter{}
 	connectors := fakeConnectors{byPlatform: registered}
 	connections := &fakeConnections{conns: conns}
+	classifier := &fakeClassifier{}
 	caller := uuid.New()
 
-	svc := New(repo, enqueuer, quota, ingester, scorer, fraud, reporter, connectors, connections, fakeCaller{id: caller}, nil)
+	svc := New(repo, enqueuer, quota, ingester, scorer, fraud, reporter, connectors, connections, fakeCaller{id: caller}, nil, classifier)
 
 	return &harness{
 		svc:         svc,
@@ -53,6 +55,7 @@ func newHarness(conns []port.Connection, registered map[connector.Platform]conne
 		reporter:    reporter,
 		connectors:  connectors,
 		connections: connections,
+		classifier:  classifier,
 		caller:      caller,
 	}
 }

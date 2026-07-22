@@ -4,6 +4,7 @@ import (
 	"context"
 	"net/http"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -185,6 +186,51 @@ func maxPtrI(current *int, observed int) *int {
 		return &observed
 	}
 	return current
+}
+
+// --- CommentClassifier: ml.Client -> port.CommentClassifier --------------
+
+// auditCommentClassifier adapts the ML comment classifier onto the audit module's
+// CommentClassifier port. It flattens every sampled comment across the snapshots
+// into one classify request and collapses the response into the port's summary.
+//
+// The signal is DISPLAY ONLY: this adapter never feeds the fraud pass or the score
+// (the ML service's firewall forbids the classifier's output from entering any
+// weighted number until its weight is fitted against real outcomes). With no
+// comments it returns Present:false; a classifier error is returned to the caller,
+// which treats classification as best-effort and never fails the audit on it.
+type auditCommentClassifier struct{ c *ml.Client }
+
+func (a auditCommentClassifier) ClassifyComments(ctx context.Context, snapshots []connector.Snapshot) (port.CommentQualitySummary, error) {
+	var items []ml.CommentItem
+	for _, snap := range snapshots {
+		for i, cm := range snap.Comments {
+			if strings.TrimSpace(cm.Text) == "" {
+				continue
+			}
+			items = append(items, ml.CommentItem{
+				ID:   string(snap.Platform) + ":" + cm.PostID + ":" + strconv.Itoa(i),
+				Text: cm.Text,
+			})
+		}
+	}
+	if len(items) == 0 {
+		return port.CommentQualitySummary{Present: false}, nil
+	}
+	resp, err := a.c.ClassifyComments(ctx, ml.CommentsClassifyRequest{Comments: items})
+	if err != nil {
+		return port.CommentQualitySummary{}, err
+	}
+	return port.CommentQualitySummary{
+		Present:          true,
+		AnalyzedCount:    resp.AnalyzedCount,
+		LowQualityCount:  resp.LowQualityCount,
+		LowQualityRatio:  resp.LowQualityRatio,
+		SufficientSample: resp.SufficientSample,
+		Counts:           resp.Counts,
+		RateKey:          resp.RateKey,
+		ModelVersion:     resp.ModelVersion,
+	}, nil
 }
 
 // --- Reporter: llm.Module (+ scoring read) -> port.Reporter --------------
@@ -465,6 +511,32 @@ func (r reportFraudReader) FraudOf(ctx context.Context, auditJobID uuid.UUID) (r
 		CliqueMembershipFraction: fr.CliqueMembershipFraction,
 		Confidence:               fr.Confidence,
 		ModelVersion:             fr.ModelVersion,
+	}, nil
+}
+
+// reportCommentQualityReader adapts audit.Module.CommentQualityOf onto the report
+// module's CommentQualityReader port. A job with no stored row is disclosed as
+// Found=false, not an error, so the report still renders and simply omits the
+// comment-quality pill.
+type reportCommentQualityReader struct{ a *audit.Module }
+
+func (r reportCommentQualityReader) CommentQualityOf(ctx context.Context, auditJobID uuid.UUID) (reportport.CommentQualityView, error) {
+	cq, found, err := r.a.CommentQualityOf(ctx, auditJobID)
+	if err != nil {
+		return reportport.CommentQualityView{}, err
+	}
+	if !found {
+		return reportport.CommentQualityView{Found: false}, nil
+	}
+	return reportport.CommentQualityView{
+		Found:            true,
+		Present:          cq.Present,
+		AnalyzedCount:    cq.AnalyzedCount,
+		LowQualityCount:  cq.LowQualityCount,
+		LowQualityRatio:  cq.LowQualityRatio,
+		SufficientSample: cq.SufficientSample,
+		Counts:           cq.Counts,
+		ModelVersion:     cq.ModelVersion,
 	}, nil
 }
 

@@ -72,12 +72,13 @@ func (c *Client) Exchange(ctx context.Context, req service.ExchangeRequest) (ser
 	}
 
 	return service.ExchangeResult{
-		AccessToken:       tok.AccessToken,
-		RefreshToken:      tok.RefreshToken,
-		Expiry:            expiry,
-		Scopes:            strings.Fields(tok.Scope),
-		ProviderAccountID: acct.AccountID,
-		ProviderUserID:    acct.UserID,
+		AccessToken:           tok.AccessToken,
+		RefreshToken:          tok.RefreshToken,
+		Expiry:                expiry,
+		Scopes:                strings.Fields(tok.Scope),
+		ProviderAccountID:     acct.AccountID,
+		ProviderAccountHandle: acct.Handle,
+		ProviderUserID:        acct.UserID,
 	}, nil
 }
 
@@ -119,12 +120,14 @@ func (c *Client) postToken(ctx context.Context, req service.ExchangeRequest) (to
 }
 
 // account is what one account-info call yields: the platform account we audit,
-// and — where the provider has one — the app-scoped user id that identifies the
-// person to the provider. Meta's deauthorize and data-deletion callbacks name a
-// user by that app-scoped id, so it must be captured at connect time or those
-// callbacks arrive unmappable.
+// its human-readable handle (where the provider returns one), and — where the
+// provider has one — the app-scoped user id that identifies the person to the
+// provider. Meta's deauthorize and data-deletion callbacks name a user by that
+// app-scoped id, so it must be captured at connect time or those callbacks arrive
+// unmappable.
 type account struct {
 	AccountID string
+	Handle    string
 	UserID    string
 }
 
@@ -188,7 +191,8 @@ func parseAccount(provider string, body []byte) (account, error) {
 			Accounts struct {
 				Data []struct {
 					IG *struct {
-						ID string `json:"id"`
+						ID       string `json:"id"`
+						Username string `json:"username"`
 					} `json:"instagram_business_account"`
 				} `json:"data"`
 			} `json:"accounts"`
@@ -198,10 +202,14 @@ func parseAccount(provider string, body []byte) (account, error) {
 		}
 		for _, p := range me.Accounts.Data {
 			if p.IG != nil && p.IG.ID != "" {
-				return account{AccountID: p.IG.ID, UserID: me.ID}, nil
+				return account{AccountID: p.IG.ID, Handle: p.IG.Username, UserID: me.ID}, nil
 			}
 		}
-		return account{}, fmt.Errorf("no instagram business account is linked to this login")
+		// A login with no linked IG business account has no usable id. This is a
+		// distinct, recoverable condition (the person can link one), surfaced as a
+		// sentinel so the service can map it to a guided-fix error rather than a
+		// generic exchange failure. It is not a fabricated id.
+		return account{}, service.ErrNoInstagramBusinessAccount
 	default:
 		return account{}, fmt.Errorf("no account resolver for provider %q", provider)
 	}

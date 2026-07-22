@@ -63,6 +63,12 @@ type Repository interface {
 	// when no fraud row was written for it (a failed audit, or one that never
 	// reached the fraud step).
 	GetFraudResult(ctx context.Context, jobID uuid.UUID) (fr model.FraudResult, found bool, err error)
+	// UpsertCommentQuality writes the per-audit comment-quality summary keyed on
+	// the job id, overwriting a prior run.
+	UpsertCommentQuality(ctx context.Context, jobID uuid.UUID, cq model.CommentQuality) error
+	// GetCommentQuality returns the stored comment-quality summary for a job. found
+	// is false when no row was written for it.
+	GetCommentQuality(ctx context.Context, jobID uuid.UUID) (cq model.CommentQuality, found bool, err error)
 }
 
 // taskEnqueuer is the slice of *asynq.Client the submit path needs. Declaring
@@ -90,6 +96,11 @@ type Service struct {
 	// runs identically without it); when set, each completed audit is recorded
 	// best-effort as a training row.
 	features port.FeatureRecorder
+	// classifier is the optional display-only comment-quality classifier. It may be
+	// nil (the audit runs identically without it); when set, each audit's comments
+	// are classified best-effort and the summary persisted for the report. It never
+	// touches the score or the fraud vector (the ML firewall).
+	classifier port.CommentClassifier
 }
 
 var _ AuditService = (*Service)(nil)
@@ -109,6 +120,7 @@ func New(
 	connections port.Connections,
 	caller port.CallerID,
 	features port.FeatureRecorder,
+	classifier port.CommentClassifier,
 ) *Service {
 	return &Service{
 		repo:        repo,
@@ -122,6 +134,7 @@ func New(
 		connections: connections,
 		caller:      caller,
 		features:    features,
+		classifier:  classifier,
 	}
 }
 
@@ -234,6 +247,13 @@ func (s *Service) ListAudits(ctx context.Context) ([]model.AuditResponse, error)
 // this read carries no identity check of its own.
 func (s *Service) FraudResultOf(ctx context.Context, jobID uuid.UUID) (model.FraudResult, bool, error) {
 	return s.repo.GetFraudResult(ctx, jobID)
+}
+
+// CommentQualityOf returns the stored per-audit comment-quality summary. found is
+// false when none was recorded. Like FraudResultOf it is not caller-scoped: the
+// report module authorizes the audit before reading it.
+func (s *Service) CommentQualityOf(ctx context.Context, jobID uuid.UUID) (model.CommentQuality, bool, error) {
+	return s.repo.GetCommentQuality(ctx, jobID)
 }
 
 // respondWithResults loads a job's platform results and projects the full

@@ -81,6 +81,11 @@ type ExchangeResult struct {
 	Expiry            time.Time
 	Scopes            []string
 	ProviderAccountID string
+	// ProviderAccountHandle is the human-readable handle of the connected platform
+	// account (the Instagram username), when the provider returns one on the same
+	// account-info call that resolves ProviderAccountID. It is what the signup flow
+	// records as the influencer's handle. Empty when the provider exposes no handle.
+	ProviderAccountHandle string
 	// ProviderUserID is the provider's app-scoped id for the PERSON who connected,
 	// as distinct from ProviderAccountID (the platform account we audit). Meta's
 	// deauthorize and data-deletion callbacks name a user by this id, so capturing

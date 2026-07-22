@@ -49,6 +49,15 @@ func (f fakeFraud) FraudOf(context.Context, uuid.UUID) (port.FraudView, error) {
 	return f.view, f.err
 }
 
+type fakeCommentQuality struct {
+	view port.CommentQualityView
+	err  error
+}
+
+func (f fakeCommentQuality) CommentQualityOf(context.Context, uuid.UUID) (port.CommentQualityView, error) {
+	return f.view, f.err
+}
+
 type fakePDF struct {
 	gotHTML []byte
 	out     []byte
@@ -72,6 +81,12 @@ type fakeRepo struct {
 	revokedAudit uuid.UUID
 	revokedUser  uuid.UUID
 	granted      ShareGrant
+
+	// byHandle backs GetByHandle independently of the slug read, so a handle test
+	// can resolve (or fail to resolve) the alias on its own terms.
+	byHandle      PublishedReport
+	byHandleFound bool
+	byHandleErr   error
 }
 
 func (f *fakeRepo) UpsertReport(_ context.Context, rec ReportRecord) (string, error) {
@@ -87,6 +102,10 @@ func (f *fakeRepo) UpsertReport(_ context.Context, rec ReportRecord) (string, er
 
 func (f *fakeRepo) GetByPublicSlug(_ context.Context, _ string) (PublishedReport, bool, error) {
 	return f.get, f.found, f.getErr
+}
+
+func (f *fakeRepo) GetByHandle(_ context.Context, _ string) (PublishedReport, bool, error) {
+	return f.byHandle, f.byHandleFound, f.byHandleErr
 }
 
 func (f *fakeRepo) ReportIDOf(_ context.Context, _ uuid.UUID) (uuid.UUID, bool, error) {
@@ -127,6 +146,38 @@ type fakeOwner struct {
 
 func (f fakeOwner) ConnectedOwnerOf(context.Context, uuid.UUID) (port.ConnectedOwner, error) {
 	return port.ConnectedOwner{OwnerUserID: f.owner}, f.err
+}
+
+// fakeHandle resolves an influencer's Instagram handle for the badge snapshot.
+type fakeHandle struct {
+	handle string
+	found  bool
+	err    error
+}
+
+func (f fakeHandle) InstagramHandleOf(context.Context, uuid.UUID) (string, bool, error) {
+	return f.handle, f.found, f.err
+}
+
+// openCall records one RecordOpen invocation for assertion.
+type openCall struct {
+	ref   string
+	owner bool
+}
+
+// fakeOpenRecorder records public-badge opens, and can fail on demand — a
+// counting failure must never fail the public read that already served the badge.
+type fakeOpenRecorder struct {
+	opens []openCall
+	err   error
+}
+
+func (f *fakeOpenRecorder) RecordOpen(_ context.Context, slug string, owner bool) error {
+	if f.err != nil {
+		return f.err
+	}
+	f.opens = append(f.opens, openCall{ref: slug, owner: owner})
+	return nil
 }
 
 type fakeStorage struct {
@@ -182,8 +233,10 @@ func ownedByCreator() fakeOwner {
 // newSvc builds a Service with default (no-op) repo and storage fakes, for the
 // Assemble/PDF tests that do not exercise the publish path.
 func newSvc(audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer) *Service {
-	return New(audit, score, narrative, fraud, pdf, &fakeRepo{}, &fakeStorage{},
-		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil)
+	// commentQuality reader is nil here (the display pill is optional and nil-safe);
+	// TestAssembleIncludesCommentQuality exercises the populated path directly.
+	return New(audit, score, narrative, fraud, nil, pdf, &fakeRepo{}, &fakeStorage{},
+		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil, nil, nil)
 }
 
 func fullView() port.AuditView {
@@ -354,14 +407,21 @@ func TestPublishStoresPDFAndPersistsBadge(t *testing.T) {
 		fakeScore{view: port.ScoreView{Present: true, Overall: 82, Authenticity: ptr(74.0), Niche: "beauty", Tier: "micro", BenchmarkLabel: "industry-bootstrap v1"}},
 		fakeNarrative{view: port.Narrative{Present: true, Summary: "s"}},
 		fakeFraud{},
+		nil, // commentQuality reader unused by the publish path
 		&fakePDF{out: []byte("%PDF-1.4 body")},
 		repo, store,
 		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil,
+		fakeHandle{handle: "  creatorgram  ", found: true}, nil,
 	)
 
 	res, err := svc.Publish(context.Background(), audID().String())
 	if err != nil {
 		t.Fatalf("Publish: %v", err)
+	}
+	// The creator's Instagram handle is frozen into the badge (trimmed) so the
+	// /@handle alias resolves later — it must never be left empty when known.
+	if repo.upserted.Badge.Handle != "creatorgram" {
+		t.Fatalf("handle not frozen into badge: %q", repo.upserted.Badge.Handle)
 	}
 	// The PDF was uploaded under the audit-scoped key with the pdf content type.
 	if store.putKey != "reports/"+audID().String()+".pdf" || store.putType != "application/pdf" || string(store.putData) != "%PDF-1.4 body" {
@@ -385,12 +445,62 @@ func TestPublishRejectsScorelessAudit(t *testing.T) {
 		fakeScore{view: port.ScoreView{Present: false}},
 		fakeNarrative{view: port.Narrative{Present: false}},
 		fakeFraud{},
+		nil,
 		&fakePDF{out: []byte("x")},
 		&fakeRepo{}, &fakeStorage{},
-		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil,
+		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil, nil, nil,
 	)
 	if _, err := svc.Publish(context.Background(), audID().String()); errs.KindOf(err) != errs.KindInvalid {
 		t.Fatalf("want invalid publishing a scoreless audit, got %v", err)
+	}
+}
+
+// TestAssembleIncludesCommentQuality covers the display pill: a populated,
+// sufficient-sample summary renders with its ratio; an insufficient-sample one is
+// present but carries a nil ratio so the render shows counts, never a fabricated
+// 0%. It is never a score input.
+func TestAssembleIncludesCommentQuality(t *testing.T) {
+	ratio := 0.22
+	svc := New(
+		fakeAudit{view: fullView()},
+		fakeScore{view: port.ScoreView{Present: true, Overall: 80}},
+		fakeNarrative{},
+		fakeFraud{},
+		fakeCommentQuality{view: port.CommentQualityView{
+			Found: true, Present: true, AnalyzedCount: 120, LowQualityCount: 26,
+			LowQualityRatio: &ratio, SufficientSample: true, ModelVersion: "heuristic-comments-v1",
+		}},
+		&fakePDF{}, &fakeRepo{}, &fakeStorage{},
+		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil, nil, nil,
+	)
+	rep, err := svc.Assemble(context.Background(), audID().String())
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if !rep.CommentQuality.Available || rep.CommentQuality.AnalyzedCount != 120 ||
+		rep.CommentQuality.LowQualityRatio == nil || *rep.CommentQuality.LowQualityRatio != 0.22 {
+		t.Fatalf("comment-quality pill wrong: %+v", rep.CommentQuality)
+	}
+
+	// Insufficient sample: present, but no rate — counts stand, never a fabricated 0%.
+	svc2 := New(
+		fakeAudit{view: fullView()},
+		fakeScore{view: port.ScoreView{Present: true, Overall: 80}},
+		fakeNarrative{},
+		fakeFraud{},
+		fakeCommentQuality{view: port.CommentQualityView{
+			Found: true, Present: true, AnalyzedCount: 8, LowQualityCount: 3,
+			LowQualityRatio: nil, SufficientSample: false,
+		}},
+		&fakePDF{}, &fakeRepo{}, &fakeStorage{},
+		fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil, nil, nil,
+	)
+	rep2, err := svc2.Assemble(context.Background(), audID().String())
+	if err != nil {
+		t.Fatalf("Assemble: %v", err)
+	}
+	if !rep2.CommentQuality.Available || rep2.CommentQuality.LowQualityRatio != nil || rep2.CommentQuality.SufficientSample {
+		t.Fatalf("insufficient-sample pill must carry counts with a nil ratio: %+v", rep2.CommentQuality)
 	}
 }
 
@@ -399,8 +509,8 @@ func TestPublicBadgeReturnsSnapshotAndShareLink(t *testing.T) {
 		StorageKey: "reports/x.pdf",
 		Badge:      BadgeSnapshot{Overall: 90, Authenticity: ptr(80.0), Niche: "fitness", Tier: "mid"},
 	}}
-	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, repo,
-		&fakeStorage{shareURL: "https://s3/x?signed"}, fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil)
+	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, nil, &fakePDF{}, repo,
+		&fakeStorage{shareURL: "https://s3/x?signed"}, fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil, nil, nil)
 
 	badge, err := svc.PublicBadge(context.Background(), "some-slug")
 	if err != nil {
@@ -421,9 +531,10 @@ func newOwnedSvc(repo *fakeRepo, caller uuid.UUID, owner fakeOwner) *Service {
 		fakeScore{view: port.ScoreView{Present: true, Overall: 80}},
 		fakeNarrative{},
 		fakeFraud{},
+		nil,
 		&fakePDF{out: []byte("%PDF")},
 		repo, &fakeStorage{},
-		fakeCaller{id: caller}, owner, nil, nil,
+		fakeCaller{id: caller}, owner, nil, nil, nil, nil,
 	)
 }
 
@@ -564,10 +675,83 @@ func TestRevokeIsOwnerOnly(t *testing.T) {
 }
 
 func TestPublicBadgeUnknownSlugIsNotFound(t *testing.T) {
-	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, &fakePDF{}, &fakeRepo{found: false},
-		&fakeStorage{}, fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil)
+	svc := New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, nil, &fakePDF{}, &fakeRepo{found: false},
+		&fakeStorage{}, fakeCaller{id: ownerID()}, ownedByCreator(), nil, nil, nil, nil)
 	if _, err := svc.PublicBadge(context.Background(), "nope"); errs.KindOf(err) != errs.KindNotFound {
 		t.Fatalf("want not-found for an unknown slug, got %v", err)
+	}
+}
+
+// --- handle alias + external-open metric ------------------------------------
+
+// badgeReadSvc builds a service whose only job is serving public badges: repo
+// resolves both the slug and the handle read, storage mints a link, and rec
+// captures every recorded open.
+func badgeReadSvc(repo *fakeRepo, rec port.OpenRecorder) *Service {
+	return New(fakeAudit{}, fakeScore{}, fakeNarrative{}, fakeFraud{}, nil, &fakePDF{}, repo,
+		&fakeStorage{shareURL: "https://s3/x?signed"}, fakeCaller{id: ownerID()}, ownedByCreator(),
+		nil, nil, nil, rec)
+}
+
+// The /@handle alias resolves to the newest live report for the handle and serves
+// the same projection as the slug read — and the open is counted as external
+// (non-owner), which is the funnel metric the product exists to move.
+func TestPublicBadgeByHandleReturnsLiveReport(t *testing.T) {
+	repo := &fakeRepo{byHandleFound: true, byHandle: PublishedReport{
+		StorageKey: "reports/x.pdf",
+		Badge:      BadgeSnapshot{Handle: "creatorgram", Overall: 88, Niche: "fitness"},
+	}}
+	rec := &fakeOpenRecorder{}
+	svc := badgeReadSvc(repo, rec)
+
+	badge, err := svc.PublicBadgeByHandle(context.Background(), "  CreatorGram  ")
+	if err != nil {
+		t.Fatalf("PublicBadgeByHandle: %v", err)
+	}
+	if badge.Overall != 88 || badge.Handle != "creatorgram" || badge.PDFURL == "" {
+		t.Fatalf("handle badge projection wrong: %+v", badge)
+	}
+	if len(rec.opens) != 1 || rec.opens[0].owner {
+		t.Fatalf("a handle read must record exactly one non-owner open, got %+v", rec.opens)
+	}
+}
+
+// An empty handle is a bad request, not a lookup; a handle with no live report is
+// a not-found — never an empty badge.
+func TestPublicBadgeByHandleRejectsEmptyAndUnknown(t *testing.T) {
+	svc := badgeReadSvc(&fakeRepo{byHandleFound: false}, &fakeOpenRecorder{})
+	if _, err := svc.PublicBadgeByHandle(context.Background(), "   "); errs.KindOf(err) != errs.KindInvalid {
+		t.Fatalf("want invalid for an empty handle, got %v", err)
+	}
+	if _, err := svc.PublicBadgeByHandle(context.Background(), "ghost"); errs.KindOf(err) != errs.KindNotFound {
+		t.Fatalf("want not-found for a handle with no live report, got %v", err)
+	}
+}
+
+// The slug read counts a non-owner external open too: the public read carries no
+// proven identity, so it is honestly attributed as external.
+func TestPublicBadgeRecordsExternalOpen(t *testing.T) {
+	repo := &fakeRepo{found: true, get: PublishedReport{StorageKey: "reports/x.pdf", Badge: BadgeSnapshot{Overall: 90}}}
+	rec := &fakeOpenRecorder{}
+	svc := badgeReadSvc(repo, rec)
+
+	if _, err := svc.PublicBadge(context.Background(), "some-slug"); err != nil {
+		t.Fatalf("PublicBadge: %v", err)
+	}
+	if len(rec.opens) != 1 || rec.opens[0].ref != "some-slug" || rec.opens[0].owner {
+		t.Fatalf("slug read must record one non-owner open keyed by slug, got %+v", rec.opens)
+	}
+}
+
+// A recorder that is down must never fail a public read that already served the
+// badge: the open metric is best-effort, the badge is not.
+func TestPublicReadSurvivesOpenRecorderFailure(t *testing.T) {
+	repo := &fakeRepo{found: true, get: PublishedReport{StorageKey: "reports/x.pdf", Badge: BadgeSnapshot{Overall: 90}}}
+	rec := &fakeOpenRecorder{err: errs.New(errs.KindUnavailable, "analytics.down", "recorder is down")}
+	svc := badgeReadSvc(repo, rec)
+
+	if _, err := svc.PublicBadge(context.Background(), "some-slug"); err != nil {
+		t.Fatalf("a public read must survive a recorder failure, got %v", err)
 	}
 }
 
@@ -605,10 +789,11 @@ func publishWith(mailer port.Mailer, rcpt port.Recipient) *Service {
 		fakeScore{view: port.ScoreView{Present: true, Overall: 82, Niche: "beauty", Tier: "micro"}},
 		fakeNarrative{view: port.Narrative{Present: true, Summary: "s"}},
 		fakeFraud{},
+		nil,
 		&fakePDF{out: []byte("%PDF-1.4 body")},
 		&fakeRepo{slug: "durable-slug"}, &fakeStorage{},
 		fakeCaller{id: ownerID()}, ownedByCreator(),
-		mailer, rcpt,
+		mailer, rcpt, nil, nil,
 	)
 }
 

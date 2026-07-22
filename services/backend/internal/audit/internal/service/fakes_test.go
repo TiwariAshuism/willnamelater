@@ -22,6 +22,7 @@ type fakeRepo struct {
 	byKey     map[string]model.Job
 	results   map[uuid.UUID]map[string]model.PlatformResult
 	fraud     map[uuid.UUID]model.FraudResult
+	comments  map[uuid.UUID]model.CommentQuality
 	statusLog map[uuid.UUID][]model.Status
 
 	createCalls int
@@ -37,6 +38,7 @@ func newFakeRepo() *fakeRepo {
 		byKey:     make(map[string]model.Job),
 		results:   make(map[uuid.UUID]map[string]model.PlatformResult),
 		fraud:     make(map[uuid.UUID]model.FraudResult),
+		comments:  make(map[uuid.UUID]model.CommentQuality),
 		statusLog: make(map[uuid.UUID][]model.Status),
 	}
 }
@@ -195,6 +197,27 @@ func (r *fakeRepo) fraudOf(id uuid.UUID) (model.FraudResult, bool) {
 	return fr, ok
 }
 
+func (r *fakeRepo) UpsertCommentQuality(_ context.Context, jobID uuid.UUID, cq model.CommentQuality) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.comments[jobID] = cq
+	return nil
+}
+
+func (r *fakeRepo) GetCommentQuality(_ context.Context, jobID uuid.UUID) (model.CommentQuality, bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cq, ok := r.comments[jobID]
+	return cq, ok, nil
+}
+
+func (r *fakeRepo) commentQualityOf(id uuid.UUID) (model.CommentQuality, bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	cq, ok := r.comments[id]
+	return cq, ok
+}
+
 func (r *fakeRepo) statusesOf(id uuid.UUID) []model.Status {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -339,6 +362,21 @@ func (f *fakeFraud) ScoreFraud(context.Context, uuid.UUID, []connector.Snapshot)
 		return f.summary, nil
 	}
 	return port.FraudSummary{Present: true, ModelVersion: "test"}, nil
+}
+
+// fakeClassifier is a port.CommentClassifier.
+type fakeClassifier struct {
+	calls   int
+	summary port.CommentQualitySummary
+	err     error
+}
+
+func (f *fakeClassifier) ClassifyComments(context.Context, []connector.Snapshot) (port.CommentQualitySummary, error) {
+	f.calls++
+	if f.err != nil {
+		return port.CommentQualitySummary{}, f.err
+	}
+	return f.summary, nil
 }
 
 // fakeReporter is a port.Reporter.

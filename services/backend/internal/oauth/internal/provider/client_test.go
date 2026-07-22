@@ -1,6 +1,7 @@
 package provider
 
 import (
+	"errors"
 	"testing"
 
 	"github.com/getnyx/influaudit/backend/internal/oauth/internal/service"
@@ -79,6 +80,31 @@ func TestParseAccountMeta(t *testing.T) {
 				t.Fatalf("app-scoped user id = %q, want %q", got.UserID, tt.wantUserID)
 			}
 		})
+	}
+}
+
+// A login with no linked IG business account must surface the distinct sentinel,
+// not a generic error, so the service can map it to the guided-fix domain error.
+func TestParseAccountMetaMissingIGReturnsSentinel(t *testing.T) {
+	_, err := parseAccount(service.ProviderMeta, []byte(`{"id":"1234567890","accounts":{"data":[{"id":"page-no-ig"}]}}`))
+	if !errors.Is(err, service.ErrNoInstagramBusinessAccount) {
+		t.Fatalf("err = %v, want ErrNoInstagramBusinessAccount", err)
+	}
+}
+
+// The Instagram username, when the account-info call returns it, is captured as
+// the handle the signup flow records for the influencer.
+func TestParseAccountMetaCapturesHandle(t *testing.T) {
+	got, err := parseAccount(service.ProviderMeta, []byte(
+		`{"id":"1234567890","accounts":{"data":[{"instagram_business_account":{"id":"17841400000000001","username":"creator.handle"},"id":"page1"}]}}`))
+	if err != nil {
+		t.Fatalf("parseAccount: %v", err)
+	}
+	if got.Handle != "creator.handle" {
+		t.Fatalf("handle = %q, want creator.handle", got.Handle)
+	}
+	if got.AccountID != "17841400000000001" {
+		t.Fatalf("account id = %q", got.AccountID)
 	}
 }
 

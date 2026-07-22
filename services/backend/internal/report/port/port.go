@@ -149,6 +149,31 @@ type FraudReader interface {
 	FraudOf(ctx context.Context, auditJobID uuid.UUID) (FraudView, error)
 }
 
+// CommentQualityView is the per-audit comment-quality summary the report presents
+// as a DISPLAY pill — never a score input (the ML firewall). Found is false when
+// no row was recorded; Present is false when a classification ran but no comments
+// were available. LowQualityRatio is nil below the classifier's minimum sample:
+// the report then shows the bucket counts with their denominator and states the
+// rate is not established, never rendering 0%. A high rate is NOT fraud (fan and
+// meme accounts earn oceans of genuine emoji), and the report must say so.
+type CommentQualityView struct {
+	Found            bool
+	Present          bool
+	AnalyzedCount    int
+	LowQualityCount  int
+	LowQualityRatio  *float64
+	SufficientSample bool
+	Counts           map[string]int
+	ModelVersion     string
+}
+
+// CommentQualityReader loads the stored comment-quality summary for an audit job.
+// The real implementation is the audit module reading its comment_quality table;
+// a job with no stored row is disclosed as Found=false rather than as an error.
+type CommentQualityReader interface {
+	CommentQualityOf(ctx context.Context, auditJobID uuid.UUID) (CommentQualityView, error)
+}
+
 // PDFRenderer turns a rendered HTML document into PDF bytes. The real
 // implementation is the platform PDF (Gotenberg) client.
 type PDFRenderer interface {
@@ -198,4 +223,32 @@ type Message struct {
 // arrangement as every other cross-module edge here.
 type Recipient interface {
 	EmailOf(ctx context.Context, userID uuid.UUID) (string, error)
+}
+
+// HandleReader resolves an influencer's public Instagram handle. The report module
+// knows the influencer only as a uuid, but the public badge is reachable by the
+// handle the creator already publishes (GET /@handle), and the badge snapshot
+// freezes that handle at publish time so the alias resolves without re-reading any
+// live account data. found is false when the influencer has no Instagram handle on
+// record — the badge is then published with an empty handle rather than a
+// fabricated one, and is reachable only by its opaque slug. The real
+// implementation is the influencer module reading influencer_handle where
+// platform = 'instagram', adapted by the composition root.
+type HandleReader interface {
+	InstagramHandleOf(ctx context.Context, influencerID uuid.UUID) (handle string, found bool, err error)
+}
+
+// OpenRecorder records that a published badge/handle page was READ. It is the seam
+// through which the report module — the reader of every public badge — feeds the
+// product's PRIMARY success metric: external share opens by people who are not the
+// creator. The report read is unauthenticated, so an open is attributed as
+// non-owner (external) unless a caller identity proves otherwise; owner is passed
+// explicitly by the caller and defaults to false.
+//
+// Recording is best-effort and must never fail a public read: a badge that renders
+// but could not be counted has still been served. The real implementation is the
+// analytics module, adapted by the composition root; a nil recorder is a no-op, so
+// the report module builds and tests without analytics wired.
+type OpenRecorder interface {
+	RecordOpen(ctx context.Context, slug string, owner bool) error
 }

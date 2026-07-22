@@ -21,13 +21,22 @@ import (
 
 	"github.com/getnyx/influaudit/backend/internal/connector"
 	"github.com/getnyx/influaudit/backend/internal/oauth/internal/handler"
+	"github.com/getnyx/influaudit/backend/internal/oauth/internal/model"
 	"github.com/getnyx/influaudit/backend/internal/oauth/internal/provider"
 	"github.com/getnyx/influaudit/backend/internal/oauth/internal/repository"
 	"github.com/getnyx/influaudit/backend/internal/oauth/internal/service"
 	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
 	"github.com/getnyx/influaudit/backend/internal/platform/db"
+	"github.com/getnyx/influaudit/backend/internal/platform/errs"
 	"github.com/getnyx/influaudit/backend/internal/platform/redis"
 )
+
+// errMisconfigured is returned when the composition root omits a signup
+// collaborator. The adapters below would otherwise wrap a nil provisioner in a
+// non-nil adapter, defeating the service's own nil check, so the raw values are
+// verified here before wrapping.
+var errMisconfigured = errs.New(errs.KindInternal, "oauth.misconfigured",
+	"oauth module is missing a required dependency")
 
 // Config is the module's public configuration. It mirrors the service's own
 // config, which lives under internal/ and is therefore unreachable from the
@@ -53,6 +62,76 @@ type Identity interface {
 // resolves them through this indirection. Production passes os.Getenv.
 type SecretLookup func(name string) string
 
+// The following are the CONSUMER-SIDE PORTS the OAuth-as-signup flow needs. They
+// are declared here, in the module's public surface, precisely so the
+// composition root can implement them by adapting the real auth and influencer
+// modules WITHOUT this module importing either — the same discipline as Identity.
+
+// UserProvisioner finds or creates a user by email and returns their id. The
+// composition root adapts the auth module onto it. It must be idempotent on
+// email so signing up with an address that already has an account logs into that
+// same account rather than duplicating it.
+type UserProvisioner interface {
+	FindOrCreateUserByEmail(ctx context.Context, email string) (uuid.UUID, error)
+}
+
+// InfluencerSignup is the narrow input to the influencer provisioner: the owning
+// user, the connected Instagram account id, its handle, and the provider's
+// app-scoped user id.
+type InfluencerSignup struct {
+	OwnerUserID        uuid.UUID
+	InstagramAccountID string
+	Handle             string
+	ProviderUserID     string
+}
+
+// InfluencerProvisioner upserts the influencer owned by a user for a connected
+// Instagram account and returns the influencer id. The composition root adapts
+// the influencer module onto it.
+type InfluencerProvisioner interface {
+	UpsertInstagramInfluencer(ctx context.Context, in InfluencerSignup) (uuid.UUID, error)
+}
+
+// Session is the token bundle a completed signup returns so the web can log the
+// new account in. It mirrors the auth module's login response and carries no
+// decrypted OAuth token.
+type Session struct {
+	AccessToken  string    `json:"access_token"`
+	RefreshToken string    `json:"refresh_token"`
+	TokenType    string    `json:"token_type"`
+	ExpiresIn    int64     `json:"expires_in"`
+	UserID       uuid.UUID `json:"user_id"`
+	Email        string    `json:"email"`
+}
+
+// SessionIssuer mints a session for a user id, exactly as login does. The
+// composition root adapts the auth module onto it.
+type SessionIssuer interface {
+	IssueSession(ctx context.Context, userID uuid.UUID) (Session, error)
+}
+
+// influencerProvisionerAdapter bridges the public InfluencerProvisioner to the
+// service-internal port, converting the narrow input across the package boundary
+// (the two structs are field-identical; the internal one exists only because Go
+// forbids the composition root from naming the service package's types).
+type influencerProvisionerAdapter struct{ inner InfluencerProvisioner }
+
+func (a influencerProvisionerAdapter) UpsertInstagramInfluencer(ctx context.Context, in service.InfluencerSignup) (uuid.UUID, error) {
+	return a.inner.UpsertInstagramInfluencer(ctx, InfluencerSignup(in))
+}
+
+// sessionIssuerAdapter bridges the public SessionIssuer to the service-internal
+// port, converting the field-identical session type across the boundary.
+type sessionIssuerAdapter struct{ inner SessionIssuer }
+
+func (a sessionIssuerAdapter) IssueSession(ctx context.Context, userID uuid.UUID) (model.AuthSession, error) {
+	s, err := a.inner.IssueSession(ctx, userID)
+	if err != nil {
+		return model.AuthSession{}, err
+	}
+	return model.AuthSession(s), nil
+}
+
 // LiveConnection is a decrypted platform connection for the audit path: the
 // access token is in the clear, in memory, ready to hand to a connector. It is
 // never persisted or logged.
@@ -66,6 +145,7 @@ type LiveConnection struct {
 // RegisterRoutes.
 type Module struct {
 	handler *handler.Handler
+	signup  *handler.SignupHandler
 	svc     *service.Service
 }
 
@@ -74,6 +154,10 @@ type Module struct {
 // satisfies the service's Sealer port). It fails fast when the service's Config
 // is invalid or a required collaborator is nil, so a misconfigured deployment
 // cannot start.
+//
+// users, influencers, and sessions back the OAuth-as-signup flow. The
+// composition root supplies them by adapting the auth and influencer modules, so
+// this module still imports neither.
 func New(
 	pool *db.Pool,
 	rdb *redis.Client,
@@ -82,7 +166,14 @@ func New(
 	cfg Config,
 	identity Identity,
 	secrets SecretLookup,
+	users UserProvisioner,
+	influencers InfluencerProvisioner,
+	sessions SessionIssuer,
 ) (*Module, error) {
+	if users == nil || influencers == nil || sessions == nil {
+		return nil, errMisconfigured
+	}
+
 	svc, err := service.New(
 		service.Config{RedirectBaseURL: cfg.RedirectBaseURL, StateTTL: cfg.StateTTL},
 		connectors,
@@ -92,12 +183,19 @@ func New(
 		cipher,
 		provider.New(nil),
 		service.SecretLookup(secrets),
+		users,
+		influencerProvisionerAdapter{inner: influencers},
+		sessionIssuerAdapter{inner: sessions},
 	)
 	if err != nil {
 		return nil, err
 	}
 
-	return &Module{handler: handler.New(svc), svc: svc}, nil
+	return &Module{
+		handler: handler.New(svc),
+		signup:  handler.NewSignup(svc),
+		svc:     svc,
+	}, nil
 }
 
 // RegisterRoutes mounts the oauth endpoints under rg (typically the /v1 group).
@@ -105,6 +203,18 @@ func New(
 // rg before calling this, since a connection is always owned by a caller.
 func (m *Module) RegisterRoutes(rg *gin.RouterGroup) {
 	m.handler.RegisterRoutes(rg)
+}
+
+// RegisterPublicRoutes mounts the PUBLIC OAuth-as-signup endpoints under rg. The
+// composition root passes the UNAUTHENTICATED group here: these routes create the
+// session rather than requiring one. They must NOT be mounted behind the auth
+// middleware.
+//
+//	POST /oauth/meta/signup/start     -> begin an anonymous Meta authorization
+//	GET  /oauth/meta/signup/callback  -> complete it, creating the account
+//	POST /oauth/meta/signup/callback
+func (m *Module) RegisterPublicRoutes(rg *gin.RouterGroup) {
+	m.signup.RegisterPublicRoutes(rg)
 }
 
 // ForgetProviderUser erases every connection belonging to a provider's app-scoped

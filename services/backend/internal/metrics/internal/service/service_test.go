@@ -43,14 +43,17 @@ func (f *fakeReadRepo) ListInfluencerPosts(_ context.Context, id string, _ model
 }
 
 type fakeIngestRepo struct {
-	posts    []model.PostRow
-	points   []model.MetricPointRow
-	comments []model.CommentRow
+	posts     []model.PostRow
+	points    []model.MetricPointRow
+	comments  []model.CommentRow
+	audience  []model.AudienceDemographicRow
+	audCalled bool
 
 	postIDs   map[string]uuid.UUID
 	upsertErr error
 	pointsErr error
 	commErr   error
+	audErr    error
 }
 
 func (f *fakeIngestRepo) UpsertPosts(_ context.Context, _ pgx.Tx, rows []model.PostRow) (map[string]uuid.UUID, error) {
@@ -76,6 +79,12 @@ func (f *fakeIngestRepo) InsertMetricPoints(_ context.Context, _ pgx.Tx, rows []
 func (f *fakeIngestRepo) InsertComments(_ context.Context, _ pgx.Tx, rows []model.CommentRow) error {
 	f.comments = rows
 	return f.commErr
+}
+
+func (f *fakeIngestRepo) InsertAudienceDemographics(_ context.Context, _ pgx.Tx, rows []model.AudienceDemographicRow) error {
+	f.audCalled = true
+	f.audience = rows
+	return f.audErr
 }
 
 // fakeTx and fakeBeginner let InTx run without a database.
@@ -294,6 +303,61 @@ func TestIngestPersistsAndPseudonymizes(t *testing.T) {
 	// A different author yields a different hash.
 	if bytes.Equal(hashA1, hashOther) {
 		t.Fatalf("different authors collided to the same hash: %x", hashA1)
+	}
+}
+
+// TestIngestPersistsAudienceDemographics covers the demographics ingest: an
+// observed distribution is flattened one-row-per-bucket, tagged with the audit and
+// platform, and only observed buckets are written.
+func TestIngestPersistsAudienceDemographics(t *testing.T) {
+	influencerID, auditJobID := uuid.New(), uuid.New()
+	snap := connector.Snapshot{
+		Platform:   connector.PlatformInstagram,
+		CapturedAt: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC),
+		Posts:      []connector.Post{{ID: "p1", Likes: 10}},
+		Audience: &connector.AudienceBreakdown{
+			Countries: map[string]float64{"US": 0.6, "GB": 0.2},
+			AgeGroups: map[string]float64{"18-24": 0.5},
+			Gender:    map[string]float64{"female": 0.7, "male": 0.3},
+		},
+	}
+	ingest := &fakeIngestRepo{}
+	svc, _ := newTestService(t, &fakeReadRepo{}, ingest, &fakeSaltStore{})
+	if err := svc.Ingest(context.Background(), influencerID, auditJobID, snap); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+
+	// 2 countries + 1 age + 2 gender = 5 observed buckets.
+	if len(ingest.audience) != 5 {
+		t.Fatalf("audience rows = %d, want 5 (only observed buckets)", len(ingest.audience))
+	}
+	dims := map[string]int{}
+	for _, r := range ingest.audience {
+		if r.InfluencerID != influencerID || r.AuditJobID != auditJobID || r.Platform != "instagram" {
+			t.Fatalf("audience row identity wrong: %+v", r)
+		}
+		if r.Fraction <= 0 || r.CapturedAt != snap.CapturedAt {
+			t.Fatalf("audience row value wrong: %+v", r)
+		}
+		dims[r.Dimension]++
+	}
+	if dims["country"] != 2 || dims["age"] != 1 || dims["gender"] != 2 {
+		t.Fatalf("dimension counts = %v, want country:2 age:1 gender:2", dims)
+	}
+}
+
+// TestIngestNilAudienceWritesNothing pins the honesty contract: a snapshot with no
+// audience (YouTube, or a sub-100-follower account) writes zero demographic rows —
+// absence is never a zero-filled bucket.
+func TestIngestNilAudienceWritesNothing(t *testing.T) {
+	ingest := &fakeIngestRepo{}
+	svc, _ := newTestService(t, &fakeReadRepo{}, ingest, &fakeSaltStore{})
+	snap := connector.Snapshot{Platform: connector.PlatformYouTube, Posts: []connector.Post{{ID: "p1"}}}
+	if err := svc.Ingest(context.Background(), uuid.New(), uuid.New(), snap); err != nil {
+		t.Fatalf("Ingest: %v", err)
+	}
+	if len(ingest.audience) != 0 {
+		t.Fatalf("nil audience wrote %d rows, want 0", len(ingest.audience))
 	}
 }
 

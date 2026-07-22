@@ -116,6 +116,22 @@ type FraudResult struct {
 	ModelVersion             string
 }
 
+// CommentQuality is the persisted per-audit comment-quality summary (table
+// comment_quality). It is a DISPLAY signal only — never a score input (the ML
+// firewall forbids it). LowQualityRatio is a POINTER: nil below the ML service's
+// minimum sample, where a rate would assert a precision nobody has. Counts is the
+// per-bucket tally keyed by CommentLabel.
+type CommentQuality struct {
+	Present          bool
+	AnalyzedCount    int
+	LowQualityCount  int
+	LowQualityRatio  *float64
+	SufficientSample bool
+	Counts           map[string]int
+	RateKey          string
+	ModelVersion     string
+}
+
 // CreateJobParams is the input to an idempotent job insert.
 type CreateJobParams struct {
 	UserID             uuid.UUID

@@ -37,8 +37,14 @@ type Module struct {
 // audit, scoring, llm, influencer, platform-PDF, and object-storage
 // implementations. caller and owner back the creator-ownership gate: only the
 // creator who connected an account may publish or share a report built from it.
-func New(pool *db.Pool, audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, pdf port.PDFRenderer, storage port.Storage, caller port.CallerID, owner port.OwnerReader, mailer port.Mailer, recipients port.Recipient) *Module {
-	svc := service.New(audit, score, narrative, fraud, pdf, repository.New(pool), storage, caller, owner, mailer, recipients)
+// handles resolves the creator's Instagram handle to freeze into the badge at
+// publish time (the /@handle alias); opens records public badge reads for the
+// external-share-open metric. Both are optional consumer-side ports: the
+// composition root adapts handles onto the influencer module and opens onto the
+// analytics module, and a nil value degrades gracefully (empty handle / no-op
+// counting) so the module builds and tests without either wired.
+func New(pool *db.Pool, audit port.AuditReader, score port.ScoreReader, narrative port.NarrativeReader, fraud port.FraudReader, commentQuality port.CommentQualityReader, pdf port.PDFRenderer, storage port.Storage, caller port.CallerID, owner port.OwnerReader, mailer port.Mailer, recipients port.Recipient, handles port.HandleReader, opens port.OpenRecorder) *Module {
+	svc := service.New(audit, score, narrative, fraud, commentQuality, pdf, repository.New(pool), storage, caller, owner, mailer, recipients, handles, opens)
 	return &Module{svc: svc, handler: handler.New(svc)}
 }
 

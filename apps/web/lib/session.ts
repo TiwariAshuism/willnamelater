@@ -1,6 +1,5 @@
 import "server-only";
 import { cookies } from "next/headers";
-import type { AuthResponse } from "@influaudit/contracts";
 import { sessionCookieSecure } from "@/lib/env";
 import {
   ACCESS_COOKIE,
@@ -33,8 +32,18 @@ function baseCookieOptions() {
   };
 }
 
-/** Persist a fresh set of tokens from a backend auth/refresh response. */
-export async function writeSession(auth: AuthResponse): Promise<void> {
+/** The token bundle every session write needs. Both the login/register/refresh
+ * `AuthResponse` and the OAuth-signup `AuthSession` satisfy it structurally, so a
+ * password login and an anonymous connect land the exact same server-owned
+ * session. */
+export interface SessionTokens {
+  access_token: string;
+  refresh_token: string;
+  expires_in: number;
+}
+
+/** Persist a fresh set of tokens from a backend auth/refresh/signup response. */
+export async function writeSession(auth: SessionTokens): Promise<void> {
   const store = await cookies();
   const opts = baseCookieOptions();
   const expiresAt = Math.floor(Date.now() / 1000) + auth.expires_in;

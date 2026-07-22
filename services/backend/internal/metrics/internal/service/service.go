@@ -116,6 +116,12 @@ func (s *Service) Ingest(ctx context.Context, influencerID, auditJobID uuid.UUID
 		})
 	}
 
+	captured := snap.CapturedAt
+	if captured.IsZero() {
+		captured = time.Now().UTC()
+	}
+	audience := audienceRows(influencerID, auditJobID, platform, captured, snap.Audience)
+
 	pending := make([]pendingComment, 0, len(snap.Comments))
 	for _, c := range snap.Comments {
 		hash, err := s.salt.AuthorHash(ctx, c.AuthorID)
@@ -156,8 +162,44 @@ func (s *Service) Ingest(ctx context.Context, influencerID, auditJobID uuid.UUID
 				PostedAt:   pc.postedAt,
 			})
 		}
-		return s.ingest.InsertComments(ctx, tx, comments)
+		if err := s.ingest.InsertComments(ctx, tx, comments); err != nil {
+			return err
+		}
+		return s.ingest.InsertAudienceDemographics(ctx, tx, audience)
 	})
+}
+
+// audienceRows flattens a connector AudienceBreakdown into persistence rows, one
+// per OBSERVED bucket. A nil breakdown or a nil dimension map yields no rows for
+// that dimension — absence is never a zero-filled bucket. It is called outside the
+// write transaction; the rows are then written atomically with the rest.
+func audienceRows(influencerID, auditJobID uuid.UUID, platform string, capturedAt time.Time, aud *connector.AudienceBreakdown) []model.AudienceDemographicRow {
+	if aud == nil {
+		return nil
+	}
+	dims := []struct {
+		name string
+		dist map[string]float64
+	}{
+		{"age", aud.AgeGroups},
+		{"gender", aud.Gender},
+		{"country", aud.Countries},
+	}
+	var rows []model.AudienceDemographicRow
+	for _, d := range dims {
+		for bucket, fraction := range d.dist {
+			rows = append(rows, model.AudienceDemographicRow{
+				InfluencerID: influencerID,
+				AuditJobID:   auditJobID,
+				Platform:     platform,
+				Dimension:    d.name,
+				Bucket:       bucket,
+				Fraction:     fraction,
+				CapturedAt:   capturedAt,
+			})
+		}
+	}
+	return rows
 }
 
 // nonEmpty returns a pointer to s, or nil when s is empty, so an absent string

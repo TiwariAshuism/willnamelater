@@ -210,6 +210,12 @@ func (s *Service) fetchPlatform(ctx context.Context, job model.Job, conn port.Co
 			connector.CapabilityMetrics,
 			connector.CapabilityRecentPosts,
 			connector.CapabilityComments,
+			// Audience demographics feed the Audience Quality factor (PRD §6) and the
+			// result-page audience snapshot. A connector that cannot serve them (e.g.
+			// YouTube) simply returns a nil Audience — the capability request never
+			// marks the audit partial, because the connector advertises only what it
+			// can do and the orchestrator intersects the two.
+			connector.CapabilityAudienceBreakdown,
 		},
 		MaxPosts: maxPostsPerPlatform,
 	}
@@ -286,6 +292,13 @@ func (s *Service) scoreAndReport(ctx context.Context, job model.Job, snapshots [
 		return err
 	}
 
+	// Classify comment quality for DISPLAY only, best-effort. It is deliberately
+	// kept out of the fraud pass and the score above: the ML firewall forbids this
+	// signal from moving any number until its weight is fitted against real
+	// outcomes. A nil classifier or a failure leaves the summary absent; the audit
+	// never depends on it.
+	s.classifyComments(ctx, job.ID, snapshots)
+
 	score, err := s.scorer.Score(ctx, job.ID, job.InfluencerID, snapshots, toFraudInput(fraud))
 	if err != nil {
 		return err
@@ -340,6 +353,41 @@ func (s *Service) recordFeatures(ctx context.Context, job model.Job, snapshots [
 	}); err != nil {
 		slog.WarnContext(ctx, "ml feature-store intake failed (audit unaffected)",
 			slog.String("audit_job_id", job.ID.String()), slog.Any("error", err))
+	}
+}
+
+// classifyComments runs the display-only comment-quality classifier over the
+// audit's snapshots and persists the summary, both best-effort. A nil classifier
+// is a no-op; any error is logged and swallowed so a display signal can never
+// fail an audit that already produced its score and report. The result is NEVER
+// fed to the fraud pass or the score — the ML firewall forbids it.
+func (s *Service) classifyComments(ctx context.Context, jobID uuid.UUID, snapshots []connector.Snapshot) {
+	if s.classifier == nil {
+		return
+	}
+	summary, err := s.classifier.ClassifyComments(ctx, snapshots)
+	if err != nil {
+		slog.WarnContext(ctx, "comment-quality classification failed (audit unaffected)",
+			slog.String("audit_job_id", jobID.String()), slog.Any("error", err))
+		return
+	}
+	if err := s.repo.UpsertCommentQuality(ctx, jobID, toCommentQualityModel(summary)); err != nil {
+		slog.WarnContext(ctx, "comment-quality persist failed (audit unaffected)",
+			slog.String("audit_job_id", jobID.String()), slog.Any("error", err))
+	}
+}
+
+// toCommentQualityModel maps the ml-agnostic summary onto the persisted row.
+func toCommentQualityModel(c port.CommentQualitySummary) model.CommentQuality {
+	return model.CommentQuality{
+		Present:          c.Present,
+		AnalyzedCount:    c.AnalyzedCount,
+		LowQualityCount:  c.LowQualityCount,
+		LowQualityRatio:  c.LowQualityRatio,
+		SufficientSample: c.SufficientSample,
+		Counts:           c.Counts,
+		RateKey:          c.RateKey,
+		ModelVersion:     c.ModelVersion,
 	}
 }
 

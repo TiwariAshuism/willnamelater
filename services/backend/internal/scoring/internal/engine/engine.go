@@ -4,6 +4,7 @@ import (
 	"errors"
 	"math"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/getnyx/influaudit/backend/internal/connector"
@@ -22,28 +23,13 @@ var ErrNoWeights = errors.New("scoring: weight set sums to zero")
 // give.
 var ErrInsufficientEvidence = errors.New("scoring: too few measured components to score")
 
-// Audience-size saturation bounds. The component maps FOLLOWER COUNT onto [0,1]
-// on a log10 scale between these edges: a ~1K-follower account sits at the floor,
-// a 10M+ account saturates the ceiling. The scale is logarithmic because audience
-// size spans orders of magnitude and its marginal influence diminishes with size.
-//
-// This component was once called "reach", which was a lie with a dangerous edge:
-// it is computed ENTIRELY from follower count — the exact quantity purchased
-// followers inflate — so a creator who buys 100K followers scored HIGHER on the
-// dimension the product exists to police. It is now named for what it measures,
-// and its confidence reflects that a follower count is a weak proxy for the reach
-// it was pretending to be. Real reach is only knowable from first-party Insights
-// (Flow A), and when we have it, it belongs in a separate, honest component.
-const (
-	audienceFloor = 1_000.0
-	audienceCeil  = 10_000_000.0
-)
-
-// audienceSizeConfidence is the confidence of the audience-size component when a
-// follower count IS known. It is deliberately not 1.0: follower count is a
-// self-reported, purchasable number and a weak proxy for actual reach, so the
-// component must not be able to dominate the composite at full certainty.
-const audienceSizeConfidence = 0.5
+// Follower COUNT is deliberately NOT a scored factor in the hireability
+// composite. It was once a component called "reach", computed entirely from
+// follower count — the exact quantity purchased followers inflate — so buying
+// followers RAISED an account's score, on the dimension the product exists to
+// police. The CreatorTrust reshape (PRD §6, "hireability, not growth") drops it
+// from the composite entirely. Follower count survives only as the TIER that
+// bands every metric (TierForFollowers); it never adds points.
 
 // neutralScore is the midpoint a subscore is shrunk toward in proportion to how
 // little we trust it. Shrinking to the midpoint (rather than to 0 or 100) is the
@@ -60,9 +46,10 @@ const neutralScore = 50.0
 const minEvidencedWeight = 0.5
 
 // engagementDepthSpan is the (comments + shares) / (likes + 1) ratio at which
-// the content-quality signal saturates. Deeper interactions than a passive like
+// the interaction-depth signal saturates. Deeper interactions than a passive like
 // — comments and shares — indicate stronger content; the span is wide because
-// this is a soft, exploratory signal weighted at only 0.05.
+// this is a soft, exploratory signal, now the lightest sub-signal (eaWeightDepth)
+// inside Engagement Authenticity rather than a standalone component.
 const engagementDepthSpan = 0.15
 
 // growthSpan is the standard deviation of period-over-period follower growth
@@ -91,6 +78,54 @@ const (
 	fraudWeightCoordination = 0.35
 )
 
+// Engagement Authenticity sub-signal weights. The factor (PRD §6, 30% of the
+// composite) folds three INDEPENDENT sub-signals: the benchmark-relative
+// engagement rate, the interaction-depth proxy, and the fraud/bot authenticity
+// signal. The weights are renormalized over whichever sub-signals were actually
+// observed, so an audit with no fraud pass is scored on engagement + depth alone
+// at full weight rather than dragged toward neutral by a signal we never took.
+// These are v1 heuristics, documented as such.
+const (
+	eaWeightEngagement   = 0.50
+	eaWeightAuthenticity = 0.35
+	eaWeightDepth        = 0.15
+)
+
+// audienceDimensions is the number of demographic dimensions Audience Quality can
+// read (gender, age, country). Its Support is the share of these actually
+// reported — a coverage claim, never a confidence: a legible, concentrated
+// audience is a documented v1 heuristic for brand value, not a validated one.
+const audienceDimensions = 3
+
+// audienceMinFollowers is the follower floor below which Meta returns no audience
+// demographics at all (mirrors the connector's audienceFollowerThreshold). Below
+// it Audience Quality is ABSENT, not zero: it is dropped and its weight
+// renormalized away, and the report says "not available at your size" (PRD §9).
+const audienceMinFollowers = 100
+
+// Brand-Fit Clarity tuning. disclosureTarget is the share of captioned posts
+// carrying a sponsorship marker at which the "track record" signal saturates: a
+// creator with roughly a fifth of posts disclosed as brand work has a clear
+// history (PRD §7 brand-collaboration line). brandFitPostsForFullCoverage is the
+// caption count at which the factor's coverage saturates — more captions do not
+// make the closed-form proxy more correct, only better fed.
+const (
+	brandFitDisclosureTarget     = 0.20
+	brandFitPostsForFullCoverage = 10.0
+)
+
+// sponsorshipMarkers are the lowercase substrings that mark a caption as
+// disclosed brand work. MODELED, not verified (PRD §7): a creator can omit them,
+// so their ABSENCE is never read as "no brand deals", only their presence as a
+// track record.
+var sponsorshipMarkers = []string{"#ad", "#sponsored", "#sponsor", "#gifted", "#paidpartnership", "paid partnership"}
+
+// unsafeMarkers are a deliberately SMALL, light-touch brand-safety keyword list.
+// Heavy controversy/vision analysis is explicitly out of v1 (PRD §7, "MODELED
+// (light) or NOT-V1"); this is a conservative flag, documented as unvalidated,
+// and it only ever lowers Brand-Fit, never raises it.
+var unsafeMarkers = []string{"nsfw", "18+", "onlyfans"}
+
 // Input is everything Compute needs, all of it already in memory: the resolved
 // (niche, tier), the platform snapshots that succeeded, the fraud signal, and
 // the active weights and engagement benchmark. Compute performs no lookups, so a
@@ -104,17 +139,18 @@ type Input struct {
 	EngagementBenchmark Benchmark
 }
 
-// Compute is the pure heart of the scoring engine. It derives the five subscores
-// from the snapshots and fraud signal, weights them into the composite, and
-// stamps the weight and benchmark versions. It never touches the database, the
-// clock, or the network.
+// Compute is the pure heart of the scoring engine. It derives the four
+// hireability factors from the snapshots and fraud signal, weights them into the
+// composite, and stamps the weight and benchmark versions. It never touches the
+// database, the clock, or the network.
 //
-// Composite (PRD §6):
+// Composite (PRD §6, hireability not growth):
 //
-//	0.30·reach + 0.30·engagement_quality + 0.25·authenticity +
-//	0.10·consistency + 0.05·content_quality
+//	0.30·engagement_authenticity + 0.30·audience_quality +
+//	0.20·consistency_reliability + 0.20·brand_fit_clarity
 //
-// with the caller's weights normalized to sum to one.
+// with the caller's weights normalized to sum to one. Follower count is NOT a
+// factor — it only bands the metrics via the tier.
 func Compute(in Input) (contract.Score, error) {
 	if in.Weights.sum() <= 0 {
 		return contract.Score{}, ErrNoWeights
@@ -123,34 +159,33 @@ func Compute(in Input) (contract.Score, error) {
 	platforms := contributingPlatforms(in.Snapshots)
 	followers := representativeFollowers(in.Snapshots)
 
-	reach := audienceSizeSubscore(followers)
+	// Engagement Authenticity folds three independent sub-signals; authenticity is
+	// also carried out separately (FraudAuthenticity) for the report headline.
 	engagement := engagementSubscore(in.Snapshots, followers, in.EngagementBenchmark)
+	depth := contentSubscore(in.Snapshots)
 	authenticity := authenticitySubscore(in.Fraud)
-	consistency := consistencySubscore(in.Snapshots)
-	content := contentSubscore(in.Snapshots)
 
-	// The composite is a weighted mean over the components we ACTUALLY MEASURED.
+	engagementAuthenticity := engagementAuthenticitySubscore(engagement, depth, authenticity)
+	audienceQuality := audienceQualitySubscore(in.Snapshots, followers)
+	consistency := consistencySubscore(in.Snapshots)
+	brandFit := brandFitSubscore(in.Snapshots)
+
+	// The composite is a weighted mean over the factors we ACTUALLY MEASURED.
 	//
-	// It used to be a weighted mean of every component's Value, with Confidence
-	// tracked as a separate, parallel number that never touched the score. A
-	// component with zero confidence — engagement with no posts, say, which returns
-	// a neutral {Value: 50, Confidence: 0} — still contributed its full weight×50 to
-	// the headline. A third of the composite could be invented 50s while the
-	// customer read a confident-looking number.
-	//
-	// Now a zero-confidence component is DROPPED and its weight renormalized away,
-	// and a surviving component is shrunk toward neutral in proportion to how little
-	// we trust it. An audit that measured almost nothing yields no number at all.
+	// A zero-support factor is DROPPED and its weight renormalized away, and a
+	// surviving factor is shrunk toward neutral in proportion to how little we
+	// trust it. An audit that measured almost nothing yields no number at all. This
+	// loop is the honesty firewall — it is unchanged from the influence composite;
+	// only the factor list feeding it changed.
 	w := in.Weights
 	components := []struct {
 		weight float64
 		sub    contract.Subscore
 	}{
-		{w.Reach, reach},
-		{w.EngagementQuality, engagement},
-		{w.Authenticity, authenticity},
-		{w.Consistency, consistency},
-		{w.ContentQuality, content},
+		{w.EngagementAuthenticity, engagementAuthenticity},
+		{w.AudienceQuality, audienceQuality},
+		{w.ConsistencyReliability, consistency},
+		{w.BrandFitClarity, brandFit},
 	}
 
 	var weightedValue, weightedConf, evidencedWeight float64
@@ -180,19 +215,19 @@ func Compute(in Input) (contract.Score, error) {
 	overallConf := weightedConf / total
 
 	return contract.Score{
-		Niche:                 in.Niche,
-		Tier:                  in.Tier,
-		Overall:               clamp01(overall01) * 100,
-		Reach:                 reach,
-		EngagementQuality:     engagement,
-		Authenticity:          authenticity,
-		Consistency:           consistency,
-		ContentQuality:        content,
-		OverallConfidence:     clamp01(overallConf),
-		WeightsVersion:        w.Version,
-		BenchmarkVersion:      in.EngagementBenchmark.Version,
-		BenchmarkLabel:        in.EngagementBenchmark.Label,
-		ContributingPlatforms: platforms,
+		Niche:                  in.Niche,
+		Tier:                   in.Tier,
+		Overall:                clamp01(overall01) * 100,
+		EngagementAuthenticity: engagementAuthenticity,
+		AudienceQuality:        audienceQuality,
+		ConsistencyReliability: consistency,
+		BrandFitClarity:        brandFit,
+		FraudAuthenticity:      authenticity,
+		OverallConfidence:      clamp01(overallConf),
+		WeightsVersion:         w.Version,
+		BenchmarkVersion:       in.EngagementBenchmark.Version,
+		BenchmarkLabel:         in.EngagementBenchmark.Label,
+		ContributingPlatforms:  platforms,
 	}, nil
 }
 
@@ -223,38 +258,200 @@ func representativeFollowers(snaps []connector.Snapshot) int64 {
 	return largest
 }
 
-// audienceSizeSubscore maps FOLLOWER COUNT onto [0,1] on a log scale between
-// audienceFloor and audienceCeil.
+// engagementAuthenticitySubscore folds the three Engagement Authenticity
+// sub-signals — benchmark-relative engagement, interaction depth, and the fraud
+// authenticity signal — into one factor (PRD §6, 30%). It blends only the
+// sub-signals with positive support, renormalizing their weights over what was
+// observed, exactly as the fraud blend does: an absent sub-signal contributes
+// nothing and takes its weight with it, never voting neutral at full weight.
 //
-// It measures audience SIZE, not reach. Follower count is self-reported and
-// purchasable — it is the very number a fraudulent account inflates — so this
-// component is capped at audienceSizeConfidence rather than the full certainty it
-// once claimed. At Confidence: 1 and weight 0.30 it was the heaviest term in the
-// composite, which meant buying followers RAISED an account's audit score. It no
-// longer can dominate, and it is no longer named for a thing it does not measure.
+// The Value is the sub-weighted mean of the present sub-values; the Support is the
+// sub-weighted mean of their supports. The basis is closed_form (it is an
+// arithmetic blend of differently-sourced values) and the SupportKind is the
+// conservative SupportCoverage: the blend mixes a benchmark prior/confidence, a
+// coverage, and a model confidence, so labelling the aggregate a "confidence"
+// would overclaim. When no sub-signal is present the factor is neutral and
+// unsupported, so the composite drops it.
+func engagementAuthenticitySubscore(engagement, depth, authenticity contract.Subscore) contract.Subscore {
+	type signal struct {
+		weight float64
+		sub    contract.Subscore
+	}
+	signals := []signal{
+		{eaWeightEngagement, engagement},
+		{eaWeightAuthenticity, authenticity},
+		{eaWeightDepth, depth},
+	}
+	var weightedValue, weightedSupport, presentWeight float64
+	for _, s := range signals {
+		if s.sub.Support <= 0 {
+			continue
+		}
+		weightedValue += s.weight * s.sub.Value
+		weightedSupport += s.weight * s.sub.Support
+		presentWeight += s.weight
+	}
+	if presentWeight == 0 {
+		return contract.Subscore{Value: neutralScore, Basis: contract.BasisClosedForm, Support: 0, SupportKind: contract.SupportNone}
+	}
+	return contract.Subscore{
+		Value:       weightedValue / presentWeight,
+		Basis:       contract.BasisClosedForm,
+		Support:     clamp01(weightedSupport / presentWeight),
+		SupportKind: contract.SupportCoverage,
+	}
+}
+
+// audienceQualitySubscore scores the legibility and concentration of the
+// audience (PRD §6 factor 2, 30%) from the connected account's demographic
+// distribution. It reads snap.Audience in memory — the Meta connector already
+// fetches it — and combines, over the dimensions actually reported: demographic
+// clarity (share resolved into named gender/age buckets, i.e. not "unknown") and
+// geo concentration (top-country fraction — a concentrated, brand-relevant geo
+// beats scattered global reach, PRD §7).
 //
-// Support is zero when no follower count is known: the size is then absent, not
-// zero, and a zero-support component is dropped from the composite entirely. When
-// a count IS known the support is audienceSizeConfidence — a documented PRIOR
-// discount on a purchasable number, not a confidence anyone measured, so it is
-// stamped SupportPrior.
-func audienceSizeSubscore(followers int64) contract.Subscore {
-	if followers <= 0 {
-		return contract.Subscore{
-			Value:       0,
-			Basis:       contract.BasisClosedForm,
-			Support:     0,
-			SupportKind: contract.SupportNone,
+// Support is ZERO (the factor is dropped and its weight renormalized away) when
+// no audience is present OR the account is below audienceMinFollowers — Meta
+// returns no demographics under 100 followers, and absence is disclosed as "not
+// available at your size", never scored as 0. A nil dimension map is treated as
+// absent, never as an all-zero distribution. Niche fit is deliberately DEFERRED:
+// there is no citable niche×demographic prior at cold start, and inventing one
+// would be the fabrication this engine forbids. Basis closed_form, SupportKind
+// coverage: a legible audience is a documented v1 heuristic for brand value, not
+// a validated predictor.
+func audienceQualitySubscore(snaps []connector.Snapshot, followers int64) contract.Subscore {
+	dropped := contract.Subscore{Value: neutralScore, Basis: contract.BasisClosedForm, Support: 0, SupportKind: contract.SupportNone}
+	if followers < audienceMinFollowers {
+		return dropped
+	}
+	var aud *connector.AudienceBreakdown
+	for i := range snaps {
+		if snaps[i].Audience != nil {
+			aud = snaps[i].Audience
+			break
 		}
 	}
-	num := math.Log10(float64(followers)) - math.Log10(audienceFloor)
-	den := math.Log10(audienceCeil) - math.Log10(audienceFloor)
-	return contract.Subscore{
-		Value:       clamp01(num/den) * 100,
-		Basis:       contract.BasisClosedForm,
-		Support:     audienceSizeConfidence,
-		SupportKind: contract.SupportPrior,
+	if aud == nil {
+		return dropped
 	}
+
+	var signals []float64
+	present := 0
+	if aud.Gender != nil {
+		present++
+		signals = append(signals, clamp01(namedShare(aud.Gender)))
+	}
+	if aud.AgeGroups != nil {
+		present++
+		signals = append(signals, clamp01(namedShare(aud.AgeGroups)))
+	}
+	if aud.Countries != nil {
+		present++
+		signals = append(signals, clamp01(topFraction(aud.Countries)))
+	}
+	if present == 0 {
+		return dropped
+	}
+	return contract.Subscore{
+		Value:       mean(signals) * 100,
+		Basis:       contract.BasisClosedForm,
+		Support:     clamp01(float64(present) / audienceDimensions),
+		SupportKind: contract.SupportCoverage,
+	}
+}
+
+// namedShare sums the fractions in buckets that resolve to a named segment — i.e.
+// everything except an "unknown"/unlabelled bucket. A well-defined audience
+// concentrates in named buckets; an opaque one leaks into "unknown".
+func namedShare(dist map[string]float64) float64 {
+	var named float64
+	for k, v := range dist {
+		if isUnknownBucket(k) {
+			continue
+		}
+		named += v
+	}
+	return named
+}
+
+// isUnknownBucket reports whether a demographic bucket label denotes an
+// unresolved segment. Meta relabels its gender "U" to "unknown"; an empty label
+// is likewise unresolved.
+func isUnknownBucket(label string) bool {
+	switch strings.ToLower(strings.TrimSpace(label)) {
+	case "", "unknown", "u", "other", "unspecified":
+		return true
+	default:
+		return false
+	}
+}
+
+// topFraction returns the largest fraction in a distribution — for countries, the
+// share of the single most-represented geo, a proxy for concentration.
+func topFraction(dist map[string]float64) float64 {
+	var top float64
+	for _, v := range dist {
+		if v > top {
+			top = v
+		}
+	}
+	return top
+}
+
+// brandFitSubscore scores how brand-ready an account's content reads (PRD §6
+// factor 4, 20%) from post captions the connector already fetched. It combines a
+// sponsorship-disclosure track record (share of captioned posts bearing an #ad /
+// #sponsored / paid-partnership marker, saturating at brandFitDisclosureTarget)
+// with a light brand-safety signal (share of captions free of a small, documented
+// unsafe-keyword list). Heavy content-quality / controversy analysis is out of v1
+// (PRD §7, NOT-V1).
+//
+// Support is ZERO (dropped) when no post carries a caption. It is otherwise the
+// caption coverage — captions read, saturating at brandFitPostsForFullCoverage —
+// a data-availability claim, so SupportKind is coverage and Basis is closed_form.
+// A marker's ABSENCE is never read as "no brand deals"; only its presence counts,
+// and the unsafe list only ever lowers the score.
+func brandFitSubscore(snaps []connector.Snapshot) contract.Subscore {
+	var captions []string
+	for _, s := range snaps {
+		for _, p := range s.Posts {
+			if c := strings.ToLower(strings.TrimSpace(p.Caption)); c != "" {
+				captions = append(captions, c)
+			}
+		}
+	}
+	if len(captions) == 0 {
+		return contract.Subscore{Value: neutralScore, Basis: contract.BasisClosedForm, Support: 0, SupportKind: contract.SupportNone}
+	}
+
+	var sponsored, unsafe int
+	for _, c := range captions {
+		if containsAny(c, sponsorshipMarkers) {
+			sponsored++
+		}
+		if containsAny(c, unsafeMarkers) {
+			unsafe++
+		}
+	}
+	disclosureSignal := clamp01((float64(sponsored) / float64(len(captions))) / brandFitDisclosureTarget)
+	safetySignal := 1 - clamp01(float64(unsafe)/float64(len(captions)))
+	value := mean([]float64{disclosureSignal, safetySignal}) * 100
+	return contract.Subscore{
+		Value:       value,
+		Basis:       contract.BasisClosedForm,
+		Support:     clamp01(float64(len(captions)) / brandFitPostsForFullCoverage),
+		SupportKind: contract.SupportCoverage,
+	}
+}
+
+// containsAny reports whether s contains any of the substrings.
+func containsAny(s string, subs []string) bool {
+	for _, sub := range subs {
+		if strings.Contains(s, sub) {
+			return true
+		}
+	}
+	return false
 }
 
 // ObservedEngagementRate is the mean per-post engagement rate across snapshots
