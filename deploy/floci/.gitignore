@@ -1,0 +1,2 @@
+# Local-only artifacts: throwaway SSH keys + the floci-az self-signed CA.
+keys/
