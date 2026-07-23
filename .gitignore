@@ -11,6 +11,11 @@ Desktop.ini
 *.swo
 *~
 
+# Claude Code
+# settings.json is the shared, committed project config; settings.local.json holds
+# personal per-machine overrides and must never be pushed.
+.claude/settings.local.json
+
 # Environment and secrets
 .env
 .env.*
