@@ -177,3 +177,52 @@ ssh gcp-vm 'docker compose ... up -d'
 DNS propagates in 60 seconds. This works because you did not delete anything.
 
 **The only irreversible step is the final data cutover.** Writes that landed on Azure after step 5 are not on GCP. If you must roll back *after* traffic has been served, dump Azure and restore to GCP — which is the same `backup.sh` / `restore.sh` pair, in the other direction, and works for exactly the same reason.
+
+---
+
+## Near-zero-downtime cutover (the upgrade path)
+
+The runbook above is the **honest-30-minutes** version: stop the API, dump, restore, flip
+DNS. It is correct, simple, and the *right* choice pre-launch and at low traffic — do not
+build anything more until live traffic makes 30 minutes of write-downtime unacceptable.
+
+When it does, three changes turn the cutover into a **seconds-long write pause with reads
+never dropping**. Two are already in this runbook; one is code that does not exist yet.
+
+**What changes vs the standard cutover:**
+
+- **Data lag → 0** — logical replication from T-7 (already documented at T-7 step 7). The
+  target is continuously current, so there is no dump window to be down for. Set
+  `publish_via_partition_root = true` so the partitioned `metric_point` replicates through
+  its root.
+- **Write pause → seconds** — an app-level **read-only mode**, the one missing piece
+  (§T-0 step 2 notes "there is no read-only mode"). It must serve reads and reject/park
+  writes on a flag. The synchronous write surface to freeze is small because audits are
+  async (asynq drains and re-enqueues).
+- **Reroute → instant** — put Cloudflare in **proxied mode** (orange-cloud) so the origin
+  swap takes effect at the edge with no 60-second client DNS tail. (Alternative: keep the
+  old origin reverse-proxying to the new one for the TTL drain.)
+
+**The cutover then becomes:**
+
+1. **Confirm replication lag ≈ 0.** `SELECT * FROM pg_stat_replication` on the source; the
+   target has been catching up all week.
+2. **Stop the workers.** Queue drains; unstarted asynq tasks remain, re-enqueueable.
+3. **Flip the app to read-only.** Reads keep serving; writes are rejected/parked. This is
+   the *only* user-visible degradation, and it lasts seconds.
+4. **Drain the final WAL, then promote.** Wait for lag = 0, `DROP SUBSCRIPTION` on the
+   target. It is now authoritative and read-write. *(No sequence resync — every PK is
+   `gen_random_uuid()`, so there are no sequences to advance.)*
+5. **Swap the Cloudflare origin to the target.** In proxied mode this is instant at the
+   edge — no DNS-cache tail.
+6. **Lift read-only; start the workers.** Writes resume against the new primary.
+7. **Keep the old cloud read-only and reverse-replicate** (new → old) for the observation
+   window, so even a *post*-cutover rollback loses nothing. This is what makes the "only
+   irreversible step" above reversible too.
+
+**Result: reads never stop; writes pause only for steps 3–6 — a few seconds.** That is what
+zero-downtime honestly means at this scale: a planned, seconds-long write freeze in a
+low-traffic window, not literally zero.
+
+> ⚠️ Write the read-only-mode code against *real* traffic patterns, not guessed ones.
+> Building this pre-launch is effort spent on a load you cannot observe yet.
