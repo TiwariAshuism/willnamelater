@@ -4,6 +4,8 @@ package repository
 import (
 	"context"
 
+	"github.com/google/uuid"
+
 	"github.com/getnyx/influaudit/backend/internal/metrics/internal/model"
 )
 
@@ -12,4 +14,8 @@ import (
 type MetricsRepository interface {
 	GetInfluencerMetrics(ctx context.Context, id string, req model.MetricSeriesRequest) (model.MetricSeriesResponse, error)
 	ListInfluencerPosts(ctx context.Context, id string, req model.ListPostsRequest) ([]model.PostResponse, error)
+	GetInfluencerProfileSummary(ctx context.Context, id string) (model.ProfileSummaryResponse, error)
+	// FollowerSeries is a facade-only read (no HTTP route): it backs the metrics
+	// module's InstagramFollowerSeries method for the scoring module.
+	FollowerSeries(ctx context.Context, influencerID uuid.UUID) ([]model.FollowerPoint, error)
 }

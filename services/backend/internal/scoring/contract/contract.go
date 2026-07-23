@@ -278,3 +278,20 @@ type Profiles interface {
 	// is treated as "unknown" and falls back to the default benchmark cohort.
 	NicheOf(ctx context.Context, influencerID uuid.UUID) (string, error)
 }
+
+// FollowerReading is one historical follower-count reading loaded from the metric
+// store. At is when it was captured; Followers is the count.
+type FollowerReading struct {
+	At        time.Time
+	Followers float64
+}
+
+// MetricHistory loads an influencer's prior follower readings so the consistency
+// factor's growth-spike detection can fire across REPEATED audits, not just within
+// a single pull (one audit's snapshot carries only the current follower point).
+// The composition root adapts it onto the metrics module. It is optional: a nil
+// MetricHistory (or an error, which is treated as best-effort) leaves growth
+// smoothness resting on the snapshot alone.
+type MetricHistory interface {
+	FollowerSeries(ctx context.Context, influencerID uuid.UUID) ([]FollowerReading, error)
+}

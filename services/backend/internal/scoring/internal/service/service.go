@@ -29,13 +29,16 @@ const corpusMinDistinctInfluencers = 30
 type Service struct {
 	repo     repository.Repository
 	profiles contract.Profiles
+	history  contract.MetricHistory
 }
 
 // New builds the scoring service. profiles resolves an influencer's niche and
 // may be nil, in which case every audit falls back to the baseline benchmark
-// cohort — the module still functions, it just cannot key benchmarks by niche.
-func New(repo repository.Repository, profiles contract.Profiles) *Service {
-	return &Service{repo: repo, profiles: profiles}
+// cohort. history loads prior follower readings for growth-spike detection and
+// may also be nil (growth then rests on the current snapshot alone) — the module
+// functions in either case.
+func New(repo repository.Repository, profiles contract.Profiles, history contract.MetricHistory) *Service {
+	return &Service{repo: repo, profiles: profiles, history: history}
 }
 
 var _ ScoringService = (*Service)(nil)
@@ -78,6 +81,7 @@ func (s *Service) Score(
 		Fraud:               fraud,
 		Weights:             weights,
 		EngagementBenchmark: benchmark,
+		FollowerHistory:     s.followerHistory(ctx, influencerID),
 	})
 	if err != nil {
 		return contract.Score{}, errs.Wrap(err, errs.KindInternal, "scoring.compute_failed", "could not compute score")
@@ -90,6 +94,26 @@ func (s *Service) Score(
 		return contract.Score{}, err
 	}
 	return score, nil
+}
+
+// followerHistory loads the influencer's prior follower readings for growth-spike
+// detection, best-effort: a nil port or any error yields no history, and the
+// growth signal then rests on the current snapshot alone rather than failing the
+// score. It maps the port's readings onto the connector metric-point shape the
+// engine consumes.
+func (s *Service) followerHistory(ctx context.Context, influencerID uuid.UUID) []connector.MetricPoint {
+	if s.history == nil || influencerID == uuid.Nil {
+		return nil
+	}
+	readings, err := s.history.FollowerSeries(ctx, influencerID)
+	if err != nil || len(readings) == 0 {
+		return nil
+	}
+	points := make([]connector.MetricPoint, 0, len(readings))
+	for _, r := range readings {
+		points = append(points, connector.MetricPoint{At: r.At, Name: "followers", Value: r.Followers})
+	}
+	return points
 }
 
 // resolveNiche returns the influencer's niche through the port, or the baseline

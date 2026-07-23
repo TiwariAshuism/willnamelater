@@ -20,6 +20,8 @@ type fakeService struct {
 	metricsErr  error
 	postsResp   []model.PostResponse
 	postsErr    error
+	summaryResp model.ProfileSummaryResponse
+	summaryErr  error
 }
 
 func (f *fakeService) GetInfluencerMetrics(context.Context, string, model.MetricSeriesRequest) (model.MetricSeriesResponse, error) {
@@ -28,6 +30,10 @@ func (f *fakeService) GetInfluencerMetrics(context.Context, string, model.Metric
 
 func (f *fakeService) ListInfluencerPosts(context.Context, string, model.ListPostsRequest) ([]model.PostResponse, error) {
 	return f.postsResp, f.postsErr
+}
+
+func (f *fakeService) GetInfluencerProfileSummary(context.Context, string) (model.ProfileSummaryResponse, error) {
+	return f.summaryResp, f.summaryErr
 }
 
 func newRouter(svc *fakeService) *gin.Engine {
@@ -122,5 +128,35 @@ func TestListInfluencerPostsInvalidQuery(t *testing.T) {
 
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400 (%s)", rec.Code, rec.Body.String())
+	}
+}
+
+func TestGetInfluencerProfileSummaryOK(t *testing.T) {
+	er := 0.031
+	svc := &fakeService{summaryResp: model.ProfileSummaryResponse{
+		InfluencerID: "abc",
+		MetricsStrip: model.MetricsStrip{EngagementRate: &er},
+		Readiness:    model.Readiness{Fraction: 0.5, Fields: []model.ReadinessField{{Field: "profile", Present: true}}},
+	}}
+	rec := do(newRouter(svc), "/influencers/abc/profile-summary")
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 (%s)", rec.Code, rec.Body.String())
+	}
+	var got model.ProfileSummaryResponse
+	if err := json.Unmarshal(rec.Body.Bytes(), &got); err != nil {
+		t.Fatalf("body not JSON: %v", err)
+	}
+	if got.InfluencerID != "abc" || got.MetricsStrip.EngagementRate == nil || got.Readiness.Fraction != 0.5 {
+		t.Fatalf("body = %+v", got)
+	}
+}
+
+func TestGetInfluencerProfileSummaryMapsDomainError(t *testing.T) {
+	svc := &fakeService{summaryErr: errs.New(errs.KindInvalid, "metrics.invalid_influencer_id", "influencer id must be a uuid")}
+	rec := do(newRouter(svc), "/influencers/bad/profile-summary")
+
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400", rec.Code)
 	}
 }

@@ -12,4 +12,5 @@ import (
 type MetricsService interface {
 	GetInfluencerMetrics(ctx context.Context, id string, req model.MetricSeriesRequest) (model.MetricSeriesResponse, error)
 	ListInfluencerPosts(ctx context.Context, id string, req model.ListPostsRequest) ([]model.PostResponse, error)
+	GetInfluencerProfileSummary(ctx context.Context, id string) (model.ProfileSummaryResponse, error)
 }

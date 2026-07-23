@@ -61,6 +61,23 @@ func (s *Service) ListInfluencerPosts(ctx context.Context, id string, req model.
 	return s.read.ListInfluencerPosts(ctx, id, req)
 }
 
+// GetInfluencerProfileSummary validates the influencer id and returns the honest
+// result-page summary (audience snapshot, verified-metrics strip, readiness
+// meter). A malformed id is a clean KindInvalid rather than a database error.
+func (s *Service) GetInfluencerProfileSummary(ctx context.Context, id string) (model.ProfileSummaryResponse, error) {
+	if _, err := uuid.Parse(id); err != nil {
+		return model.ProfileSummaryResponse{}, errs.New(errs.KindInvalid, "metrics.invalid_influencer_id", "influencer id must be a uuid")
+	}
+	return s.read.GetInfluencerProfileSummary(ctx, id)
+}
+
+// InstagramFollowerSeries returns the influencer's follower time series (oldest
+// first) for the metrics module's facade. The id is already typed, so no string
+// parse is needed here.
+func (s *Service) InstagramFollowerSeries(ctx context.Context, influencerID uuid.UUID) ([]model.FollowerPoint, error) {
+	return s.read.FollowerSeries(ctx, influencerID)
+}
+
 // pendingComment is a comment whose author has already been hashed but whose
 // post foreign key is not yet resolved. The hash is computed before the write
 // transaction opens; the post id is filled in once the posts are upserted.
@@ -97,6 +114,7 @@ func (s *Service) Ingest(ctx context.Context, influencerID, auditJobID uuid.UUID
 			PostedAt:       nonZeroTime(p.PublishedAt),
 			Permalink:      nonEmpty(p.URL),
 			Caption:        nonEmpty(p.Caption),
+			MediaType:      nonEmpty(p.MediaType),
 			LikeCount:      p.Likes,
 			CommentCount:   p.Comments,
 			ShareCount:     p.Shares,

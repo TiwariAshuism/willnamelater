@@ -20,4 +20,7 @@ type MetricsAPI interface {
 
 	// GET /influencers/:id/posts
 	ListInfluencerPosts(ctx context.Context, id string, req model.ListPostsRequest) ([]model.PostResponse, error)
+
+	// GET /influencers/:id/profile-summary
+	GetInfluencerProfileSummary(ctx context.Context, id string) (model.ProfileSummaryResponse, error)
 }

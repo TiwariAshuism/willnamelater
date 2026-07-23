@@ -666,7 +666,7 @@ func TestConsistencyNeedsData(t *testing.T) {
 	t.Parallel()
 
 	bare := []connector.Snapshot{{Platform: connector.PlatformYouTube, Followers: 10_000}}
-	if s := consistencySubscore(bare); s.Support != 0 || !approx(s.Value, 50) {
+	if s := consistencySubscore(bare, nil); s.Support != 0 || !approx(s.Value, 50) {
 		t.Fatalf("bare consistency = %+v, want neutral zero-confidence", s)
 	}
 
@@ -681,7 +681,7 @@ func TestConsistencyNeedsData(t *testing.T) {
 			{At: base.AddDate(0, 0, 3), Name: "followers", Value: 10_300},
 		},
 	}}
-	s := consistencySubscore(steady)
+	s := consistencySubscore(steady, nil)
 	if s.Support <= 0 {
 		t.Fatalf("steady consistency coverage = %v, want > 0", s.Support)
 	}
@@ -703,8 +703,8 @@ func TestConsistencySpikyLowerThanSteady(t *testing.T) {
 		}
 		return []connector.Snapshot{{Platform: connector.PlatformYouTube, Followers: int64(vals[len(vals)-1]), Metrics: pts}}
 	}
-	steady := consistencySubscore(series(10_000, 10_100, 10_200, 10_300))
-	spiky := consistencySubscore(series(10_000, 25_000, 11_000, 40_000))
+	steady := consistencySubscore(series(10_000, 10_100, 10_200, 10_300), nil)
+	spiky := consistencySubscore(series(10_000, 25_000, 11_000, 40_000), nil)
 	if spiky.Value > steady.Value {
 		t.Fatalf("spiky %v should not exceed steady %v", spiky.Value, steady.Value)
 	}
@@ -722,6 +722,77 @@ func TestContentDepthRewardsInteraction(t *testing.T) {
 	}
 	if s := contentSubscore(nil); s.Support != 0 {
 		t.Fatalf("no posts should be zero-confidence, got %+v", s)
+	}
+}
+
+// TestReelsRetentionSubscore covers the Reels watch-time signal: dropped when no
+// Reels watch time was pulled, measured (and rewarding longer watch) when it was.
+func TestReelsRetentionSubscore(t *testing.T) {
+	t.Parallel()
+
+	if s := reelsRetentionSubscore([]connector.Snapshot{{Followers: 10_000}}); s.Support != 0 {
+		t.Fatalf("no reels watch time should drop the signal, got support %v", s.Support)
+	}
+	short := reelsRetentionSubscore([]connector.Snapshot{{Metrics: []connector.MetricPoint{
+		{Name: "reels_watch_time", Value: 5}, {Name: "reels_watch_time", Value: 6},
+	}}})
+	long := reelsRetentionSubscore([]connector.Snapshot{{Metrics: []connector.MetricPoint{
+		{Name: "reels_watch_time", Value: 25}, {Name: "reels_watch_time", Value: 28},
+	}}})
+	if short.Support <= 0 || short.SupportKind != contract.SupportCoverage || short.Basis != contract.BasisClosedForm {
+		t.Fatalf("reels present = %+v, want measured coverage/closed_form", short)
+	}
+	if long.Value <= short.Value {
+		t.Fatalf("longer watch time should score higher: long %v vs short %v", long.Value, short.Value)
+	}
+}
+
+// TestFormatDiversity covers the Consistency format-diversity sub-signal: dropped
+// when no post reports a media type, and rewarding more distinct formats.
+func TestFormatDiversity(t *testing.T) {
+	t.Parallel()
+
+	if _, _, ok := formatDiversity([]connector.Snapshot{{Posts: []connector.Post{{Likes: 1}}}}); ok {
+		t.Fatal("no media types should drop the format-diversity signal")
+	}
+	oneV, _, ok1 := formatDiversity([]connector.Snapshot{{Posts: []connector.Post{
+		{MediaType: "IMAGE"}, {MediaType: "IMAGE"},
+	}}})
+	threeV, _, ok3 := formatDiversity([]connector.Snapshot{{Posts: []connector.Post{
+		{MediaType: "IMAGE"}, {MediaType: "VIDEO"}, {MediaType: "CAROUSEL_ALBUM"},
+	}}})
+	if !ok1 || !ok3 {
+		t.Fatal("typed posts should produce a format-diversity signal")
+	}
+	if threeV <= oneV {
+		t.Fatalf("three formats should outscore one: %v vs %v", threeV, oneV)
+	}
+}
+
+// TestGrowthSmoothnessUsesHistory pins that follower-growth spike detection fires
+// across REPEATED audits: a single snapshot point plus two prior readings from the
+// metric store makes a three-point series, and duplicate (current) readings are
+// deduped rather than scored as a zero-growth interval.
+func TestGrowthSmoothnessUsesHistory(t *testing.T) {
+	t.Parallel()
+
+	base := time.Date(2026, 1, 10, 0, 0, 0, 0, time.UTC)
+	snap := []connector.Snapshot{{Metrics: []connector.MetricPoint{
+		{At: base.AddDate(0, 0, 2), Name: "followers", Value: 10_200},
+	}}}
+	// Fewer than three points from the snapshot alone -> no growth signal.
+	if _, _, ok := growthSmoothness(snap, nil); ok {
+		t.Fatal("a single follower point must not produce a growth signal")
+	}
+	history := []connector.MetricPoint{
+		{At: base, Name: "followers", Value: 10_000},
+		{At: base.AddDate(0, 0, 1), Name: "followers", Value: 10_100},
+		// A duplicate of the snapshot's current reading (already persisted) — must be
+		// deduped, not counted as a second identical point.
+		{At: base.AddDate(0, 0, 2), Name: "followers", Value: 10_200},
+	}
+	if _, _, ok := growthSmoothness(snap, history); !ok {
+		t.Fatal("snapshot + history should form a >=3-point series and fire the growth signal")
 	}
 }
 

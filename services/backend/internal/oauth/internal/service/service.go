@@ -27,6 +27,11 @@ type Service struct {
 	users       UserProvisioner
 	influencers InfluencerProvisioner
 	sessions    SessionIssuer
+	// auditStarter is the OPTIONAL auto-audit trigger for the OAuth-as-signup
+	// flow. It may be nil (signup works identically without it, the creator just
+	// runs the audit manually); when set, CallbackSignup calls it best-effort once
+	// the account exists.
+	auditStarter AuditStarter
 }
 
 var (
@@ -41,6 +46,11 @@ var (
 // required: signup is a first-class capability of this module, so a deployment
 // that cannot provision an account should fail to start rather than 500 on the
 // first anonymous connect.
+//
+// auditStarter is OPTIONAL (nil is allowed): it auto-submits an audit after a
+// signup so the creator gets a score without a manual step. Signup succeeds
+// identically when it is nil or fails, so it is deliberately excluded from the
+// required-collaborator check.
 func New(
 	cfg Config,
 	connectors *connector.Config,
@@ -53,6 +63,7 @@ func New(
 	users UserProvisioner,
 	influencers InfluencerProvisioner,
 	sessions SessionIssuer,
+	auditStarter AuditStarter,
 ) (*Service, error) {
 	if err := cfg.validate(); err != nil {
 		return nil, err
@@ -70,17 +81,18 @@ func New(
 	}
 
 	return &Service{
-		cfg:         cfg,
-		platforms:   platforms,
-		identity:    identity,
-		states:      states,
-		tokens:      tokens,
-		sealer:      sealer,
-		provider:    provider,
-		secrets:     secrets,
-		users:       users,
-		influencers: influencers,
-		sessions:    sessions,
+		cfg:          cfg,
+		platforms:    platforms,
+		identity:     identity,
+		states:       states,
+		tokens:       tokens,
+		sealer:       sealer,
+		provider:     provider,
+		secrets:      secrets,
+		users:        users,
+		influencers:  influencers,
+		sessions:     sessions,
+		auditStarter: auditStarter,
 	}, nil
 }
 

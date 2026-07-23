@@ -59,6 +59,19 @@ type SessionIssuer interface {
 	IssueSession(ctx context.Context, userID uuid.UUID) (model.AuthSession, error)
 }
 
+// AuditStarter kicks off an audit for a just-provisioned account so the creator
+// lands on a score without a manual step (the PRD's landing→score funnel). It is
+// a CONSUMER-SIDE PORT the composition root adapts onto the audit module, so
+// oauth never imports audit.
+//
+// It is OPTIONAL: the signup callback calls it BEST-EFFORT after the account
+// exists and a nil starter (or a failure) is not fatal — the creator can still
+// run the audit from the dashboard. It takes only the owning user and influencer
+// ids; a decrypted platform token is never handed to it.
+type AuditStarter interface {
+	StartAudit(ctx context.Context, ownerUserID, influencerID uuid.UUID) error
+}
+
 // SignupService is the OAuth-as-signup surface the hand-written signup handler
 // depends on. It is deliberately separate from the generated OAuthService so the
 // existing connect handler and its contract are untouched.

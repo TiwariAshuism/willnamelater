@@ -13,6 +13,8 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/hibiken/asynq"
@@ -25,6 +27,16 @@ import (
 // auditUnit is the quota unit an audit consumes. It is the string the billing
 // quota service recognises for a single audit.
 const auditUnit = "audit"
+
+// signupAuditPlatform is the single platform an auto-submitted signup audit
+// requests. OAuth-as-signup only ever connects Instagram, so the audit it kicks
+// off is scoped to it.
+const signupAuditPlatform = "instagram"
+
+// autoIdempotencyBucket coarsens the server-side idempotency key an owner-scoped
+// submit derives from time, so a signup flow retried within the same bucket
+// reuses one job rather than creating duplicates.
+const autoIdempotencyBucket = time.Hour
 
 // Repository is the audit module's data-access contract. It is declared by the
 // service (its consumer) and satisfied by the repository package. Every method
@@ -162,6 +174,47 @@ func (s *Service) SubmitAudit(ctx context.Context, req model.SubmitAuditRequest)
 		return model.AuditResponse{}, errs.New(errs.KindInvalid, "audit.missing_idempotency_key", "idempotency key is required")
 	}
 
+	return s.submit(ctx, userID, influencerID, req.IdempotencyKey, req.RequestedPlatforms)
+}
+
+// SubmitForOwner submits an audit WITHOUT a request-scoped caller, for a flow
+// (OAuth-as-signup) that provisioned the account server-side and has no gin
+// context to read the caller from. The owning user and influencer are passed
+// explicitly and a server-side idempotency key is derived from the influencer and
+// a coarse time bucket, so the same signup retried within that bucket reuses one
+// job rather than creating duplicates. It requests only Instagram — the sole
+// platform the signup flow connects — and returns the new (or replayed) job id.
+//
+// It shares the caller-scoped submit's reserve→create→enqueue core, so quota is
+// consumed and released identically to a dashboard-initiated audit.
+func (s *Service) SubmitForOwner(ctx context.Context, ownerUserID, influencerID uuid.UUID) (string, error) {
+	if ownerUserID == uuid.Nil {
+		return "", errs.New(errs.KindInvalid, "audit.invalid_owner", "owner user id is required")
+	}
+	if influencerID == uuid.Nil {
+		return "", errs.New(errs.KindInvalid, "audit.invalid_influencer", "influencer id is required")
+	}
+
+	key := autoIdempotencyKey(influencerID)
+	resp, err := s.submit(ctx, ownerUserID, influencerID, key, []string{signupAuditPlatform})
+	if err != nil {
+		return "", err
+	}
+	return resp.ID, nil
+}
+
+// submit is the caller-agnostic reserve→create→enqueue core shared by
+// SubmitAudit (request-scoped) and SubmitForOwner (server-initiated). It takes
+// the resolved owner, subject, idempotency key, and requested platforms so the
+// two entry points differ only in how those are obtained.
+//
+// The quota unit is consumed at reserve time, before any job exists, so an
+// over-quota caller (KindQuotaExceeded, rendered 402) never has a job created.
+// A key that already produced a job is a no-op: the existing job is returned and
+// the just-made reservation released, so a retry never double-charges. If the
+// job is created but its run task cannot be enqueued, the job is deleted and the
+// reservation released so the caller can retry cleanly.
+func (s *Service) submit(ctx context.Context, userID, influencerID uuid.UUID, idempotencyKey string, requestedPlatforms []string) (model.AuditResponse, error) {
 	reservation, err := s.quota.Reserve(ctx, userID, auditUnit)
 	if err != nil {
 		// KindQuotaExceeded flows straight through to a 402; no job is created.
@@ -171,8 +224,8 @@ func (s *Service) SubmitAudit(ctx context.Context, req model.SubmitAuditRequest)
 	job, created, err := s.repo.CreateJob(ctx, model.CreateJobParams{
 		UserID:             userID,
 		InfluencerID:       influencerID,
-		IdempotencyKey:     req.IdempotencyKey,
-		RequestedPlatforms: req.RequestedPlatforms,
+		IdempotencyKey:     idempotencyKey,
+		RequestedPlatforms: requestedPlatforms,
 	})
 	if err != nil {
 		// The job was not created, so the reserved unit must go back.
@@ -196,6 +249,14 @@ func (s *Service) SubmitAudit(ctx context.Context, req model.SubmitAuditRequest)
 	}
 
 	return model.ToAuditResponse(job, nil), nil
+}
+
+// autoIdempotencyKey derives a server-side idempotency key from the influencer
+// and a coarse time bucket, so a signup flow retried within the same bucket
+// reuses one audit job rather than spawning duplicates.
+func autoIdempotencyKey(influencerID uuid.UUID) string {
+	bucket := time.Now().UTC().Truncate(autoIdempotencyBucket).Unix()
+	return fmt.Sprintf("auto:%s:%d", influencerID, bucket)
 }
 
 // GetAudit returns the caller's job by id, projecting its status and per-platform

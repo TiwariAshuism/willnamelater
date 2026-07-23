@@ -24,10 +24,18 @@ type fakeReadRepo struct {
 	metricsErr   error
 	postsResp    []model.PostResponse
 	postsErr     error
+	summaryResp  model.ProfileSummaryResponse
+	summaryErr   error
+	seriesResp   []model.FollowerPoint
+	seriesErr    error
 	gotMetricsID string
 	gotPostsID   string
+	gotSummaryID string
+	gotSeriesID  uuid.UUID
 	metricsCalls int
 	postsCalls   int
+	summaryCalls int
+	seriesCalls  int
 }
 
 func (f *fakeReadRepo) GetInfluencerMetrics(_ context.Context, id string, _ model.MetricSeriesRequest) (model.MetricSeriesResponse, error) {
@@ -40,6 +48,18 @@ func (f *fakeReadRepo) ListInfluencerPosts(_ context.Context, id string, _ model
 	f.postsCalls++
 	f.gotPostsID = id
 	return f.postsResp, f.postsErr
+}
+
+func (f *fakeReadRepo) GetInfluencerProfileSummary(_ context.Context, id string) (model.ProfileSummaryResponse, error) {
+	f.summaryCalls++
+	f.gotSummaryID = id
+	return f.summaryResp, f.summaryErr
+}
+
+func (f *fakeReadRepo) FollowerSeries(_ context.Context, influencerID uuid.UUID) ([]model.FollowerPoint, error) {
+	f.seriesCalls++
+	f.gotSeriesID = influencerID
+	return f.seriesResp, f.seriesErr
 }
 
 type fakeIngestRepo struct {
@@ -193,6 +213,51 @@ func TestListInfluencerPosts(t *testing.T) {
 	})
 }
 
+func TestGetInfluencerProfileSummary(t *testing.T) {
+	valid := uuid.NewString()
+
+	t.Run("malformed id is invalid and never reaches the repo", func(t *testing.T) {
+		read := &fakeReadRepo{}
+		svc, _ := newTestService(t, read, &fakeIngestRepo{}, &fakeSaltStore{})
+		if _, err := svc.GetInfluencerProfileSummary(context.Background(), "nope"); errs.KindOf(err) != errs.KindInvalid {
+			t.Fatalf("kind = %v, want Invalid", errs.KindOf(err))
+		}
+		if read.summaryCalls != 0 {
+			t.Fatalf("repository called for an invalid id")
+		}
+	})
+
+	t.Run("valid id delegates", func(t *testing.T) {
+		read := &fakeReadRepo{summaryResp: model.ProfileSummaryResponse{InfluencerID: valid}}
+		svc, _ := newTestService(t, read, &fakeIngestRepo{}, &fakeSaltStore{})
+		got, err := svc.GetInfluencerProfileSummary(context.Background(), valid)
+		if err != nil {
+			t.Fatalf("unexpected error: %v", err)
+		}
+		if got.InfluencerID != valid || read.gotSummaryID != valid {
+			t.Fatalf("summary = %+v, gotID = %q", got, read.gotSummaryID)
+		}
+	})
+}
+
+func TestInstagramFollowerSeries(t *testing.T) {
+	id := uuid.New()
+	want := []model.FollowerPoint{
+		{At: time.Date(2026, 5, 1, 0, 0, 0, 0, time.UTC), Followers: 100},
+		{At: time.Date(2026, 5, 2, 0, 0, 0, 0, time.UTC), Followers: 110},
+	}
+	read := &fakeReadRepo{seriesResp: want}
+	svc, _ := newTestService(t, read, &fakeIngestRepo{}, &fakeSaltStore{})
+
+	got, err := svc.InstagramFollowerSeries(context.Background(), id)
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	if len(got) != 2 || got[1].Followers != 110 || read.gotSeriesID != id {
+		t.Fatalf("series = %+v, gotID = %v", got, read.gotSeriesID)
+	}
+}
+
 // --- ingest --------------------------------------------------------------
 
 func TestIngestValidatesIDs(t *testing.T) {
@@ -222,8 +287,8 @@ func TestIngestPersistsAndPseudonymizes(t *testing.T) {
 			{At: time.Now(), Name: "subscribers", Value: 1010},
 		},
 		Posts: []connector.Post{
-			{ID: "postA", URL: "https://x/postA", PublishedAt: time.Now().Add(-48 * time.Hour), Caption: "a", Likes: 5, Comments: 2},
-			{ID: "postB", Likes: 0}, // zero counters, no URL/caption/time -> NULLs
+			{ID: "postA", URL: "https://x/postA", PublishedAt: time.Now().Add(-48 * time.Hour), Caption: "a", MediaType: "IMAGE", Likes: 5, Comments: 2},
+			{ID: "postB", Likes: 0}, // zero counters, no URL/caption/time/media-type -> NULLs
 		},
 		Comments: []connector.Comment{
 			{PostID: "postA", AuthorID: rawAuthor, Text: "nice", At: time.Now()},
@@ -254,8 +319,11 @@ func TestIngestPersistsAndPseudonymizes(t *testing.T) {
 	if postA.Permalink == nil || *postA.Permalink != "https://x/postA" || postA.Caption == nil || postA.PostedAt == nil {
 		t.Fatalf("postA should carry permalink/caption/posted_at: %+v", postA)
 	}
+	if postA.MediaType == nil || *postA.MediaType != "IMAGE" {
+		t.Fatalf("postA should carry its media type: %+v", postA)
+	}
 	postB := ingest.posts[1]
-	if postB.Permalink != nil || postB.Caption != nil || postB.PostedAt != nil {
+	if postB.Permalink != nil || postB.Caption != nil || postB.PostedAt != nil || postB.MediaType != nil {
 		t.Fatalf("postB absent fields must be nil (NULL), got %+v", postB)
 	}
 

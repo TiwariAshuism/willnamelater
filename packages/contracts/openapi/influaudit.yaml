@@ -772,6 +772,21 @@ components:
       - display_name
       - niche
       type: object
+    metrics.AudienceSnapshot:
+      properties:
+        age:
+          additionalProperties:
+            type: number
+          type: object
+        country:
+          additionalProperties:
+            type: number
+          type: object
+        gender:
+          additionalProperties:
+            type: number
+          type: object
+      type: object
     metrics.ListPostsRequest:
       properties:
         Limit:
@@ -848,6 +863,27 @@ components:
       - influencer_id
       - series
       type: object
+    metrics.MetricsStrip:
+      properties:
+        engagement_rate:
+          nullable: true
+          type: number
+        followers:
+          nullable: true
+          type: integer
+        posting_cadence_days:
+          nullable: true
+          type: number
+        reach_ratio:
+          nullable: true
+          type: number
+        save_rate:
+          nullable: true
+          type: number
+        share_rate:
+          nullable: true
+          type: number
+      type: object
     metrics.PostResponse:
       properties:
         caption:
@@ -900,6 +936,44 @@ components:
       - id
       - platform
       - platform_post_id
+      type: object
+    metrics.ProfileSummaryResponse:
+      properties:
+        audience:
+          $ref: "#/components/schemas/metrics.AudienceSnapshot"
+        influencer_id:
+          type: string
+        metrics_strip:
+          $ref: "#/components/schemas/metrics.MetricsStrip"
+        readiness:
+          $ref: "#/components/schemas/metrics.Readiness"
+      required:
+      - audience
+      - influencer_id
+      - metrics_strip
+      - readiness
+      type: object
+    metrics.Readiness:
+      properties:
+        fields:
+          items:
+            $ref: "#/components/schemas/metrics.ReadinessField"
+          type: array
+        fraction:
+          type: number
+      required:
+      - fields
+      - fraction
+      type: object
+    metrics.ReadinessField:
+      properties:
+        field:
+          type: string
+        present:
+          type: boolean
+      required:
+      - field
+      - present
       type: object
     mlops.CanaryItem:
       properties:
@@ -2485,6 +2559,22 @@ paths:
                 items:
                   $ref: "#/components/schemas/metrics.PostResponse"
                 type: array
+          description: OK
+  /influencers/{id}/profile-summary:
+    get:
+      operationId: GetInfluencerProfileSummary
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/metrics.ProfileSummaryResponse"
           description: OK
   /influencers/{id}/score:
     get:

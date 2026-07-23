@@ -67,6 +67,10 @@ connectors:
         - instagram_manage_comments
         - pages_read_engagement
         - pages_show_list
+        # Page-linkage plumbing (PRD §9): resolve and manage the Facebook Page an
+        # Instagram Business/Creator account is linked to, which the OAuth exchange
+        # traverses to reach the IG account. Widens the Meta App Review surface.
+        - business_management
     capabilities:
       - profile
       - metrics

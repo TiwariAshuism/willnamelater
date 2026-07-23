@@ -3,8 +3,11 @@ package service
 import (
 	"context"
 	"errors"
+	"log/slog"
 	"net/mail"
 	"strings"
+
+	"github.com/google/uuid"
 
 	"github.com/getnyx/influaudit/backend/internal/oauth/internal/model"
 	"github.com/getnyx/influaudit/backend/internal/platform/errs"
@@ -141,12 +144,13 @@ func (s *Service) CallbackSignup(ctx context.Context, params CallbackParams) (mo
 			"could not create the account")
 	}
 
-	if _, err := s.influencers.UpsertInstagramInfluencer(ctx, InfluencerSignup{
+	influencerID, err := s.influencers.UpsertInstagramInfluencer(ctx, InfluencerSignup{
 		OwnerUserID:        userID,
 		InstagramAccountID: res.ProviderAccountID,
 		Handle:             res.ProviderAccountHandle,
 		ProviderUserID:     res.ProviderUserID,
-	}); err != nil {
+	})
+	if err != nil {
 		return model.AuthSession{}, errs.Wrap(err, errs.KindUnavailable, "oauth.provision_influencer_failed",
 			"could not create the creator profile")
 	}
@@ -165,7 +169,31 @@ func (s *Service) CallbackSignup(ctx context.Context, params CallbackParams) (mo
 		return model.AuthSession{}, errs.Wrap(err, errs.KindUnavailable, "oauth.session_failed",
 			"could not establish a session")
 	}
+
+	// The account now fully exists. Auto-submit an audit so the creator lands on a
+	// score without a manual step (PRD landing→score funnel). This is BEST-EFFORT:
+	// a nil starter or a failure must never fail the signup — the creator can still
+	// run the audit from the dashboard — so the error is logged and swallowed. Only
+	// the owner and influencer ids cross this boundary; no decrypted token does.
+	s.startAuditBestEffort(ctx, userID, influencerID)
+
 	return session, nil
+}
+
+// startAuditBestEffort auto-submits the post-signup audit. It is a no-op when no
+// starter is wired, and any failure is logged and swallowed: the audit is a
+// convenience on top of a completed signup, never a precondition of it. It is
+// handed only the owner and influencer ids — never a decrypted platform token.
+func (s *Service) startAuditBestEffort(ctx context.Context, ownerUserID, influencerID uuid.UUID) {
+	if s.auditStarter == nil {
+		return
+	}
+	if err := s.auditStarter.StartAudit(ctx, ownerUserID, influencerID); err != nil {
+		slog.WarnContext(ctx, "auto-audit on signup failed (signup unaffected)",
+			slog.String("user_id", ownerUserID.String()),
+			slog.String("influencer_id", influencerID.String()),
+			slog.Any("error", err))
+	}
 }
 
 // signupRedirectURI is the callback the provider redirects a signup back to. It

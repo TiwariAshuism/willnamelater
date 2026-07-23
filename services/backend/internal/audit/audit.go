@@ -87,6 +87,18 @@ func (m *Module) RegisterTasks(mux *asynq.ServeMux) {
 	mux.HandleFunc(service.TaskAuditRun, m.svc.ProcessRun)
 }
 
+// SubmitAuditForOwner submits an audit on behalf of an already-provisioned
+// account, WITHOUT a request-scoped caller. It exists for the OAuth-as-signup
+// flow, which creates the user + influencer server-side and has no gin context to
+// read a caller from: the owning user and the influencer are passed explicitly.
+// A server-side idempotency key is generated so a retried signup reuses one job,
+// and quota is reserved exactly as a dashboard-initiated audit. It requests only
+// Instagram, the sole platform signup connects, and returns the new (or replayed)
+// audit job id. It is not an HTTP route.
+func (m *Module) SubmitAuditForOwner(ctx context.Context, ownerUserID, influencerID uuid.UUID) (auditID string, err error) {
+	return m.svc.SubmitForOwner(ctx, ownerUserID, influencerID)
+}
+
 // View is the audit job in the shape the report module needs. It is returned
 // already scoped to the authenticated caller.
 type View struct {

@@ -38,6 +38,12 @@ type (
 	// Profiles is the port through which scoring resolves an influencer's niche.
 	// The composition root wires it to the influencer module.
 	Profiles = contract.Profiles
+	// MetricHistory is the port through which scoring loads an influencer's prior
+	// follower readings for growth-spike detection. The composition root wires it
+	// to the metrics module; it may be nil.
+	MetricHistory = contract.MetricHistory
+	// FollowerReading is one historical follower-count reading.
+	FollowerReading = contract.FollowerReading
 )
 
 // Module is the wired scoring module. Construct it with New and mount it with
@@ -48,10 +54,11 @@ type Module struct {
 }
 
 // New wires the module over the shared pool. profiles resolves an influencer's
-// niche for benchmark selection and may be nil, in which case scoring uses the
-// baseline cohort for every audit.
-func New(pool *db.Pool, profiles Profiles) *Module {
-	svc := service.New(repository.New(pool), profiles)
+// niche for benchmark selection and may be nil (baseline cohort). history loads
+// prior follower readings for growth-spike detection and may also be nil (growth
+// then rests on each audit's own snapshot).
+func New(pool *db.Pool, profiles Profiles, history MetricHistory) *Module {
+	svc := service.New(repository.New(pool), profiles, history)
 	return &Module{
 		handler: handler.New(svc),
 		service: svc,

@@ -31,9 +31,13 @@ type PostRow struct {
 	AuditJobID     uuid.UUID
 	// Nullable columns are pointers so a missing value is written as SQL NULL,
 	// never coerced to a zero that reads as real data downstream.
-	PostedAt     *time.Time
-	Permalink    *string
-	Caption      *string
+	PostedAt  *time.Time
+	Permalink *string
+	Caption   *string
+	// MediaType is the platform's content-format label (image/video/carousel/
+	// reel/short/story/text), or nil when the platform did not report one — an
+	// absent format is SQL NULL, never a fabricated label.
+	MediaType    *string
 	LikeCount    int64
 	CommentCount int64
 	ShareCount   int64

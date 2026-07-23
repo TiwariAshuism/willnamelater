@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { cookies } from "next/headers";
 import { signupCallback } from "@/lib/api/signup";
+import { recordEvent } from "@/lib/api/funnel";
 import { writeSession } from "@/lib/session";
 import { ApiError } from "@/lib/api/http";
 import { OAUTH_STATE_COOKIE } from "@/app/api/oauth/[provider]/start/route";
@@ -45,6 +46,14 @@ export async function GET(request: Request): Promise<NextResponse> {
     const session = await signupCallback({ code, state });
     store.delete(OAUTH_STATE_COOKIE);
     await writeSession(session);
+    // Record the OAuth-grant funnel step (PRD §10: landing→connect start→
+    // prerequisite pass→OAuth grant→score shown). Best-effort: analytics must
+    // never block or fail landing the newly signed-in creator.
+    try {
+      await recordEvent({ event_type: "oauth_grant" });
+    } catch {
+      // Swallow: a funnel-event write failure is not worth failing signup over.
+    }
     // The creator is now signed in; land them on their dashboard where the audit
     // runs and the result appears.
     const done = new URL("/dashboard", request.url);

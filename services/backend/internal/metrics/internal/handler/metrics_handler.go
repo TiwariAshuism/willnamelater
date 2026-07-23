@@ -28,6 +28,7 @@ func New(svc service.MetricsService) *MetricsHandler {
 func (h *MetricsHandler) Register(r gin.IRouter) {
 	r.GET("/influencers/:id/metrics", h.getInfluencerMetrics)
 	r.GET("/influencers/:id/posts", h.listInfluencerPosts)
+	r.GET("/influencers/:id/profile-summary", h.getInfluencerProfileSummary)
 }
 
 // getInfluencerMetrics handles GET /influencers/:id/metrics.
@@ -55,6 +56,16 @@ func (h *MetricsHandler) listInfluencerPosts(c *gin.Context) {
 	}
 
 	resp, err := h.svc.ListInfluencerPosts(c.Request.Context(), c.Param("id"), req)
+	if err != nil {
+		httpx.RenderError(c, err)
+		return
+	}
+	c.JSON(http.StatusOK, resp)
+}
+
+// getInfluencerProfileSummary handles GET /influencers/:id/profile-summary.
+func (h *MetricsHandler) getInfluencerProfileSummary(c *gin.Context) {
+	resp, err := h.svc.GetInfluencerProfileSummary(c.Request.Context(), c.Param("id"))
 	if err != nil {
 		httpx.RenderError(c, err)
 		return

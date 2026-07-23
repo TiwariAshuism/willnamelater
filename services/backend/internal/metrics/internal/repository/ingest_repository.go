@@ -51,11 +51,11 @@ func (r *ingestRepository) UpsertPosts(ctx context.Context, tx pgx.Tx, rows []mo
 		return result, nil
 	}
 
-	const cols = 11
+	const cols = 12
 	args := make([]any, 0, len(rows)*cols)
 	var b strings.Builder
 	b.WriteString(`INSERT INTO post (influencer_id, platform, platform_post_id, audit_job_id, ` +
-		`posted_at, permalink, caption, like_count, comment_count, share_count, view_count) VALUES `)
+		`posted_at, permalink, caption, media_type, like_count, comment_count, share_count, view_count) VALUES `)
 	for i, p := range rows {
 		if i > 0 {
 			b.WriteByte(',')
@@ -63,7 +63,7 @@ func (r *ingestRepository) UpsertPosts(ctx context.Context, tx pgx.Tx, rows []mo
 		appendRowPlaceholders(&b, i, cols)
 		args = append(args,
 			p.InfluencerID, p.Platform, p.PlatformPostID, p.AuditJobID,
-			p.PostedAt, p.Permalink, p.Caption, p.LikeCount, p.CommentCount, p.ShareCount, p.ViewCount)
+			p.PostedAt, p.Permalink, p.Caption, p.MediaType, p.LikeCount, p.CommentCount, p.ShareCount, p.ViewCount)
 	}
 	b.WriteString(` ON CONFLICT (platform, platform_post_id) DO UPDATE SET
 		influencer_id = EXCLUDED.influencer_id,
@@ -71,6 +71,7 @@ func (r *ingestRepository) UpsertPosts(ctx context.Context, tx pgx.Tx, rows []mo
 		posted_at     = EXCLUDED.posted_at,
 		permalink     = EXCLUDED.permalink,
 		caption       = EXCLUDED.caption,
+		media_type    = EXCLUDED.media_type,
 		like_count    = EXCLUDED.like_count,
 		comment_count = EXCLUDED.comment_count,
 		share_count   = EXCLUDED.share_count,

@@ -302,6 +302,14 @@ func (a *App) buildModules(connectors *connector.Config) error {
 	// nothing and carries no state.
 	influencerMod := influencer.New(a.Pool)
 
+	// The signup auto-audit is LATE-BOUND. oauth is constructed before audit (audit
+	// depends on oauth for its connection lookup), and audit-on-signup is the reverse
+	// edge, so the starter holds a nil audit module until audit is built below and
+	// fills it in. StartAudit is only ever called at runtime on a signup callback —
+	// long after boot — so the module is always set by then; before that it is a
+	// safe no-op.
+	signupAuditStarter := &oauthAuditStarter{}
+
 	oauthMod, err := oauth.New(
 		a.Pool,
 		a.Redis,
@@ -316,18 +324,23 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		oauthUserProvisioner{auth: authMod},
 		oauthInfluencerProvisioner{inf: influencerMod},
 		oauthSessionIssuer{auth: authMod},
+		// After the account exists, auto-submit its first audit (best-effort).
+		signupAuditStarter,
 	)
 	if err != nil {
 		return err
 	}
 
+	// metrics is built before scoring because scoring reads an influencer's prior
+	// follower series through it for growth-spike detection.
+	metricsMod := metrics.New(a.Pool, a.Cipher)
+
 	// scoring keys its benchmarks on (niche, tier). Tier it derives from live
 	// follower counts, but niche is a content category only the influencer module
 	// knows, so scoring reaches it through a Profiles port. influencer.NicheOf
-	// satisfies that port directly, so no adapter is needed.
-	scoringMod := scoring.New(a.Pool, influencerMod)
-
-	metricsMod := metrics.New(a.Pool, a.Cipher)
+	// satisfies that port directly. history loads prior follower readings for
+	// growth-spike detection, adapted onto the metrics module.
+	scoringMod := scoring.New(a.Pool, influencerMod, scoringMetricHistory{m: metricsMod})
 
 	// The ML client and the llm module are pure constructors — no dial at build —
 	// so they are safe to wire here alongside the modules the route tests build
@@ -372,6 +385,9 @@ func (a *App) buildModules(connectors *connector.Config) error {
 		// away from the score/fraud vector — it only feeds the report pill.
 		auditCommentClassifier{c: mlClient},
 	)
+
+	// Close the late-bound edge: the signup flow can now auto-submit an audit.
+	signupAuditStarter.audit = auditMod
 
 	// Object storage for published report PDFs. Constructing the client is pure
 	// (no dial), and it is skipped entirely when no endpoint is configured, so the
@@ -529,6 +545,40 @@ type oauthInfluencerProvisioner struct{ inf *influencer.Module }
 
 func (a oauthInfluencerProvisioner) UpsertInstagramInfluencer(ctx context.Context, in oauth.InfluencerSignup) (uuid.UUID, error) {
 	return a.inf.UpsertInstagramInfluencer(ctx, in.OwnerUserID, in.InstagramAccountID, in.Handle)
+}
+
+// oauthAuditStarter adapts audit.SubmitAuditForOwner onto oauth's AuditStarter so
+// a completed OAuth-as-signup auto-submits the creator's first audit. It is
+// LATE-BOUND: audit is constructed after oauth (audit depends on oauth), so the
+// composition root fills `audit` in once the audit module exists. StartAudit is a
+// safe no-op until then, and it is only ever called at runtime on a signup
+// callback — long after boot. It is best-effort: any error is returned to the
+// signup flow, which logs and swallows it so signup never fails.
+type oauthAuditStarter struct{ audit *audit.Module }
+
+func (a *oauthAuditStarter) StartAudit(ctx context.Context, ownerUserID, influencerID uuid.UUID) error {
+	if a.audit == nil {
+		return nil
+	}
+	_, err := a.audit.SubmitAuditForOwner(ctx, ownerUserID, influencerID)
+	return err
+}
+
+// scoringMetricHistory adapts metrics.InstagramFollowerSeries onto scoring's
+// MetricHistory port, so the consistency factor's growth-spike detection can read
+// an influencer's prior follower readings across repeated audits.
+type scoringMetricHistory struct{ m *metrics.Module }
+
+func (h scoringMetricHistory) FollowerSeries(ctx context.Context, influencerID uuid.UUID) ([]scoring.FollowerReading, error) {
+	points, err := h.m.InstagramFollowerSeries(ctx, influencerID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]scoring.FollowerReading, len(points))
+	for i, p := range points {
+		out[i] = scoring.FollowerReading{At: p.At, Followers: p.Followers}
+	}
+	return out, nil
 }
 
 // oauthSessionIssuer adapts auth.IssueSession onto oauth's SessionIssuer, so a

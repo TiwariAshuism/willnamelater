@@ -133,7 +133,7 @@ func sampleSnapshots() []connector.Snapshot {
 func TestScoreRequiresAuditID(t *testing.T) {
 	t.Parallel()
 
-	svc := New(bootstrapRepo(), nil)
+	svc := New(bootstrapRepo(), nil, nil)
 	_, err := svc.Score(context.Background(), uuid.Nil, uuid.New(), sampleSnapshots(), contract.FraudInput{})
 	if errs.KindOf(err) != errs.KindInvalid {
 		t.Fatalf("kind = %v, want KindInvalid", errs.KindOf(err))
@@ -156,7 +156,7 @@ func TestScorePersistsAndStamps(t *testing.T) {
 	nicheBench.Source = "corpus"
 	repo.benchmarks[key("beauty", "micro")] = nicheBench
 
-	svc := New(repo, fakeProfiles{niche: "beauty"})
+	svc := New(repo, fakeProfiles{niche: "beauty"}, nil)
 	auditID, infID := uuid.New(), uuid.New()
 
 	// A low composite risk score (0-100) with no clique signal — the ordinary
@@ -197,7 +197,7 @@ func TestScoreFallsBackToBaseline(t *testing.T) {
 	t.Parallel()
 
 	repo := bootstrapRepo()
-	svc := New(repo, fakeProfiles{niche: "gaming"})
+	svc := New(repo, fakeProfiles{niche: "gaming"}, nil)
 
 	score, err := svc.Score(context.Background(), uuid.New(), uuid.New(), sampleSnapshots(), contract.FraudInput{})
 	if err != nil {
@@ -213,7 +213,7 @@ func TestScoreFallsBackToBaseline(t *testing.T) {
 func TestScoreDefaultsNicheWhenNoPort(t *testing.T) {
 	t.Parallel()
 
-	svc := New(bootstrapRepo(), nil)
+	svc := New(bootstrapRepo(), nil, nil)
 	score, err := svc.Score(context.Background(), uuid.New(), uuid.New(), sampleSnapshots(), contract.FraudInput{})
 	if err != nil {
 		t.Fatalf("score: %v", err)
@@ -228,7 +228,7 @@ func TestScoreDefaultsNicheWhenNoPort(t *testing.T) {
 func TestScorePropagatesNicheError(t *testing.T) {
 	t.Parallel()
 
-	svc := New(bootstrapRepo(), fakeProfiles{err: errors.New("influencer service down")})
+	svc := New(bootstrapRepo(), fakeProfiles{err: errors.New("influencer service down")}, nil)
 	_, err := svc.Score(context.Background(), uuid.New(), uuid.New(), sampleSnapshots(), contract.FraudInput{})
 	if errs.KindOf(err) != errs.KindUnavailable {
 		t.Fatalf("kind = %v, want KindUnavailable", errs.KindOf(err))
@@ -241,7 +241,7 @@ func TestScoreErrorsWithoutWeights(t *testing.T) {
 	t.Parallel()
 
 	repo := &fakeRepo{weights: map[string]engine.Weights{}, benchmarks: map[string]engine.Benchmark{}}
-	svc := New(repo, nil)
+	svc := New(repo, nil, nil)
 	_, err := svc.Score(context.Background(), uuid.New(), uuid.New(), sampleSnapshots(), contract.FraudInput{})
 	if errs.KindOf(err) != errs.KindUnavailable {
 		t.Fatalf("kind = %v, want KindUnavailable", errs.KindOf(err))
@@ -252,7 +252,7 @@ func TestEnsureBootstrapSeedsEveryTier(t *testing.T) {
 	t.Parallel()
 
 	repo := &fakeRepo{}
-	svc := New(repo, nil)
+	svc := New(repo, nil, nil)
 	if err := svc.EnsureBootstrap(context.Background()); err != nil {
 		t.Fatalf("bootstrap: %v", err)
 	}
@@ -291,7 +291,7 @@ func TestRecomputeCorpusPublishesReadyCells(t *testing.T) {
 		observationsFor("beauty", "micro", corpusMinDistinctInfluencers),
 		observationsFor("gaming", "mid", corpusMinDistinctInfluencers+5)...,
 	)
-	svc := New(repo, nil)
+	svc := New(repo, nil, nil)
 
 	n, err := svc.RecomputeCorpus(context.Background())
 	if err != nil {
@@ -333,7 +333,7 @@ func TestRecomputeCorpusIgnoresRepeatAuditsOfTheSameInfluencer(t *testing.T) {
 			VerificationTier: contract.VerificationVerified,
 		})
 	}
-	svc := New(repo, nil)
+	svc := New(repo, nil, nil)
 
 	n, err := svc.RecomputeCorpus(context.Background())
 	if err != nil {
@@ -356,7 +356,7 @@ func TestRecomputeCorpusExcludesUploadedProvenance(t *testing.T) {
 	for i := range repo.observations {
 		repo.observations[i].VerificationTier = contract.VerificationEstimated
 	}
-	svc := New(repo, nil)
+	svc := New(repo, nil, nil)
 
 	n, err := svc.RecomputeCorpus(context.Background())
 	if err != nil {
@@ -370,7 +370,7 @@ func TestRecomputeCorpusExcludesUploadedProvenance(t *testing.T) {
 func TestGetLatestScoreValidatesID(t *testing.T) {
 	t.Parallel()
 
-	svc := New(bootstrapRepo(), nil)
+	svc := New(bootstrapRepo(), nil, nil)
 	if _, err := svc.GetLatestScore(context.Background(), "not-a-uuid"); errs.KindOf(err) != errs.KindInvalid {
 		t.Fatalf("kind = %v, want KindInvalid", errs.KindOf(err))
 	}
@@ -403,7 +403,7 @@ func TestGetLatestScoreMapsRow(t *testing.T) {
 			}},
 		},
 	}
-	svc := New(repo, nil)
+	svc := New(repo, nil, nil)
 
 	resp, err := svc.GetLatestScore(context.Background(), infID.String())
 	if err != nil {

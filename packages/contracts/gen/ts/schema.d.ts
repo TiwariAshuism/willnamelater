@@ -692,6 +692,22 @@ export interface paths {
         patch?: never;
         trace?: never;
     };
+    "/influencers/{id}/profile-summary": {
+        parameters: {
+            query?: never;
+            header?: never;
+            path?: never;
+            cookie?: never;
+        };
+        get: operations["GetInfluencerProfileSummary"];
+        put?: never;
+        post?: never;
+        delete?: never;
+        options?: never;
+        head?: never;
+        patch?: never;
+        trace?: never;
+    };
     "/influencers/{id}/score": {
         parameters: {
             query?: never;
@@ -1214,6 +1230,17 @@ export interface components {
             display_name: string | null;
             niche: string | null;
         };
+        "metrics.AudienceSnapshot": {
+            age?: {
+                [key: string]: number;
+            };
+            country?: {
+                [key: string]: number;
+            };
+            gender?: {
+                [key: string]: number;
+            };
+        };
         "metrics.ListPostsRequest": {
             Limit: number;
             Offset: number;
@@ -1244,6 +1271,14 @@ export interface components {
             influencer_id: string;
             series: components["schemas"]["metrics.MetricSeries"][];
         };
+        "metrics.MetricsStrip": {
+            engagement_rate?: number | null;
+            followers?: number | null;
+            posting_cadence_days?: number | null;
+            reach_ratio?: number | null;
+            save_rate?: number | null;
+            share_rate?: number | null;
+        };
         "metrics.PostResponse": {
             caption?: string | null;
             comment_count?: number | null;
@@ -1262,6 +1297,20 @@ export interface components {
             save_count?: number | null;
             share_count?: number | null;
             view_count?: number | null;
+        };
+        "metrics.ProfileSummaryResponse": {
+            audience: components["schemas"]["metrics.AudienceSnapshot"];
+            influencer_id: string;
+            metrics_strip: components["schemas"]["metrics.MetricsStrip"];
+            readiness: components["schemas"]["metrics.Readiness"];
+        };
+        "metrics.Readiness": {
+            fields: components["schemas"]["metrics.ReadinessField"][];
+            fraction: number;
+        };
+        "metrics.ReadinessField": {
+            field: string;
+            present: boolean;
         };
         "mlops.CanaryItem": {
             active: boolean;
@@ -2732,6 +2781,28 @@ export interface operations {
                 };
                 content: {
                     "application/json": components["schemas"]["metrics.PostResponse"][];
+                };
+            };
+        };
+    };
+    GetInfluencerProfileSummary: {
+        parameters: {
+            query?: never;
+            header?: never;
+            path: {
+                id: string;
+            };
+            cookie?: never;
+        };
+        requestBody?: never;
+        responses: {
+            /** @description OK */
+            200: {
+                headers: {
+                    [name: string]: unknown;
+                };
+                content: {
+                    "application/json": components["schemas"]["metrics.ProfileSummaryResponse"];
                 };
             };
         };

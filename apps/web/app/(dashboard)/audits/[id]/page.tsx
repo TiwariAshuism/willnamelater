@@ -4,6 +4,7 @@ import { requireToken } from "@/lib/auth";
 import { getAudit } from "@/lib/api/audits";
 import { getReport } from "@/lib/api/report";
 import { getScoreHistory, getLatestScore } from "@/lib/api/scoring";
+import { getProfileSummary, type ProfileSummary } from "@/lib/api/profile";
 import { ApiError } from "@/lib/api/http";
 import { Card, CardTitle } from "@/components/ui/Card";
 import { AuditStatusBadge } from "@/components/audits/AuditStatusBadge";
@@ -13,6 +14,9 @@ import { ReportView } from "@/components/audits/ReportView";
 import { DownloadPdfButton } from "@/components/audits/DownloadPdfButton";
 import { ShareReport } from "@/components/audits/ShareReport";
 import { FactorCards } from "@/components/funnel/FactorCards";
+import { AudienceSnapshot } from "@/components/funnel/AudienceSnapshot";
+import { VerifiedMetricsStrip } from "@/components/funnel/VerifiedMetricsStrip";
+import { ReadinessMeter } from "@/components/funnel/ReadinessMeter";
 import { MediaKitCta } from "@/components/funnel/MediaKitCta";
 import { TrackView } from "@/components/funnel/TrackView";
 import type { Report, ScorePoint, ScoreResponse } from "@influaudit/contracts";
@@ -41,22 +45,23 @@ export default async function AuditDetailPage({
   let report: Report | null = null;
   let history: ScorePoint[] = [];
   let score: ScoreResponse | null = null;
+  let profile: ProfileSummary | null = null;
   if (resultReady) {
     const influencerId = audit.influencer_id;
-    const [reportResult, historyResult, scoreResult] = await Promise.allSettled([
-      getReport(id, token),
-      influencerId
-        ? getScoreHistory(influencerId, token)
-        : Promise.reject(new Error("no influencer id")),
-      influencerId
-        ? getLatestScore(influencerId, token)
-        : Promise.reject(new Error("no influencer id")),
-    ]);
+    const noInfluencer = () => Promise.reject(new Error("no influencer id"));
+    const [reportResult, historyResult, scoreResult, profileResult] =
+      await Promise.allSettled([
+        getReport(id, token),
+        influencerId ? getScoreHistory(influencerId, token) : noInfluencer(),
+        influencerId ? getLatestScore(influencerId, token) : noInfluencer(),
+        influencerId ? getProfileSummary(influencerId, token) : noInfluencer(),
+      ]);
     if (reportResult.status === "fulfilled") report = reportResult.value;
     if (historyResult.status === "fulfilled") {
       history = historyResult.value.points ?? [];
     }
     if (scoreResult.status === "fulfilled") score = scoreResult.value;
+    if (profileResult.status === "fulfilled") profile = profileResult.value;
   }
 
   return (
@@ -116,6 +121,31 @@ export default async function AuditDetailPage({
           <CardTitle className="mb-4">Score trend</CardTitle>
           <ScoreTrendChart points={history} />
         </Card>
+      )}
+
+      {/* Already-captured data surfaced for the result page (PRD §8): the verified
+          headline strip, the audience snapshot, and the media-kit readiness meter.
+          Every value here is measured or explicitly "not measured" — never a 0. */}
+      {profile && (
+        <>
+          <Card>
+            <CardTitle className="mb-1">Verified metrics</CardTitle>
+            <p className="mb-4 text-sm text-[var(--muted)]">
+              Pulled straight from your connected account. A metric we could not
+              measure shows &ldquo;not measured&rdquo; — never a zero.
+            </p>
+            <VerifiedMetricsStrip strip={profile.metrics_strip} />
+          </Card>
+
+          <Card>
+            <CardTitle className="mb-4">Audience snapshot</CardTitle>
+            <AudienceSnapshot audience={profile.audience} />
+          </Card>
+
+          <Card>
+            <ReadinessMeter readiness={profile.readiness} />
+          </Card>
+        </>
       )}
 
       {/* Per-factor breakdown with plain-language improvement lines (PRD §8). */}

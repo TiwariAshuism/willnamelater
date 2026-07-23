@@ -12,6 +12,7 @@ package metrics
 
 import (
 	"context"
+	"time"
 
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
@@ -54,4 +55,25 @@ func (m *Module) RegisterRoutes(r gin.IRouter) {
 // audit worker calls this after a fetch; it is not an HTTP route.
 func (m *Module) Ingest(ctx context.Context, influencerID, auditJobID uuid.UUID, snap connector.Snapshot) error {
 	return m.service.Ingest(ctx, influencerID, auditJobID, snap)
+}
+
+// FollowerPoint is one reading in an influencer's follower time series.
+type FollowerPoint struct {
+	At        time.Time
+	Followers float64
+}
+
+// InstagramFollowerSeries returns the influencer's follower history, oldest first,
+// for Instagram — falling back to any platform when Instagram has no points. It is
+// a read facade the scoring module consumes; this module only exposes it.
+func (m *Module) InstagramFollowerSeries(ctx context.Context, influencerID uuid.UUID) ([]FollowerPoint, error) {
+	rows, err := m.service.InstagramFollowerSeries(ctx, influencerID)
+	if err != nil {
+		return nil, err
+	}
+	out := make([]FollowerPoint, len(rows))
+	for i, r := range rows {
+		out[i] = FollowerPoint{At: r.At, Followers: r.Followers}
+	}
+	return out, nil
 }

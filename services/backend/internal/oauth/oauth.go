@@ -110,6 +110,17 @@ type SessionIssuer interface {
 	IssueSession(ctx context.Context, userID uuid.UUID) (Session, error)
 }
 
+// AuditStarter auto-submits an audit for a just-provisioned account so a new
+// creator lands on a score without a manual step. It is OPTIONAL: pass nil to
+// disable the auto-audit (signup still succeeds; the creator runs it from the
+// dashboard). The composition root adapts the audit module onto it — its
+// SubmitAuditForOwner matches this shape — so oauth still imports neither audit
+// nor any decrypted-token path. Its method set is identical to the service's own
+// AuditStarter port, so the value is threaded through directly.
+type AuditStarter interface {
+	StartAudit(ctx context.Context, ownerUserID, influencerID uuid.UUID) error
+}
+
 // influencerProvisionerAdapter bridges the public InfluencerProvisioner to the
 // service-internal port, converting the narrow input across the package boundary
 // (the two structs are field-identical; the internal one exists only because Go
@@ -158,6 +169,11 @@ type Module struct {
 // users, influencers, and sessions back the OAuth-as-signup flow. The
 // composition root supplies them by adapting the auth and influencer modules, so
 // this module still imports neither.
+//
+// auditStarter is OPTIONAL: when non-nil, a completed signup auto-submits an
+// audit through it so the creator gets a score without a manual step; nil
+// disables that and signup still succeeds. It is not part of the required-
+// collaborator check for the same reason.
 func New(
 	pool *db.Pool,
 	rdb *redis.Client,
@@ -169,6 +185,7 @@ func New(
 	users UserProvisioner,
 	influencers InfluencerProvisioner,
 	sessions SessionIssuer,
+	auditStarter AuditStarter,
 ) (*Module, error) {
 	if users == nil || influencers == nil || sessions == nil {
 		return nil, errMisconfigured
@@ -186,6 +203,7 @@ func New(
 		users,
 		influencerProvisionerAdapter{inner: influencers},
 		sessionIssuerAdapter{inner: sessions},
+		auditStarter,
 	)
 	if err != nil {
 		return nil, err

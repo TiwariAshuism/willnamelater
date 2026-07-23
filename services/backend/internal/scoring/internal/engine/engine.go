@@ -89,6 +89,39 @@ const (
 	eaWeightEngagement   = 0.50
 	eaWeightAuthenticity = 0.35
 	eaWeightDepth        = 0.15
+	// eaWeightRetention weights the Reels average-watch-time signal inside
+	// Engagement Authenticity. It is the same light weight as depth and, like every
+	// EA sub-signal, is renormalized over whatever was actually observed — an audit
+	// with no Reels is scored on the others at full weight, never dragged by an
+	// absent retention signal.
+	eaWeightRetention = 0.15
+)
+
+// reelsWatchSaturationSeconds is the average Reels watch time (in seconds) at
+// which the retention signal saturates at 1.0. It is a documented v1 directional
+// prior, not a validated threshold: a strong hook that holds ~30s of attention on
+// a short-form video reads as full retention. Real per-tier bands replace it once
+// the corpus has them.
+const reelsWatchSaturationSeconds = 30.0
+
+// reelsForFullCoverage is the number of Reels at which the retention proxy's
+// COVERAGE saturates — more Reels feed the median better, they do not make the
+// proxy more correct.
+const reelsForFullCoverage = 5.0
+
+// metricReelsWatchTime is the metric-point name the Meta connector emits for a
+// Reel's average watch time (mirrors connector/meta's metricReelsWatchTime). The
+// pure engine reads snapshots by this stable string rather than importing the
+// connector's platform constants.
+const metricReelsWatchTime = "reels_watch_time"
+
+// Format-diversity tuning for Consistency & Reliability. formatDiversityTarget is
+// the number of distinct media formats (image, video, carousel) at which the
+// diversity signal saturates — a creator who executes multiple formats lowers a
+// brand's lift (PRD §7). formatPostsForFullCoverage saturates its coverage.
+const (
+	formatDiversityTarget      = 3.0
+	formatPostsForFullCoverage = 8.0
 )
 
 // audienceDimensions is the number of demographic dimensions Audience Quality can
@@ -137,6 +170,12 @@ type Input struct {
 	Fraud               contract.FraudInput
 	Weights             Weights
 	EngagementBenchmark Benchmark
+	// FollowerHistory is the influencer's prior follower readings, loaded from the
+	// metric store by the scoring service (this audit's snapshot carries only the
+	// current point). It lets follower-growth spike detection fire on a first audit
+	// combined with earlier ones, rather than needing three points in a single pull.
+	// Nil is fine: growth smoothness then rests on the snapshot alone.
+	FollowerHistory []connector.MetricPoint
 }
 
 // Compute is the pure heart of the scoring engine. It derives the four
@@ -163,11 +202,12 @@ func Compute(in Input) (contract.Score, error) {
 	// also carried out separately (FraudAuthenticity) for the report headline.
 	engagement := engagementSubscore(in.Snapshots, followers, in.EngagementBenchmark)
 	depth := contentSubscore(in.Snapshots)
+	retention := reelsRetentionSubscore(in.Snapshots)
 	authenticity := authenticitySubscore(in.Fraud)
 
-	engagementAuthenticity := engagementAuthenticitySubscore(engagement, depth, authenticity)
+	engagementAuthenticity := engagementAuthenticitySubscore(engagement, depth, retention, authenticity)
 	audienceQuality := audienceQualitySubscore(in.Snapshots, followers)
-	consistency := consistencySubscore(in.Snapshots)
+	consistency := consistencySubscore(in.Snapshots, in.FollowerHistory)
 	brandFit := brandFitSubscore(in.Snapshots)
 
 	// The composite is a weighted mean over the factors we ACTUALLY MEASURED.
@@ -272,7 +312,7 @@ func representativeFollowers(snaps []connector.Snapshot) int64 {
 // coverage, and a model confidence, so labelling the aggregate a "confidence"
 // would overclaim. When no sub-signal is present the factor is neutral and
 // unsupported, so the composite drops it.
-func engagementAuthenticitySubscore(engagement, depth, authenticity contract.Subscore) contract.Subscore {
+func engagementAuthenticitySubscore(engagement, depth, retention, authenticity contract.Subscore) contract.Subscore {
 	type signal struct {
 		weight float64
 		sub    contract.Subscore
@@ -281,6 +321,7 @@ func engagementAuthenticitySubscore(engagement, depth, authenticity contract.Sub
 		{eaWeightEngagement, engagement},
 		{eaWeightAuthenticity, authenticity},
 		{eaWeightDepth, depth},
+		{eaWeightRetention, retention},
 	}
 	var weightedValue, weightedSupport, presentWeight float64
 	for _, s := range signals {
@@ -298,6 +339,35 @@ func engagementAuthenticitySubscore(engagement, depth, authenticity contract.Sub
 		Value:       weightedValue / presentWeight,
 		Basis:       contract.BasisClosedForm,
 		Support:     clamp01(weightedSupport / presentWeight),
+		SupportKind: contract.SupportCoverage,
+	}
+}
+
+// reelsRetentionSubscore turns Reels average watch time into a retention signal
+// for Engagement Authenticity (PRD §7: "retention makes the algorithm push you").
+// It reads the reels_watch_time metric points the Meta connector emits (real
+// per-media readings, never fabricated), takes their median, and maps it onto
+// [0,1] against reelsWatchSaturationSeconds. Support is ZERO (the signal is
+// dropped and its weight renormalized away) when the audit pulled no Reels
+// watch-time at all — most YouTube and pre-review Instagram audits. Basis
+// closed_form, SupportKind coverage: the mapping is a documented v1 prior, and
+// the coverage says only how many Reels fed the median.
+func reelsRetentionSubscore(snaps []connector.Snapshot) contract.Subscore {
+	var watch []float64
+	for _, s := range snaps {
+		for _, m := range s.Metrics {
+			if m.Name == metricReelsWatchTime && m.Value > 0 {
+				watch = append(watch, m.Value)
+			}
+		}
+	}
+	if len(watch) == 0 {
+		return contract.Subscore{Value: neutralScore, Basis: contract.BasisClosedForm, Support: 0, SupportKind: contract.SupportNone}
+	}
+	return contract.Subscore{
+		Value:       clamp01(median(watch)/reelsWatchSaturationSeconds) * 100,
+		Basis:       contract.BasisClosedForm,
+		Support:     clamp01(float64(len(watch)) / reelsForFullCoverage),
 		SupportKind: contract.SupportCoverage,
 	}
 }
@@ -602,14 +672,18 @@ func authenticitySubscore(f contract.FraudInput) contract.Subscore {
 // and the support the mean of their COVERAGES — how much of the series each one
 // got to look at. Coverage, not confidence: a long series makes the closed form
 // better fed, not validated.
-func consistencySubscore(snaps []connector.Snapshot) contract.Subscore {
+func consistencySubscore(snaps []connector.Snapshot, followerHistory []connector.MetricPoint) contract.Subscore {
 	var values, coverages []float64
 
-	if v, c, ok := growthSmoothness(snaps); ok {
+	if v, c, ok := growthSmoothness(snaps, followerHistory); ok {
 		values = append(values, v)
 		coverages = append(coverages, c)
 	}
 	if v, c, ok := cadenceRegularity(snaps); ok {
+		values = append(values, v)
+		coverages = append(coverages, c)
+	}
+	if v, c, ok := formatDiversity(snaps); ok {
 		values = append(values, v)
 		coverages = append(coverages, c)
 	}
@@ -630,18 +704,37 @@ func consistencySubscore(snaps []connector.Snapshot) contract.Subscore {
 // rates. It needs at least three points; COVERAGE (how much of the series we
 // have, saturating at twelve points) grows with the series length. Coverage is
 // not a claim that the smoothness proxy detects anything.
-func growthSmoothness(snaps []connector.Snapshot) (value, coverage float64, ok bool) {
+func growthSmoothness(snaps []connector.Snapshot, followerHistory []connector.MetricPoint) (value, coverage float64, ok bool) {
 	type pt struct {
 		at time.Time
 		v  float64
 	}
 	var series []pt
+	// The current audit's follower point is already persisted by the time scoring
+	// runs, so the loaded history can repeat the point the snapshot also carries.
+	// Dedup on (timestamp, value) so a re-counted reading is not scored as a
+	// zero-growth interval.
+	seen := make(map[[2]int64]struct{})
+	add := func(m connector.MetricPoint) {
+		if m.Name != "followers" && m.Name != "subscribers" {
+			return
+		}
+		key := [2]int64{m.At.UnixNano(), int64(m.Value)}
+		if _, dup := seen[key]; dup {
+			return
+		}
+		seen[key] = struct{}{}
+		series = append(series, pt{at: m.At, v: m.Value})
+	}
 	for _, s := range snaps {
 		for _, m := range s.Metrics {
-			if m.Name == "followers" || m.Name == "subscribers" {
-				series = append(series, pt{at: m.At, v: m.Value})
-			}
+			add(m)
 		}
+	}
+	// Prior readings loaded from the metric store let spike detection fire across
+	// repeated audits rather than needing three points in one pull.
+	for _, m := range followerHistory {
+		add(m)
 	}
 	if len(series) < 3 {
 		return 0, 0, false
@@ -685,6 +778,34 @@ func cadenceRegularity(snaps []connector.Snapshot) (value, coverage float64, ok 
 	}
 	regularity := 1 - clamp01(stddev(intervals)/m)
 	return regularity, clamp01(float64(len(times)-2) / 10), true
+}
+
+// formatDiversity scores how many distinct content formats an account executes
+// (PRD §7: "brands value creators who execute multiple formats — it lowers their
+// lift"). It reads Post.MediaType across the snapshots and scores the count of
+// distinct non-empty formats against formatDiversityTarget. It needs at least one
+// post that reports a media type; COVERAGE grows with how many typed posts we saw.
+// A platform that does not report a media type simply omits the signal (ok=false),
+// so it is dropped rather than penalised.
+func formatDiversity(snaps []connector.Snapshot) (value, coverage float64, ok bool) {
+	kinds := make(map[string]struct{})
+	typed := 0
+	for _, s := range snaps {
+		for _, p := range s.Posts {
+			t := strings.ToUpper(strings.TrimSpace(p.MediaType))
+			if t == "" {
+				continue
+			}
+			typed++
+			kinds[t] = struct{}{}
+		}
+	}
+	if typed == 0 {
+		return 0, 0, false
+	}
+	value = clamp01(float64(len(kinds)) / formatDiversityTarget)
+	coverage = clamp01(float64(typed) / formatPostsForFullCoverage)
+	return value, coverage, true
 }
 
 // contentPostsForFullCoverage is the number of posts at which the content proxy
