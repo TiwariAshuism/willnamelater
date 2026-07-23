@@ -17,9 +17,25 @@ All rules in `.cursor/rules/` are **mandatory** for every implementation. Cursor
 
 | Rule | Globs | Purpose |
 |------|-------|---------|
-| `kmp.mdc` | `mobile/**`, `packages/**` | KMP, Compose, MVVM, StateFlow |
-| `backend.mdc` | `backend/**`, `services/backend/**` | Modular Monolith, apigen, Go layers |
-| `nextjs.mdc` | `web/**` | App Router, TypeScript, Server Components |
+| `kmp.mdc` | `apps/mobile/**` | KMP, Compose, MVVM, StateFlow |
+| `backend.mdc` | `services/backend/**` | Modular Monolith, apigen, Go layers |
+| `nextjs.mdc` | `apps/web/**`, `apps/pallet-ross/**` | App Router, TypeScript, Server Components |
+
+## Repository layout
+
+```text
+apps/web/          InfluAudit dashboard (Next.js 16)
+apps/pallet-ross/  Unrelated art-marketplace site, preserved
+apps/mobile/       KMP influencer app (phase 3)
+services/backend/  Go modular monolith
+services/ml/       Python FastAPI fraud/ML service
+packages/          contracts (OpenAPI + generated types), config, scripts
+deploy/            docker-compose, migrations, k8s
+product/           PRDs
+```
+
+Each top-level directory is designed to be extracted into its own repository
+with no rewiring.
 
 ## Workflow summary
 

@@ -1,0 +1,48 @@
+[project]
+name = "influaudit-ml"
+version = "0.1.0"
+description = "InfluAudit fraud / pod / comment ML service (cold-start, unsupervised)"
+requires-python = ">=3.13"
+dependencies = [
+    "fastapi>=0.115",
+    "pydantic>=2.9",
+    "numpy>=1.26",
+    # Co-commenter graph + maximal-clique enumeration for coordination detection.
+    "python-igraph>=1.0",
+    # ASGI server. Required to run the service at all, so it is a runtime
+    # dependency rather than a dev extra.
+    "uvicorn>=0.32",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0",
+    "httpx>=0.27",
+    "ruff>=0.6",
+]
+# The supervised training pipeline (services/ml/training). Kept out of the
+# runtime dependencies so the FastAPI service stays lean: it is only needed by
+# `make ml-train`, which runs offline against the admin label export. Below the
+# data floor it trains nothing, so a fresh deployment never pulls these in.
+training = [
+    "lightgbm>=4.5",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app", "training"]
+
+[tool.ruff]
+line-length = 88
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "SIM", "C4"]
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"
+testpaths = ["tests"]

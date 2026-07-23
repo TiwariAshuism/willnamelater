@@ -1,0 +1,57 @@
+name: web
+
+on:
+  push:
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/web.yml"
+  pull_request:
+    paths:
+      - "apps/web/**"
+      - "packages/**"
+      - "pnpm-lock.yaml"
+      - "pnpm-workspace.yaml"
+      - ".github/workflows/web.yml"
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install pnpm
+        uses: pnpm/action-setup@v4
+        with:
+          version: 10.32.1
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22.x
+          cache: pnpm
+          cache-dependency-path: pnpm-lock.yaml
+
+      # Installed from the workspace root, not apps/web: @influaudit/contracts is
+      # a workspace dependency and a package-local install cannot resolve it.
+      - name: Install
+        run: pnpm install --frozen-lockfile
+
+      # These four mirror `make gate`. typecheck and test were previously absent,
+      # so a type error or a failing test reached main through a green pipeline.
+      - name: Typecheck
+        run: pnpm --filter @influaudit/web typecheck
+
+      - name: Lint
+        run: pnpm --filter @influaudit/web lint
+
+      - name: Test
+        run: pnpm --filter @influaudit/web test
+
+      - name: Build
+        run: pnpm --filter @influaudit/web build

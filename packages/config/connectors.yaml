@@ -1,0 +1,170 @@
+# InfluAudit platform connector registry.
+#
+# Adding a platform = implement the Connector interface, register it at startup,
+# and add a block here. Secrets are NEVER written in this file: every credential
+# is referenced by the NAME of the environment variable that supplies its value
+# at runtime. This file is validated against connectors.schema.json at boot, so
+# a malformed change fails fast rather than at the first audit.
+version: 1
+
+connectors:
+  # YouTube Data API v3 meters usage as a daily budget of quota UNITS: reads
+  # cost 1 unit, a search costs 100. The 10000-unit default is Google's standard
+  # per-project daily allocation.
+  - platform: youtube
+    enabled: true
+    display_name: YouTube
+    base_url: https://www.googleapis.com/youtube/v3
+    requires_app_review: false
+    auth:
+      type: oauth2
+      client_id_env: YT_OAUTH_CLIENT_ID
+      client_secret_env: YT_OAUTH_CLIENT_SECRET
+      api_key_env: YT_API_KEY
+      scopes:
+        - https://www.googleapis.com/auth/youtube.readonly
+        - https://www.googleapis.com/auth/yt-analytics.readonly
+    capabilities:
+      - profile
+      - metrics
+      - recent_posts
+      - audience_breakdown
+      # commentThreads.list supplies comment author channel IDs and timestamps,
+      # which is the only fuel for the co-commenter graph.
+      - comments
+    rate_limit:
+      model: quota_units
+      units_per_day: 10000
+      default_cost: 1
+      search_cost: 100
+
+  # Instagram via the Meta Graph API meters usage as a bucket of calls per
+  # rolling hour. Deep insights (reach, impressions, audience) require Meta app
+  # review and a Business/Creator account connected over OAuth.
+  #
+  # Disabled until the Meta connector lands AND the app clears review. Enabling
+  # it before then would fail the boot by design (app.connector_unimplemented):
+  # an audit that silently covers fewer platforms than configured is worse than
+  # one that refuses to start. Until then, CSV import of an Instagram Insights
+  # export is the real-data path for Instagram.
+  - platform: instagram
+    enabled: false
+    display_name: Instagram
+    base_url: https://graph.facebook.com/v21.0
+    requires_app_review: true
+    auth:
+      type: oauth2
+      client_id_env: META_APP_ID
+      client_secret_env: META_APP_SECRET
+      scopes:
+        - instagram_basic
+        - instagram_manage_insights
+        # Comment quality/sentiment (PRD §8, the one accepted scope expansion). It
+        # unlocks reading comment text for the display-only quality classifier; the
+        # signal is shown with its denominator and caveats but never feeds the score
+        # (see the ML firewall in services/ml/app/features/fraud_vector.py). Widens
+        # the Meta App Review surface.
+        - instagram_manage_comments
+        - pages_read_engagement
+        - pages_show_list
+        # Page-linkage plumbing (PRD §9): resolve and manage the Facebook Page an
+        # Instagram Business/Creator account is linked to, which the OAuth exchange
+        # traverses to reach the IG account. Widens the Meta App Review surface.
+        - business_management
+    capabilities:
+      - profile
+      - metrics
+      - recent_posts
+      - audience_breakdown
+      - comments
+    rate_limit:
+      model: bucketed_calls
+      calls_per_hour: 200
+      window: 1h
+
+  # Facebook Pages share the Meta Graph API and the same call-bucket model.
+  # Deferred to a later phase; present so enabling it is a one-line change.
+  - platform: facebook
+    enabled: false
+    display_name: Facebook Page
+    base_url: https://graph.facebook.com/v21.0
+    requires_app_review: true
+    auth:
+      type: oauth2
+      client_id_env: META_APP_ID
+      client_secret_env: META_APP_SECRET
+      scopes:
+        - pages_read_engagement
+        - pages_read_user_content
+        - read_insights
+    capabilities:
+      - profile
+      - metrics
+      - recent_posts
+    rate_limit:
+      model: bucketed_calls
+      calls_per_hour: 200
+      window: 1h
+
+  - platform: tiktok
+    enabled: false
+    display_name: TikTok
+    base_url: https://open.tiktokapis.com/v2
+    requires_app_review: true
+    auth:
+      type: oauth2
+      client_id_env: TIKTOK_CLIENT_KEY
+      client_secret_env: TIKTOK_CLIENT_SECRET
+      scopes:
+        - user.info.basic
+        - user.info.stats
+        - video.list
+    capabilities:
+      - profile
+      - metrics
+      - recent_posts
+    rate_limit:
+      model: bucketed_calls
+      calls_per_hour: 600
+      window: 1h
+
+  - platform: x
+    enabled: false
+    display_name: X (Twitter)
+    base_url: https://api.twitter.com/2
+    requires_app_review: false
+    auth:
+      type: oauth2
+      client_id_env: X_OAUTH_CLIENT_ID
+      client_secret_env: X_OAUTH_CLIENT_SECRET
+      scopes:
+        - users.read
+        - tweet.read
+    capabilities:
+      - profile
+      - metrics
+      - recent_posts
+    rate_limit:
+      model: bucketed_calls
+      calls_per_hour: 300
+      window: 15m
+
+  - platform: linkedin
+    enabled: false
+    display_name: LinkedIn
+    base_url: https://api.linkedin.com/rest
+    requires_app_review: true
+    auth:
+      type: oauth2
+      client_id_env: LINKEDIN_CLIENT_ID
+      client_secret_env: LINKEDIN_CLIENT_SECRET
+      scopes:
+        - r_organization_social
+        - rw_organization_admin
+    capabilities:
+      - profile
+      - metrics
+    rate_limit:
+      model: bucketed_calls
+      calls_per_hour: 100
+      window: 1h

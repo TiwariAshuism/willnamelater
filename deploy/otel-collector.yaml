@@ -1,0 +1,60 @@
+# The observability seam.
+#
+# The api and worker speak OTLP and nothing else (INFLUAUDIT_OTEL__EXPORTER_ENDPOINT
+# points here). That is deliberate and worth protecting: switching the telemetry
+# backend — to Grafana Cloud, Honeycomb, Datadog, or a cloud-native service — is a
+# change to the `exporters` block below and NOT a change to any application code.
+#
+# Pointing the app at a vendor's endpoint directly would save this file and cost
+# you that property, at the exact moment (a migration, an outage) when you can
+# least afford to rewrite your dashboards and alerts.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+
+processors:
+  # Bounds the collector's own memory so a traffic spike degrades telemetry rather
+  # than OOM-killing a container that shares a VM with the API.
+  memory_limiter:
+    check_interval: 1s
+    limit_percentage: 75
+    spike_limit_percentage: 15
+
+  batch:
+    timeout: 5s
+    send_batch_size: 1024
+
+exporters:
+  # Traces -> Tempo. Metrics -> scraped by Prometheus from the endpoint below.
+  otlp/tempo:
+    endpoint: tempo:4317
+    tls:
+      insecure: true
+
+  prometheus:
+    endpoint: 0.0.0.0:8889
+
+  # Keeps the pipeline observable when a backend is being replaced.
+  debug:
+    verbosity: basic
+
+service:
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [otlp/tempo]
+
+    metrics:
+      receivers: [otlp]
+      processors: [memory_limiter, batch]
+      exporters: [prometheus]
+
+  telemetry:
+    logs:
+      level: info

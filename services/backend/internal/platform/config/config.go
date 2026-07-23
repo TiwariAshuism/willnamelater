@@ -1,0 +1,488 @@
+// Package config loads and validates the application's runtime configuration.
+//
+// Configuration is layered: hard-coded defaults are overlaid by an optional
+// YAML file, which is in turn overlaid by environment variables. Environment
+// variables always win so that a deployment can override any file-based value
+// without editing files baked into an image.
+//
+// Secrets never travel through the config in plaintext-printable form. Every
+// field that holds a credential has type Secret, whose fmt and JSON
+// representations are redacted, so an accidental log of the whole Config cannot
+// leak a key.
+package config
+
+import (
+	"encoding/base64"
+	"errors"
+	"fmt"
+	"os"
+	"strings"
+	"time"
+
+	"github.com/knadh/koanf/parsers/yaml"
+	kenv "github.com/knadh/koanf/providers/env/v2"
+	kfile "github.com/knadh/koanf/providers/file"
+	"github.com/knadh/koanf/v2"
+
+	"github.com/getnyx/influaudit/backend/internal/platform/crypto"
+	"github.com/getnyx/influaudit/backend/internal/platform/errs"
+)
+
+// envPrefix scopes which environment variables this application consumes.
+// nestDelim maps a flat env var name onto the nested config tree, e.g.
+// INFLUAUDIT_HTTP__ADDR addresses http.addr. A double underscore is used
+// because single underscores are legitimate parts of leaf field names
+// (read_timeout, base_url).
+const (
+	envPrefix = "INFLUAUDIT_"
+	nestDelim = "__"
+	keyDelim  = "."
+)
+
+// redacted is the placeholder rendered wherever a Secret would otherwise be
+// printed. It is intentionally not the empty string so that a redacted value is
+// visually distinct from an unset one.
+const redacted = "[REDACTED]"
+
+// Secret is a credential-bearing string. Its String and MarshalJSON
+// implementations return a fixed placeholder so that the underlying value
+// cannot escape through fmt verbs, structured logs, or JSON encoding. Read the
+// real value explicitly with Reveal at the single point of use.
+type Secret string
+
+// String satisfies fmt.Stringer for both %v and %s, including when the Secret
+// is a field of a larger struct that is being formatted.
+func (Secret) String() string { return redacted }
+
+// MarshalJSON ensures json.Marshal of any struct embedding a Secret emits the
+// placeholder rather than the credential.
+func (Secret) MarshalJSON() ([]byte, error) { return []byte(`"` + redacted + `"`), nil }
+
+// Reveal returns the underlying credential. It is the only way to obtain the
+// plaintext and exists to make every such access greppable.
+func (s Secret) Reveal() string { return string(s) }
+
+// Environment names a deployment tier. Secrets are mandatory only in prod;
+// developer machines may run with them absent.
+type Environment string
+
+// Recognized deployment environments. Secrets are mandatory in EnvProd and
+// EnvStaging; EnvDev tolerates their absence.
+const (
+	EnvDev     Environment = "dev"
+	EnvStaging Environment = "staging"
+	EnvProd    Environment = "prod"
+)
+
+// Config is the fully resolved application configuration.
+type Config struct {
+	Environment Environment      `koanf:"environment"`
+	HTTP        HTTPConfig       `koanf:"http"`
+	Postgres    PostgresConfig   `koanf:"postgres"`
+	Redis       RedisConfig      `koanf:"redis"`
+	Crypto      CryptoConfig     `koanf:"crypto"`
+	Anthropic   AnthropicConfig  `koanf:"anthropic"`
+	Gotenberg   GotenbergConfig  `koanf:"gotenberg"`
+	ML          MLConfig         `koanf:"ml"`
+	Storage     StorageConfig    `koanf:"storage"`
+	JWT         JWTConfig        `koanf:"jwt"`
+	Razorpay    RazorpayConfig   `koanf:"razorpay"`
+	OTel        OTelConfig       `koanf:"otel"`
+	Email       EmailConfig      `koanf:"email"`
+	Connectors  ConnectorsConfig `koanf:"connectors"`
+
+	// masterKey is the decoded, length-checked master encryption key. It is
+	// derived from Crypto.MasterKey during Validate and is deliberately
+	// unexported so it is never serialized or printed.
+	masterKey []byte
+}
+
+// HTTPConfig holds the public HTTP server settings.
+type HTTPConfig struct {
+	Addr         string        `koanf:"addr"`
+	ReadTimeout  time.Duration `koanf:"read_timeout"`
+	WriteTimeout time.Duration `koanf:"write_timeout"`
+	// PublicBaseURL is the origin clients and OAuth providers reach this API on,
+	// with no trailing slash. It cannot be derived from Addr, which is a bind
+	// address behind a proxy, and it must match the redirect URIs registered
+	// with each OAuth provider or every callback is rejected.
+	PublicBaseURL string `koanf:"public_base_url"`
+}
+
+// PostgresConfig holds the primary datastore connection string. The DSN embeds
+// a password, so it is a Secret in whole.
+type PostgresConfig struct {
+	DSN Secret `koanf:"dsn"`
+}
+
+// RedisConfig holds the cache and asynq broker connection. TLS is required by
+// every managed Redis and is therefore mandatory in prod; it is off by default
+// so the local compose redis works unchanged.
+type RedisConfig struct {
+	Addr     string `koanf:"addr"`
+	Password Secret `koanf:"password"`
+	DB       int    `koanf:"db"`
+	TLS      bool   `koanf:"tls"`
+	// TLSServerName overrides the certificate/SNI hostname. Empty derives it from
+	// Addr, which is correct for every managed service.
+	TLSServerName string `koanf:"tls_server_name"`
+}
+
+// CryptoConfig carries the base64-encoded 32-byte master key used to seal
+// secrets at rest. Use Config.MasterKey for the decoded bytes.
+type CryptoConfig struct {
+	MasterKey Secret `koanf:"master_key"`
+}
+
+// AnthropicConfig holds the LLM provider credential.
+type AnthropicConfig struct {
+	APIKey Secret `koanf:"api_key"`
+}
+
+// GotenbergConfig holds the PDF-rendering service location.
+type GotenbergConfig struct {
+	URL string `koanf:"url"`
+}
+
+// MLConfig holds the internal machine-learning service settings. ServiceToken is
+// the static bearer the ml server presents on the prediction-log ingest route
+// (a service, not a user, so it is a shared secret rather than a JWT); the mlops
+// module authenticates it in constant time.
+type MLConfig struct {
+	BaseURL      string `koanf:"base_url"`
+	ServiceToken Secret `koanf:"service_token"`
+}
+
+// StorageConfig holds S3-compatible object storage settings. Endpoint is an
+// explicit S3 endpoint (LocalStack/MinIO in dev, or an S3-compatible store in
+// prod); Region is the SigV4 signing region. PublicBaseURL, when set, is the
+// origin browser-facing links resolve to (e.g. a CDN in front of the bucket);
+// when empty the client hands out presigned URLs against Endpoint instead.
+// PathStyle selects path-style addressing (endpoint/bucket/key) over
+// virtual-host style (bucket.endpoint/key). It defaults to true because every
+// store this runs against in practice — LocalStack, MinIO, Cloudflare R2 —
+// requires it; AWS S3 accepts both and can opt out.
+type StorageConfig struct {
+	Endpoint      string `koanf:"endpoint"`
+	Region        string `koanf:"region"`
+	Bucket        string `koanf:"bucket"`
+	AccessKey     Secret `koanf:"access_key"`
+	SecretKey     Secret `koanf:"secret_key"`
+	PublicBaseURL string `koanf:"public_base_url"`
+	PathStyle     bool   `koanf:"path_style"`
+}
+
+// JWTConfig holds the RS256 signing key, supplied either as a filesystem path
+// to a PEM file or inline as a PEM string. Exactly one is required in prod.
+type JWTConfig struct {
+	PrivateKeyPath string `koanf:"private_key_path"`
+	PrivateKeyPEM  Secret `koanf:"private_key_pem"`
+}
+
+// RazorpayConfig holds the payments gateway credentials. The key id is a
+// non-secret identifier; the key secret is a Secret.
+type RazorpayConfig struct {
+	KeyID     string `koanf:"key_id"`
+	KeySecret Secret `koanf:"key_secret"`
+	// WebhookSecret verifies inbound webhook signatures. Razorpay generates it
+	// separately from the API key secret, in the dashboard, per webhook
+	// endpoint. Reusing KeySecret here would reject every genuine webhook, and
+	// would silently "work" only if an operator set the two to the same value.
+	WebhookSecret Secret `koanf:"webhook_secret"`
+}
+
+// OTelConfig holds the OpenTelemetry OTLP exporter endpoint.
+type OTelConfig struct {
+	ExporterEndpoint string `koanf:"exporter_endpoint"`
+}
+
+// EmailConfig holds the SMTP relay used for transactional mail. SMTP rather than
+// a provider API because every transactional provider speaks it — Postmark,
+// Resend, SendGrid, Mailgun, SES — so switching provider is a change of these
+// values and nothing else. TLS is one of "starttls" (default, port 587),
+// "implicit" (port 465), or "none" (a local capture server only).
+type EmailConfig struct {
+	Host     string `koanf:"host"`
+	Port     int    `koanf:"port"`
+	Username string `koanf:"username"`
+	Password Secret `koanf:"password"`
+	From     string `koanf:"from"`
+	FromName string `koanf:"from_name"`
+	TLS      string `koanf:"tls"`
+}
+
+// ConnectorsConfig locates the declarative platform-connector registry. Both
+// files are operator-supplied boot parameters, never request-derived, and the
+// YAML is validated against the schema at startup so a malformed change fails
+// fast rather than at the first audit.
+type ConnectorsConfig struct {
+	ConfigPath string `koanf:"config_path"`
+	SchemaPath string `koanf:"schema_path"`
+}
+
+// MasterKey returns the decoded 32-byte master encryption key, or nil when no
+// key was configured (permitted outside prod). The returned slice is suitable
+// for crypto.NewCipher.
+func (c *Config) MasterKey() []byte { return c.masterKey }
+
+// defaults returns a Config seeded with the values used when neither the YAML
+// file nor the environment specifies them. Only fields with a sensible,
+// non-secret default are set; everything else stays at its zero value and is
+// enforced by Validate where required.
+func defaults() Config {
+	return Config{
+		Environment: EnvDev,
+		HTTP: HTTPConfig{
+			Addr:          ":8080",
+			ReadTimeout:   15 * time.Second,
+			WriteTimeout:  15 * time.Second,
+			PublicBaseURL: "http://localhost:8080",
+		},
+		Redis: RedisConfig{
+			Addr: "127.0.0.1:6379",
+			DB:   0,
+		},
+		Storage: StorageConfig{
+			PathStyle: true,
+		},
+		Connectors: ConnectorsConfig{
+			ConfigPath: "packages/config/connectors.yaml",
+			SchemaPath: "packages/config/connectors.schema.json",
+		},
+	}
+}
+
+// Load resolves configuration from defaults, then the optional YAML file at
+// yamlPath, then process environment variables, and validates the result. A
+// yamlPath that is empty or points at a missing file is skipped; the file being
+// optional is a supported mode, not an error.
+func Load(yamlPath string) (*Config, error) {
+	return load(yamlPath, os.Environ)
+}
+
+// load is Load with an injectable environment source, so tests can exercise
+// precedence and validation without mutating the real process environment.
+func load(yamlPath string, environ func() []string) (*Config, error) {
+	k := koanf.New(keyDelim)
+
+	if yamlPath != "" {
+		switch _, statErr := os.Stat(yamlPath); {
+		case statErr == nil:
+			if err := k.Load(kfile.Provider(yamlPath), yaml.Parser()); err != nil {
+				return nil, errs.Wrap(err, errs.KindInvalid, "config.yaml_parse",
+					"configuration file could not be read or parsed")
+			}
+		case errors.Is(statErr, os.ErrNotExist):
+			// Optional file: fall through to defaults and environment.
+		default:
+			return nil, errs.Wrap(statErr, errs.KindInternal, "config.yaml_stat",
+				"configuration file could not be accessed")
+		}
+	}
+
+	envProvider := kenv.Provider(keyDelim, kenv.Opt{
+		Prefix:        envPrefix,
+		EnvironFunc:   environ,
+		TransformFunc: transformEnv,
+	})
+	if err := k.Load(envProvider, nil); err != nil {
+		return nil, errs.Wrap(err, errs.KindInternal, "config.env_load",
+			"environment configuration could not be read")
+	}
+
+	cfg := defaults()
+	if err := k.Unmarshal("", &cfg); err != nil {
+		return nil, errs.Wrap(err, errs.KindInvalid, "config.decode",
+			"configuration values could not be decoded")
+	}
+
+	if err := cfg.Validate(); err != nil {
+		return nil, err
+	}
+
+	return &cfg, nil
+}
+
+// transformEnv maps a prefixed, double-underscore-nested environment variable
+// name onto the dotted, lower-cased key path the config tree expects, e.g.
+// INFLUAUDIT_HTTP__READ_TIMEOUT -> http.read_timeout.
+func transformEnv(key, value string) (string, any) {
+	key = strings.TrimPrefix(key, envPrefix)
+	key = strings.ReplaceAll(key, nestDelim, keyDelim)
+	return strings.ToLower(key), value
+}
+
+// Validate checks every field and returns a single error enumerating all
+// problems, not just the first. On success it also populates the decoded master
+// key. Structural fields are always required; credentials and external service
+// endpoints are required only in prod, where the process cannot legitimately
+// run without them.
+func (c *Config) Validate() error {
+	var problems []string
+	add := func(msg string) { problems = append(problems, msg) }
+
+	switch c.Environment {
+	case EnvDev, EnvStaging, EnvProd:
+	default:
+		add(fmt.Sprintf("environment: must be one of %q, %q, %q", EnvDev, EnvStaging, EnvProd))
+	}
+
+	if c.HTTP.Addr == "" {
+		add("http.addr: required")
+	}
+	if c.HTTP.ReadTimeout <= 0 {
+		add("http.read_timeout: must be positive")
+	}
+	if c.HTTP.WriteTimeout <= 0 {
+		add("http.write_timeout: must be positive")
+	}
+
+	prod := c.Environment == EnvProd
+	requireInProd := func(field, value string) {
+		if prod && value == "" {
+			add(field + ": required in prod")
+		}
+	}
+	requireSecretInProd := func(field string, value Secret) {
+		if prod && value == "" {
+			add(field + ": required in prod")
+		}
+	}
+
+	requireSecretInProd("postgres.dsn", c.Postgres.DSN)
+	requireSecretInProd("anthropic.api_key", c.Anthropic.APIKey)
+	requireSecretInProd("storage.access_key", c.Storage.AccessKey)
+	requireSecretInProd("storage.secret_key", c.Storage.SecretKey)
+	requireSecretInProd("razorpay.key_secret", c.Razorpay.KeySecret)
+	// Absent, the ml server's shadow-prediction ingest is rejected on every call
+	// and the champion-challenger record silently stops accumulating. A prod boot
+	// that cannot log predictions is a prod boot that cannot retrain.
+	requireSecretInProd("ml.service_token", c.ML.ServiceToken)
+
+	requireInProd("gotenberg.url", c.Gotenberg.URL)
+	requireInProd("ml.base_url", c.ML.BaseURL)
+	requireInProd("storage.endpoint", c.Storage.Endpoint)
+	requireInProd("storage.region", c.Storage.Region)
+	requireInProd("storage.bucket", c.Storage.Bucket)
+	requireInProd("razorpay.key_id", c.Razorpay.KeyID)
+	requireInProd("otel.exporter_endpoint", c.OTel.ExporterEndpoint)
+
+	if prod && c.JWT.PrivateKeyPath == "" && c.JWT.PrivateKeyPEM == "" {
+		add("jwt: private_key_path or private_key_pem required in prod")
+	}
+
+	// A half-configured relay is worse than none: the client would construct and
+	// then fail on the first send, long after boot. Configure it fully or not at
+	// all — an unconfigured mailer degrades notifications to a logged no-op.
+	if c.Email.Host != "" {
+		if c.Email.Port == 0 {
+			add("email.port: required when email.host is set")
+		}
+		if c.Email.From == "" {
+			add("email.from: required when email.host is set")
+		}
+	}
+
+	c.validateProdValues(prod, add)
+	c.validateMasterKey(prod, add)
+
+	if len(problems) > 0 {
+		return errs.New(errs.KindInvalid, "config.invalid",
+			"invalid configuration: "+strings.Join(problems, "; "))
+	}
+	return nil
+}
+
+// devCredentials are the well-known, publicly-committed credential values that
+// exist so the dev stack boots out of the box (deploy/docker-compose.yml,
+// .env.example). They are in git, so they are not secrets — but they are
+// structurally valid, so every emptiness and shape check passes them. Only a
+// check by value keeps them out of production.
+var devCredentials = map[string]string{
+	// deploy/docker-compose.yml's default master key.
+	"AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=": "crypto.master_key",
+	// .env.example's placeholder master key (32 zero bytes).
+	"AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=": "crypto.master_key",
+}
+
+// validateProdValues rejects configuration that is structurally valid — present,
+// well-typed, correctly shaped — and yet wrong for production. Every check here
+// exists because the corresponding misconfiguration fails silently at runtime
+// rather than at boot, which is the worst way for it to fail.
+func (c *Config) validateProdValues(prod bool, add func(string)) {
+	if !prod {
+		return
+	}
+
+	// PublicBaseURL has a default (http://localhost:8080), so a required-in-prod
+	// emptiness check can never catch a deployment that simply forgot to set it.
+	// The failure mode is remote and confusing: the API boots clean, then hands
+	// every OAuth provider a localhost redirect_uri and every callback dies.
+	switch {
+	case !strings.HasPrefix(c.HTTP.PublicBaseURL, "https://"):
+		add("http.public_base_url: must be an https:// origin in prod")
+	case strings.Contains(c.HTTP.PublicBaseURL, "localhost"),
+		strings.Contains(c.HTTP.PublicBaseURL, "127.0.0.1"):
+		add("http.public_base_url: must not point at localhost in prod")
+	}
+
+	// Managed Postgres is reached across a network — a peered VPC at best, the
+	// public internet at worst. sslmode=disable puts the password on the wire.
+	if strings.Contains(c.Postgres.DSN.Reveal(), "sslmode=disable") {
+		add("postgres.dsn: sslmode=disable is not permitted in prod")
+	}
+
+	// Every managed Redis accepts TLS connections only. Without this the process
+	// starts and then cannot reach its queue or its cache at all.
+	if !c.Redis.TLS {
+		add("redis.tls: must be enabled in prod")
+	}
+
+	// A prod deployment that cannot send mail cannot tell a creator their report
+	// is ready, which is the one moment the product owes them a message.
+	if c.Email.Host == "" {
+		add("email.host: required in prod")
+	}
+	if c.Email.From == "" {
+		add("email.from: required in prod")
+	}
+	// Authenticating to a relay over an unencrypted connection hands the password
+	// to anyone on the path. "none" exists for a local capture server.
+	if c.Email.TLS == "none" {
+		add(`email.tls: "none" is not permitted in prod`)
+	}
+
+	if field, ok := devCredentials[c.Crypto.MasterKey.Reveal()]; ok {
+		add(field + ": is a well-known development key committed to this repository")
+	}
+	if c.ML.ServiceToken.Reveal() == "dev-ml-service-token" {
+		add("ml.service_token: is the well-known development token")
+	}
+	if c.Storage.AccessKey.Reveal() == "test" {
+		add("storage.access_key: is the well-known LocalStack development credential")
+	}
+}
+
+// validateMasterKey decodes and length-checks the master key. A supplied key is
+// always validated regardless of environment; an absent key is an error only in
+// prod. On success the decoded bytes are stored for MasterKey.
+func (c *Config) validateMasterKey(prod bool, add func(string)) {
+	raw := c.Crypto.MasterKey.Reveal()
+	if raw == "" {
+		if prod {
+			add("crypto.master_key: required in prod")
+		}
+		return
+	}
+
+	decoded, err := base64.StdEncoding.DecodeString(raw)
+	if err != nil {
+		add("crypto.master_key: must be valid base64")
+		return
+	}
+	if len(decoded) != crypto.KeySize {
+		add(fmt.Sprintf("crypto.master_key: must decode to %d bytes, got %d", crypto.KeySize, len(decoded)))
+		return
+	}
+	c.masterKey = decoded
+}

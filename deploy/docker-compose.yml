@@ -1,0 +1,257 @@
+# Full local stack for InfluAudit: infrastructure, schema migration, and both
+# application services.
+#
+# Build contexts differ on purpose. The backend image needs
+# packages/config/connectors.yaml, which lives outside its Go module, so its
+# context is the repository root. The ML service is self-contained.
+#
+# Usage (from the repository root):
+#   docker compose -f deploy/docker-compose.yml up -d --build
+#   docker compose -f deploy/docker-compose.yml down -v
+#
+# The api and worker will refuse to boot until a connector implementation is
+# registered for every platform enabled in connectors.yaml. That fail-fast is
+# deliberate: an audit that silently covers fewer platforms than configured is
+# worse than one that does not start.
+
+name: influaudit
+
+x-backend-env: &backend-env
+  INFLUAUDIT_ENVIRONMENT: ${INFLUAUDIT_ENVIRONMENT:-dev}
+  INFLUAUDIT_POSTGRES__DSN: postgres://${POSTGRES_USER:-influaudit}:${POSTGRES_PASSWORD:-influaudit}@postgres:5432/${POSTGRES_DB:-influaudit}?sslmode=disable
+  INFLUAUDIT_REDIS__ADDR: redis:6379
+  INFLUAUDIT_GOTENBERG__URL: http://gotenberg:3000
+  INFLUAUDIT_ML__BASE_URL: http://ml:8000
+  # Shared secret the ml server presents on the prediction-log ingest route
+  # (POST /v1/ml/predictions). It is machine-to-machine, so a static token rather
+  # than a JWT; the backend and the ml service must carry the SAME value. Empty
+  # disables shadow logging (the route then rejects every call).
+  INFLUAUDIT_ML__SERVICE_TOKEN: ${INFLUAUDIT_ML_SERVICE_TOKEN:-dev-ml-service-token}
+  # Object storage for published report PDFs. In dev this is LocalStack S3,
+  # reached by service name from inside the compose network. The credentials are
+  # LocalStack's well-known dummies (test/test) — they are not secrets and never
+  # reach a real AWS account. The app ensures the bucket exists at boot.
+  INFLUAUDIT_STORAGE__ENDPOINT: ${INFLUAUDIT_STORAGE__ENDPOINT:-http://localstack:4566}
+  INFLUAUDIT_STORAGE__REGION: ${INFLUAUDIT_STORAGE__REGION:-us-east-1}
+  INFLUAUDIT_STORAGE__BUCKET: ${INFLUAUDIT_STORAGE__BUCKET:-influaudit}
+  INFLUAUDIT_STORAGE__ACCESS_KEY: ${INFLUAUDIT_STORAGE__ACCESS_KEY:-test}
+  INFLUAUDIT_STORAGE__SECRET_KEY: ${INFLUAUDIT_STORAGE__SECRET_KEY:-test}
+  # A non-secret, well-known DEV key so the stack comes up out of the box. The
+  # api refuses to boot without one: oauth token sealing and commenter
+  # pseudonymization both depend on it. config.Validate rejects prod without a
+  # real key, so this default can never reach production.
+  INFLUAUDIT_CRYPTO__MASTER_KEY: ${INFLUAUDIT_CRYPTO__MASTER_KEY:-AAECAwQFBgcICQoLDA0ODxAREhMUFRYXGBkaGxwdHh8=}
+  INFLUAUDIT_ANTHROPIC__API_KEY: ${INFLUAUDIT_ANTHROPIC__API_KEY:-}
+  # The API refuses to boot without an RS256 signing key. In dev it is mounted
+  # from deploy/dev-secrets (generated, gitignored); in prod it comes from the
+  # secret store.
+  INFLUAUDIT_JWT__PRIVATE_KEY_PATH: /run/secrets/jwt-dev.pem
+  # The origin OAuth providers redirect back to. It cannot be derived from the
+  # bind address and must match the redirect URIs registered with each provider.
+  INFLUAUDIT_HTTP__PUBLIC_BASE_URL: ${INFLUAUDIT_HTTP__PUBLIC_BASE_URL:-http://localhost:8080}
+  INFLUAUDIT_RAZORPAY__KEY_ID: ${INFLUAUDIT_RAZORPAY__KEY_ID:-}
+  INFLUAUDIT_RAZORPAY__KEY_SECRET: ${INFLUAUDIT_RAZORPAY__KEY_SECRET:-}
+  # Razorpay generates the webhook secret per endpoint in its dashboard; it is a
+  # different credential from the API key secret.
+  INFLUAUDIT_RAZORPAY__WEBHOOK_SECRET: ${INFLUAUDIT_RAZORPAY__WEBHOOK_SECRET:-}
+  # Transactional mail. In dev this is mailpit, which accepts everything and
+  # delivers nothing — open http://localhost:8025 to read what was sent. TLS is
+  # "none" because mailpit speaks plaintext; config.Validate forbids that in prod,
+  # where the same four variables point at a real relay (Postmark, Resend, SES —
+  # they all speak SMTP, which is the whole reason the port is SMTP-shaped).
+  INFLUAUDIT_EMAIL__HOST: ${INFLUAUDIT_EMAIL__HOST:-mailpit}
+  INFLUAUDIT_EMAIL__PORT: ${INFLUAUDIT_EMAIL__PORT:-1025}
+  INFLUAUDIT_EMAIL__FROM: ${INFLUAUDIT_EMAIL__FROM:-reports@influaudit.local}
+  INFLUAUDIT_EMAIL__FROM_NAME: ${INFLUAUDIT_EMAIL__FROM_NAME:-InfluAudit}
+  INFLUAUDIT_EMAIL__TLS: ${INFLUAUDIT_EMAIL__TLS:-none}
+  # Connector credentials, referenced by NAME from packages/config/connectors.yaml.
+  YT_API_KEY: ${YT_API_KEY:-}
+  YT_OAUTH_CLIENT_ID: ${YT_OAUTH_CLIENT_ID:-}
+  YT_OAUTH_CLIENT_SECRET: ${YT_OAUTH_CLIENT_SECRET:-}
+  META_APP_ID: ${META_APP_ID:-}
+  META_APP_SECRET: ${META_APP_SECRET:-}
+
+services:
+  postgres:
+    image: timescale/timescaledb:latest-pg16
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-influaudit}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-influaudit}
+      POSTGRES_DB: ${POSTGRES_DB:-influaudit}
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      # -U/-d avoid pg_isready reporting "no attempt made" on the default role.
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-influaudit} -d ${POSTGRES_DB:-influaudit}"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    # appendonly gives durable queues for asynq across restarts.
+    command: ["redis-server", "--appendonly", "yes"]
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  # S3-compatible object storage for dev. The api ensures the report bucket at
+  # boot, so no init container is needed. Credentials are LocalStack's dummies.
+  localstack:
+    image: localstack/localstack:3
+    environment:
+      SERVICES: s3
+      AWS_DEFAULT_REGION: ${INFLUAUDIT_STORAGE__REGION:-us-east-1}
+    ports:
+      - "${LOCALSTACK_PORT:-4566}:4566"
+    volumes:
+      - localstack-data:/var/lib/localstack
+    healthcheck:
+      test: ["CMD-SHELL", "awslocal s3 ls || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+      start_period: 10s
+
+  # Catches every outbound email and delivers none of them. The web UI on :8025 is
+  # where you read what the app sent — the report-ready notification on publish is
+  # otherwise invisible in dev.
+  mailpit:
+    image: axllent/mailpit:latest
+    environment:
+      MP_SMTP_AUTH_ACCEPT_ANY: 1
+      MP_SMTP_AUTH_ALLOW_INSECURE: 1
+    ports:
+      - "${MAILPIT_SMTP_PORT:-1025}:1025"
+      - "${MAILPIT_UI_PORT:-8025}:8025"
+    healthcheck:
+      test: ["CMD", "/mailpit", "readyz"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 5s
+
+  gotenberg:
+    image: gotenberg/gotenberg:8
+    ports:
+      - "${GOTENBERG_PORT:-3000}:3000"
+    healthcheck:
+      test: ["CMD", "curl", "--silent", "--fail", "http://localhost:3000/health"]
+      interval: 5s
+      timeout: 10s
+      retries: 10
+      start_period: 10s
+
+  # One-shot: applies migrations, then exits 0. The api and worker gate on its
+  # successful completion, so the schema is never older than the code reading it.
+  migrate:
+    build:
+      context: ..
+      dockerfile: services/backend/Dockerfile
+      args:
+        # Stamped into the binaries as app.Version. `make up` passes the git
+        # describe of the working tree; CI passes the commit SHA.
+        VERSION: ${VERSION:-dev}
+    entrypoint: ["/usr/local/bin/migrate"]
+    environment: *backend-env
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+
+  ml:
+    build:
+      context: ../services/ml
+      dockerfile: Dockerfile
+    environment:
+      # Shadow prediction logging: the ml server posts champion-vs-challenger
+      # pairs back to the backend with this token (must match the backend's
+      # INFLUAUDIT_ML__SERVICE_TOKEN). Absent → shadow logging is a silent no-op.
+      INFLUAUDIT_ML_SERVICE_TOKEN: ${INFLUAUDIT_ML_SERVICE_TOKEN:-dev-ml-service-token}
+      INFLUAUDIT_BACKEND_BASE_URL: http://api:8080
+      # Directory the registry loads a promoted champion from; empty = cold-start
+      # heuristic. A real deploy syncs the S3 artifact here after promotion.
+      INFLUAUDIT_ML_ARTIFACTS: /var/lib/ml-artifacts
+    volumes:
+      - ml-artifacts:/var/lib/ml-artifacts
+    ports:
+      - "${ML_PORT:-8000}:8000"
+    # Healthcheck is defined in the image (distroless-adjacent slim has no curl).
+    restart: unless-stopped
+
+  api:
+    build:
+      context: ..
+      dockerfile: services/backend/Dockerfile
+      args:
+        # Stamped into the binaries as app.Version. `make up` passes the git
+        # describe of the working tree; CI passes the commit SHA.
+        VERSION: ${VERSION:-dev}
+    environment:
+      <<: *backend-env
+      INFLUAUDIT_HTTP__ADDR: ":8080"
+    ports:
+      - "${API_PORT:-8080}:8080"
+    volumes:
+      - ./dev-secrets:/run/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    healthcheck:
+      # The image is distroless: no shell, no curl. cmd/healthcheck is a static
+      # binary that probes /readyz.
+      test: ["CMD", "/usr/local/bin/healthcheck", "-url", "http://127.0.0.1:8080/readyz"]
+      interval: 10s
+      timeout: 5s
+      retries: 6
+      start_period: 15s
+    restart: unless-stopped
+
+  worker:
+    build:
+      context: ..
+      dockerfile: services/backend/Dockerfile
+      args:
+        # Stamped into the binaries as app.Version. `make up` passes the git
+        # describe of the working tree; CI passes the commit SHA.
+        VERSION: ${VERSION:-dev}
+    entrypoint: ["/usr/local/bin/worker"]
+    environment: *backend-env
+    volumes:
+      - ./dev-secrets:/run/secrets:ro
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      ml:
+        condition: service_healthy
+      localstack:
+        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
+    restart: unless-stopped
+
+volumes:
+  postgres-data:
+  redis-data:
+  localstack-data:
+  ml-artifacts:

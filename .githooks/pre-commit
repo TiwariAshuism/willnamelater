@@ -1,0 +1,21 @@
+#!/usr/bin/env bash
+#
+# Enable once, per clone:
+#     git config core.hooksPath .githooks
+#
+# It exists for one reason: deploy/secrets/prod.enc.env is COMMITTED, and the honest
+# mistake — fill it in, forget `sops --encrypt`, `git add .` — publishes production
+# credentials in a file that looks exactly like the one that is supposed to be there.
+# A .gitignore cannot catch that, because the encrypted and plaintext files share a
+# path. Only reading the contents can.
+#
+# This is a safety net, not the guarantee. CI runs the same check, because a hook that
+# has to be installed by hand is a hook that half the team does not have.
+
+set -euo pipefail
+
+# Only pay the cost when a secrets file is actually part of this commit.
+if git diff --cached --name-only | grep -q '^deploy/secrets/.*\.enc\.env$'; then
+  echo "pre-commit: checking that deploy/secrets/*.enc.env is encrypted"
+  bash deploy/scripts/secrets-check.sh
+fi

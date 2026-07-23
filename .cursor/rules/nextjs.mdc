@@ -1,6 +1,6 @@
 ---
 description: Next.js App Router, TypeScript strict, Server Components
-globs: web/**
+globs: apps/web/**,apps/pallet-ross/**
 alwaysApply: false
 ---
 

@@ -1,0 +1,97 @@
+name: ci
+
+# The same gate a human runs after every wave, enforced on every push and PR:
+# the backend must be formatted, vet-clean, race-clean, lint-clean, and its
+# generated OpenAPI spec must be in sync with the route sources (the contracts
+# job); the ML service must be ruff-clean and pass pytest.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+# NOTE: the `secrets` job below is deliberately in ci.yml rather than in a
+# deploy-specific workflow. It must run on EVERY commit, because the mistake it catches
+# — committing deploy/secrets/prod.enc.env in plaintext — is committed by someone who
+# was not thinking about deployment at the time.
+
+jobs:
+  # Cheap, fast, and first: no plaintext credential may reach main. deploy/secrets/
+  # prod.enc.env is COMMITTED by design (SOPS encrypts values, leaves keys readable, so
+  # a diff shows which secret rotated). The cost of that design is this check — a
+  # .gitignore cannot distinguish the encrypted file from the plaintext one, because
+  # they are the same path.
+  secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: bash deploy/scripts/secrets-check.sh
+
+  backend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.4"
+          cache-dependency-path: services/backend/go.sum
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "These files are not gofmt-clean:"; echo "$unformatted"; exit 1
+          fi
+      - name: go vet
+        run: go vet ./...
+      - name: go build
+        run: go build ./...
+      - name: go test -race
+        run: go test -race ./...
+      - name: golangci-lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          version: latest
+          working-directory: services/backend
+
+  contracts:
+    # Fails the build when the checked-in OpenAPI spec has drifted from the
+    # route sources. cmd/openapigen -check regenerates in memory and diffs.
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/backend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: "1.25.4"
+          cache-dependency-path: services/backend/go.sum
+      - name: openapi drift check
+        run: go run ./cmd/openapigen -check
+
+  ml:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: services/ml
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+      - name: install
+        run: pip install -e '.[dev]'
+      - name: ruff
+        run: ruff check .
+      - name: pytest
+        run: pytest

@@ -1,0 +1,12 @@
+# InfluAudit workspace.
+#
+# apps/pallet-ross is deliberately excluded: it is an unrelated product with its
+# own lockfile, kept here only until it is split into its own repository.
+packages:
+  - apps/web
+  - packages/contracts
+  - packages/scripts
+
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver

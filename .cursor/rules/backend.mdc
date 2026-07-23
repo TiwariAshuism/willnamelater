@@ -1,6 +1,6 @@
 ---
 description: Modular Monolith Go backend — apigen, handlers, services, repositories
-globs: backend/**,services/backend/**
+globs: services/backend/**
 alwaysApply: false
 ---
 
@@ -13,16 +13,25 @@ The backend is a **Modular Monolith**. Every business capability is an isolated 
 ```text
 internal/
   {module}/
-    handler/
-    service/
-    repository/
-    model/
-    dto/
-    mapper/
-  migrations/       # per-module or shared, versioned
+    api/routes.go       # apigen source: annotated interface
+    internal/           # module-private; Go's visibility rule enforces the boundary
+      handler/          # generated (apigen)
+      service/          # generated interface + hand-written impl
+      repository/       # generated interface + hand-written impl
+      model/
+      dto/
+      mapper/
+    migrations/         # per-module, versioned
 ```
 
 Each module owns: handlers, services, repositories, DTOs, models, migrations, and tests.
+
+The nested `internal/` is deliberate and load-bearing. Go forbids importing
+`a/internal/...` from outside `a/`, so `internal/{module}/internal/repository`
+is unreachable from any sibling module. The "never access another module's
+repository" rule becomes a compile error rather than a review comment.
+
+This layout is also what `apigen` requires — see below.
 
 ## Layer rules
 
@@ -51,6 +60,38 @@ Before implementing any API:
 4. Keep generated artifacts synchronized with the implementation.
 
 Do not introduce another API generation framework unless explicitly instructed.
+
+## Invoking apigen (v0.1.1)
+
+Generated handlers hardcode imports of `{module}/internal/service` and
+`{module}/internal/model`, where `{module}` is the `-module` value. To keep
+those imports resolvable inside a per-module tree, **`-module` must name the
+module's own package path**, not the repo's Go module path:
+
+```bash
+apigen -input internal/{module}/api/routes.go \
+       -output internal/{module} \
+       -module github.com/getnyx/influaudit/backend/internal/{module} \
+       -layers handler,service,repository
+```
+
+Omitting the `-module` override emits a handler importing packages that do not
+exist, and the build fails.
+
+Generated `service`/`repository` files are **interfaces only**. Write the
+implementation in a separate, non-generated file in the same package, and
+assert conformance with `var _ XService = (*xService)(nil)`.
+
+`routes.go` constraints: the first parameter must be `context.Context`; path
+params use `:name` and must be `string`.
+
+## OpenAPI
+
+Do **not** use `-layers openapi`. In v0.1.1 it emits Gin-style paths
+(`/audits/:id` instead of `/audits/{id}`) and dangling `$ref`s into an empty
+`components.schemas: {}`. The output is not a valid OpenAPI document and cannot
+drive client codegen. The contract pipeline in `packages/contracts` derives the
+spec from the Go types instead.
 
 # Prohibited
 

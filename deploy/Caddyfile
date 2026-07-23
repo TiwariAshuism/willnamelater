@@ -1,0 +1,85 @@
+# Caddy is the only process on the VM bound to a public port.
+#
+# Caddy rather than Traefik: Traefik's real value is dynamic service discovery
+# from Docker labels, which matters when services come and go — on Kubernetes, or
+# across an autoscaled fleet. This is one VM with two fixed upstreams, so that
+# machinery is pure cost. Caddy gives automatic Let's Encrypt (issuance, renewal,
+# OCSP stapling, HTTP->HTTPS redirect) in the lines below, and its certificate
+# store is a single Docker volume you can back up and restore — which is what lets
+# the new host serve TLS from its first second on migration day.
+#
+# ACME_EMAIL, API_DOMAIN and APP_DOMAIN come from the environment (the SOPS env
+# file); Caddy substitutes {$VAR} at load.
+
+{
+	email {$ACME_EMAIL}
+
+	# The admin API, bound to the compose network so Prometheus can scrape
+	# /metrics at caddy:2019. It is NOT published to the host and NOT reachable
+	# from the internet — the admin API can reconfigure the server, so exposing it
+	# would hand over TLS termination to whoever asked.
+	#
+	# prometheus.yml scrapes this. Without the two lines below that scrape target
+	# is dead and the proxy is the one tier with no metrics at all.
+	admin :2019
+	metrics
+
+	servers {
+		trusted_proxies static private_ranges
+	}
+}
+
+# Applied to both sites below.
+(security) {
+	header {
+		# Once a browser has seen this it will refuse to speak http to us for a
+		# year, which closes the stripping window on every subsequent visit.
+		Strict-Transport-Security "max-age=31536000; includeSubDomains; preload"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "SAMEORIGIN"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}
+
+{$API_DOMAIN} {
+	import security
+	reverse_proxy api:8080
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+{$APP_DOMAIN} {
+	import security
+	reverse_proxy web:3000
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+}
+
+# Grafana. ARCHITECTURE.md promises it is reachable behind Caddy; this is where that
+# becomes true rather than aspirational.
+#
+# Grafana does its own authentication (GF_SECURITY_ADMIN_PASSWORD, sign-up disabled),
+# so there is no basic-auth layer here — two password prompts to reach one dashboard
+# teaches people to click through prompts, which is the opposite of security.
+#
+# It is a separate hostname rather than a path on app., so a bug in Grafana cannot
+# read the app's cookies: they are scoped to different origins.
+{$GRAFANA_DOMAIN} {
+	import security
+	reverse_proxy grafana:3000
+	encode zstd gzip
+
+	log {
+		output stdout
+		format json
+	}
+}

@@ -1,0 +1,64 @@
+@import "tailwindcss";
+
+/* ------------------------------------------------------------------ */
+/*  InfluAudit dashboard — design tokens                               */
+/*  Light + dark, driven by prefers-color-scheme.                      */
+/* ------------------------------------------------------------------ */
+@theme inline {
+  --color-surface: #ffffff;
+  --color-surface-2: #f7f7f5;
+  --color-page: #f4f4f2;
+  --color-ink: #0b0b0b;
+  --color-ink-secondary: #52514e;
+  --color-muted: #898781;
+  --color-line: #e4e3dd;
+  --color-brand: #2a78d6;
+  --color-brand-strong: #1c5cab;
+
+  --color-good: #0ca30c;
+  --color-warning: #b4790a;
+  --color-critical: #d03b3b;
+
+  --font-sans: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+
+:root {
+  --surface: #ffffff;
+  --surface-2: #f7f7f5;
+  --page: #f4f4f2;
+  --ink: #0b0b0b;
+  --ink-secondary: #52514e;
+  --muted: #898781;
+  --line: #e4e3dd;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface: #1a1a19;
+    --surface-2: #202020;
+    --page: #0d0d0d;
+    --ink: #ffffff;
+    --ink-secondary: #c3c2b7;
+    --muted: #898781;
+    --line: #2c2c2a;
+  }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  color-scheme: light dark;
+}
+
+body {
+  background: var(--page);
+  color: var(--ink);
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+}
+
+a {
+  color: inherit;
+}

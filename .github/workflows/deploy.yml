@@ -1,0 +1,110 @@
+# Deploys a published version to the production VM.
+#
+# release.yml publishes and signs. This deploys. Keeping them separate means an
+# image exists and is verifiable BEFORE anything decides to run it, and that a
+# rollback is just this workflow with an older SHA — no rebuild.
+#
+# On OIDC: it is the right tool for CLOUD auth (see terraform.yml, which assumes a
+# role with no long-lived key). It buys nothing for SSH — there is no identity
+# provider on the far end of an sshd. The correct primitive there is a restricted
+# forced-command deploy key, which is what this uses. Do not cargo-cult OIDC into
+# a place it does not fit.
+
+name: deploy
+
+on:
+  # Deploy what release.yml just published from main.
+  workflow_run:
+    workflows: [release]
+    types: [completed]
+    branches: [main]
+
+  # The manual lever — and THE ROLLBACK MECHANISM. Dispatch this with an older SHA
+  # and that version is restored. No rebuild, because the image is still in GHCR.
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Image tag to deploy (a full git SHA). Use an older one to roll back."
+        required: true
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    # Only deploy a release that actually succeeded. A workflow_run fires on
+    # failure too, and deploying an image that failed to build is a fine way to
+    # take the site down with a tag that does not exist.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event.workflow_run.conclusion == 'success'
+
+    # A GitHub Environment with a required reviewer is the approval gate — free,
+    # auditable, and it is where SSH_PRIVATE_KEY / SSH_HOST live, scoped to this
+    # environment rather than to the whole repository.
+    environment:
+      name: production
+      url: https://app.influaudit.com
+
+    steps:
+      - name: Resolve the version to deploy
+        id: version
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            version="${{ inputs.version }}"
+          else
+            version="${{ github.event.workflow_run.head_sha }}"
+          fi
+          if [[ ! "${version}" =~ ^[a-f0-9]{40}$ ]]; then
+            echo "::error::'${version}' is not a full 40-character git SHA"
+            exit 1
+          fi
+          echo "version=${version}" >> "$GITHUB_OUTPUT"
+          echo "Deploying ${version}"
+
+      - name: Start the SSH agent
+        uses: webfactory/ssh-agent@v0.9.0
+        with:
+          ssh-private-key: ${{ secrets.SSH_PRIVATE_KEY }}
+
+      # Pin the host key. Without this the first connection trusts whatever answers,
+      # which is a machine-in-the-middle waiting to happen on a public network.
+      - name: Pin the host key
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_KNOWN_HOSTS }}" > ~/.ssh/known_hosts
+          chmod 600 ~/.ssh/known_hosts
+
+      # The key on the VM is restricted to a forced command (ssh-entrypoint.sh), so
+      # this is not "run an arbitrary command as deploy" — it is "ask for a deploy
+      # of exactly this version". The remote script verifies the image signatures,
+      # runs migrations as a blocking gate, brings the stack up, smoke-tests the
+      # public endpoints, and rolls itself back if any of that fails.
+      - name: Deploy
+        run: |
+          ssh -o StrictHostKeyChecking=yes \
+              "${{ secrets.SSH_USER }}@${{ secrets.SSH_HOST }}" \
+              "deploy ${{ steps.version.outputs.version }}"
+
+      # deploy.sh already smoke-tested from the VM. This checks the same endpoints
+      # from OUTSIDE — across the public internet, through DNS and real TLS — which
+      # is the only test that covers a broken certificate or a DNS record pointing
+      # at the wrong host.
+      - name: Verify from the public internet
+        run: |
+          set -e
+          curl -fsS --max-time 15 https://api.influaudit.com/readyz
+          curl -fsS --max-time 15 -o /dev/null https://app.influaudit.com/
+          echo "Public endpoints are serving."
+
+      - name: Report the deployed version
+        run: |
+          echo "### Deployed \`${{ steps.version.outputs.version }}\`" >> "$GITHUB_STEP_SUMMARY"
+          curl -fsS --max-time 15 https://api.influaudit.com/healthz >> "$GITHUB_STEP_SUMMARY" || true

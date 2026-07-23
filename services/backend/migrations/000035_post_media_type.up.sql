@@ -1,0 +1,14 @@
+-- Owner: metrics module (internal/metrics).
+--
+-- Persist each post's platform content-format label (image/video/carousel/reel/
+-- short/story/text) so the result page can surface a format mix and the ingest
+-- write path has a target column. connector.Post.MediaType is captured on every
+-- fetch but was not being written.
+--
+-- NOTE: the base content schema (000009) already declares post.media_type with a
+-- CHECK constraint. IF NOT EXISTS makes this a safe no-op on any environment that
+-- already has the column, and only creates it where an older 000009 predated it —
+-- so `migrate up` never fails on a duplicate column. HONESTY: the column is left
+-- NULL for a post whose platform did not report a media type; absence is NULL,
+-- never a fabricated label.
+ALTER TABLE post ADD COLUMN IF NOT EXISTS media_type text;

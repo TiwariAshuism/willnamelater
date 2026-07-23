@@ -1,0 +1,2791 @@
+components:
+  schemas:
+    admin.CostDashboardResponse:
+      properties:
+        by_model:
+          items:
+            $ref: "#/components/schemas/admin.CostResponse"
+          type: array
+        cache_hit_rate:
+          type: number
+        cached_generations:
+          type: integer
+        total_cost_micros:
+          type: integer
+        total_cost_usd:
+          type: number
+        total_generations:
+          type: integer
+        total_input_tokens:
+          type: integer
+        total_output_tokens:
+          type: integer
+      required:
+      - by_model
+      - cache_hit_rate
+      - cached_generations
+      - total_cost_micros
+      - total_cost_usd
+      - total_generations
+      - total_input_tokens
+      - total_output_tokens
+      type: object
+    admin.CostResponse:
+      properties:
+        cached_generations:
+          type: integer
+        cost_micros:
+          type: integer
+        cost_usd:
+          type: number
+        generations:
+          type: integer
+        input_tokens:
+          type: integer
+        model:
+          type: string
+        output_tokens:
+          type: integer
+      required:
+      - cached_generations
+      - cost_micros
+      - cost_usd
+      - generations
+      - input_tokens
+      - model
+      - output_tokens
+      type: object
+    admin.DisputeResponse:
+      properties:
+        audit_job_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        label_evidence:
+          type: string
+        raised_by:
+          type: string
+        reason:
+          type: string
+        resolution:
+          type: string
+        resolved_at:
+          format: date-time
+          nullable: true
+          type: string
+        resolved_by:
+          type: string
+        score_shown_to_admin:
+          type: boolean
+        status:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - audit_job_id
+      - created_at
+      - id
+      - reason
+      - score_shown_to_admin
+      - status
+      - updated_at
+      type: object
+    admin.DisputeReviewResponse:
+      properties:
+        dispute:
+          $ref: "#/components/schemas/admin.DisputeResponse"
+        heuristic_score:
+          $ref: "#/components/schemas/admin.FraudFeatures"
+      required:
+      - dispute
+      - heuristic_score
+      type: object
+    admin.FileDisputeRequest:
+      properties:
+        reason:
+          type: string
+      required:
+      - reason
+      type: object
+    admin.FraudFeatures:
+      properties:
+        clique_count:
+          nullable: true
+          type: integer
+        clique_membership_fraction:
+          nullable: true
+          type: number
+        confidence:
+          type: number
+        engagement_anomaly:
+          nullable: true
+          type: number
+        model_version:
+          type: string
+        present:
+          type: boolean
+        risk_score:
+          nullable: true
+          type: number
+      required:
+      - clique_count
+      - clique_membership_fraction
+      - confidence
+      - engagement_anomaly
+      - model_version
+      - present
+      - risk_score
+      type: object
+    admin.LabelExportResponse:
+      properties:
+        count:
+          type: integer
+        excluded_heuristic_only:
+          type: integer
+        labels:
+          items:
+            $ref: "#/components/schemas/admin.TrainingLabel"
+          type: array
+      required:
+      - count
+      - excluded_heuristic_only
+      - labels
+      type: object
+    admin.QueueMonitorResponse:
+      properties:
+        queues:
+          items:
+            $ref: "#/components/schemas/admin.QueueSnapshot"
+          type: array
+      required:
+      - queues
+      type: object
+    admin.QueueSnapshot:
+      properties:
+        active:
+          type: integer
+        archived:
+          type: integer
+        completed:
+          type: integer
+        failed:
+          type: integer
+        latency_ms:
+          type: integer
+        paused:
+          type: boolean
+        pending:
+          type: integer
+        processed:
+          type: integer
+        queue:
+          type: string
+        retry:
+          type: integer
+        scheduled:
+          type: integer
+        size:
+          type: integer
+      required:
+      - active
+      - archived
+      - completed
+      - failed
+      - latency_ms
+      - paused
+      - pending
+      - processed
+      - queue
+      - retry
+      - scheduled
+      - size
+      type: object
+    admin.ResolveDisputeRequest:
+      properties:
+        decision:
+          type: string
+        label_evidence:
+          type: string
+        notes:
+          type: string
+      required:
+      - decision
+      - label_evidence
+      type: object
+    admin.TrainingLabel:
+      properties:
+        audit_job_id:
+          type: string
+        dispute_id:
+          type: string
+        features:
+          $ref: "#/components/schemas/admin.FraudFeatures"
+        has_features:
+          type: boolean
+        label:
+          type: boolean
+        label_evidence:
+          type: string
+        resolved_at:
+          format: date-time
+          type: string
+        score_shown_to_admin:
+          type: boolean
+      required:
+      - audit_job_id
+      - dispute_id
+      - features
+      - has_features
+      - label
+      - label_evidence
+      - resolved_at
+      - score_shown_to_admin
+      type: object
+    alerts.AlertResponse:
+      properties:
+        comparator:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        influencer_id:
+          type: string
+        metric:
+          type: string
+        threshold:
+          type: number
+      required:
+      - comparator
+      - created_at
+      - id
+      - influencer_id
+      - metric
+      - threshold
+      type: object
+    alerts.CreateAlertRequest:
+      properties:
+        comparator:
+          type: string
+        influencer_id:
+          type: string
+        metric:
+          type: string
+        threshold:
+          type: number
+      required:
+      - comparator
+      - influencer_id
+      - metric
+      - threshold
+      type: object
+    analytics.IngestRequest:
+      properties:
+        audit_job_id:
+          type: string
+        event_type:
+          type: string
+        influencer_id:
+          type: string
+        props:
+          format: byte
+          type: string
+        public_slug:
+          type: string
+        session_id:
+          type: string
+      required:
+      - event_type
+      type: object
+    analytics.SummaryResponse:
+      properties:
+        counts:
+          additionalProperties:
+            type: integer
+          type: object
+      required:
+      - counts
+      type: object
+    audit.AuditResponse:
+      properties:
+        error_code:
+          type: string
+        error_message:
+          type: string
+        finished_at:
+          format: date-time
+          nullable: true
+          type: string
+        id:
+          type: string
+        influencer_id:
+          type: string
+        platforms:
+          items:
+            $ref: "#/components/schemas/audit.PlatformResultResponse"
+          type: array
+        requested_at:
+          format: date-time
+          type: string
+        requested_platforms:
+          items:
+            type: string
+          type: array
+        started_at:
+          format: date-time
+          nullable: true
+          type: string
+        status:
+          type: string
+      required:
+      - id
+      - platforms
+      - requested_at
+      - requested_platforms
+      - status
+      type: object
+    audit.PlatformResultResponse:
+      properties:
+        error_code:
+          type: string
+        error_message:
+          type: string
+        fetched_at:
+          format: date-time
+          nullable: true
+          type: string
+        platform:
+          type: string
+        status:
+          type: string
+      required:
+      - platform
+      - status
+      type: object
+    audit.SubmitAuditRequest:
+      properties:
+        idempotency_key:
+          type: string
+        influencer_id:
+          type: string
+        requested_platforms:
+          items:
+            type: string
+          type: array
+      required:
+      - idempotency_key
+      - influencer_id
+      type: object
+    auth.AuthResponse:
+      properties:
+        access_token:
+          type: string
+        expires_in:
+          type: integer
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+        user:
+          $ref: "#/components/schemas/auth.UserResponse"
+      required:
+      - access_token
+      - expires_in
+      - refresh_token
+      - token_type
+      - user
+      type: object
+    auth.LoginRequest:
+      properties:
+        email:
+          type: string
+        password:
+          type: string
+      required:
+      - email
+      - password
+      type: object
+    auth.LogoutRequest:
+      properties:
+        refresh_token:
+          type: string
+      required:
+      - refresh_token
+      type: object
+    auth.RefreshRequest:
+      properties:
+        refresh_token:
+          type: string
+      required:
+      - refresh_token
+      type: object
+    auth.RegisterRequest:
+      properties:
+        email:
+          type: string
+        full_name:
+          type: string
+        password:
+          type: string
+      required:
+      - email
+      - full_name
+      - password
+      type: object
+    auth.UserResponse:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        email:
+          type: string
+        email_verified:
+          type: boolean
+        full_name:
+          type: string
+        id:
+          format: uuid
+          type: string
+        role:
+          type: string
+      required:
+      - created_at
+      - email
+      - email_verified
+      - id
+      - role
+      type: object
+    billing.PlanResponse:
+      properties:
+        audit_quota:
+          type: integer
+        bulk_enabled:
+          type: boolean
+        bulk_quota:
+          type: integer
+        code:
+          type: string
+        currency:
+          type: string
+        id:
+          type: string
+        name:
+          type: string
+        price_micros:
+          type: integer
+      required:
+      - audit_quota
+      - bulk_enabled
+      - bulk_quota
+      - code
+      - currency
+      - id
+      - name
+      - price_micros
+      type: object
+    billing.SubscribeRequest:
+      properties:
+        plan_code:
+          type: string
+      required:
+      - plan_code
+      type: object
+    billing.SubscriptionResponse:
+      properties:
+        cancel_at_period_end:
+          type: boolean
+        current_period_end:
+          format: date-time
+          type: string
+        current_period_start:
+          format: date-time
+          type: string
+        id:
+          type: string
+        plan_code:
+          type: string
+        plan_id:
+          type: string
+        status:
+          type: string
+      required:
+      - cancel_at_period_end
+      - current_period_end
+      - current_period_start
+      - id
+      - plan_code
+      - plan_id
+      - status
+      type: object
+    billing.WebhookRequest:
+      type: object
+    bulkaudit.BulkAuditResponse:
+      properties:
+        completed:
+          type: integer
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        platform:
+          type: string
+        status:
+          type: string
+        total:
+          type: integer
+      required:
+      - completed
+      - created_at
+      - id
+      - platform
+      - status
+      - total
+      type: object
+    bulkaudit.CreateBulkAuditRequest:
+      properties:
+        handles:
+          items:
+            type: string
+          type: array
+        platform:
+          type: string
+      required:
+      - handles
+      - platform
+      type: object
+    campaign.CampaignResponse:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        influencer_ids:
+          items:
+            type: string
+          type: array
+        name:
+          type: string
+      required:
+      - created_at
+      - id
+      - influencer_ids
+      - name
+      type: object
+    campaign.CreateCampaignRequest:
+      properties:
+        influencer_ids:
+          items:
+            type: string
+          type: array
+        name:
+          type: string
+      required:
+      - influencer_ids
+      - name
+      type: object
+    dataimport.ImportRequest:
+      properties:
+        followers:
+          type: integer
+        handle:
+          type: string
+        influencer_id:
+          type: string
+        posts_csv:
+          type: string
+      required:
+      - followers
+      - handle
+      - influencer_id
+      - posts_csv
+      type: object
+    dataimport.ImportResponse:
+      properties:
+        dataset_id:
+          type: string
+        handle:
+          type: string
+        platform:
+          type: string
+        posts:
+          type: integer
+      required:
+      - dataset_id
+      - handle
+      - platform
+      - posts
+      type: object
+    influencer.AddHandleRequest:
+      properties:
+        follower_count:
+          nullable: true
+          type: integer
+        handle:
+          type: string
+        platform:
+          type: string
+        platform_user_id:
+          nullable: true
+          type: string
+        verified:
+          type: boolean
+      required:
+      - follower_count
+      - handle
+      - platform
+      - platform_user_id
+      - verified
+      type: object
+    influencer.CreateInfluencerRequest:
+      properties:
+        country:
+          nullable: true
+          type: string
+        display_name:
+          nullable: true
+          type: string
+        niche:
+          nullable: true
+          type: string
+      required:
+      - country
+      - display_name
+      - niche
+      type: object
+    influencer.HandleResponse:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        follower_count:
+          nullable: true
+          type: integer
+        handle:
+          type: string
+        id:
+          type: string
+        influencer_id:
+          type: string
+        last_seen_at:
+          format: date-time
+          nullable: true
+          type: string
+        platform:
+          type: string
+        platform_user_id:
+          nullable: true
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+        verified:
+          type: boolean
+      required:
+      - created_at
+      - handle
+      - id
+      - influencer_id
+      - platform
+      - updated_at
+      - verified
+      type: object
+    influencer.InfluencerResponse:
+      properties:
+        country:
+          nullable: true
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        display_name:
+          nullable: true
+          type: string
+        handles:
+          items:
+            $ref: "#/components/schemas/influencer.HandleResponse"
+          type: array
+        id:
+          type: string
+        niche:
+          nullable: true
+          type: string
+        tier:
+          nullable: true
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - created_at
+      - id
+      - updated_at
+      type: object
+    influencer.ListInfluencersRequest:
+      properties:
+        Cursor:
+          type: string
+        Limit:
+          type: integer
+        Niche:
+          nullable: true
+          type: string
+        Tier:
+          nullable: true
+          type: string
+      required:
+      - Cursor
+      - Limit
+      - Niche
+      - Tier
+      type: object
+    influencer.ListInfluencersResponse:
+      properties:
+        influencers:
+          items:
+            $ref: "#/components/schemas/influencer.InfluencerResponse"
+          type: array
+        next_cursor:
+          type: string
+      required:
+      - influencers
+      type: object
+    influencer.UpdateInfluencerRequest:
+      properties:
+        country:
+          nullable: true
+          type: string
+        display_name:
+          nullable: true
+          type: string
+        niche:
+          nullable: true
+          type: string
+      required:
+      - country
+      - display_name
+      - niche
+      type: object
+    metrics.AudienceSnapshot:
+      properties:
+        age:
+          additionalProperties:
+            type: number
+          type: object
+        country:
+          additionalProperties:
+            type: number
+          type: object
+        gender:
+          additionalProperties:
+            type: number
+          type: object
+      type: object
+    metrics.ListPostsRequest:
+      properties:
+        Limit:
+          type: integer
+        Offset:
+          type: integer
+        Platform:
+          type: string
+        Since:
+          format: date-time
+          type: string
+      required:
+      - Limit
+      - Offset
+      - Platform
+      - Since
+      type: object
+    metrics.MetricSample:
+      properties:
+        at:
+          format: date-time
+          type: string
+        value:
+          type: number
+      required:
+      - at
+      - value
+      type: object
+    metrics.MetricSeries:
+      properties:
+        metric:
+          type: string
+        platform:
+          type: string
+        points:
+          items:
+            $ref: "#/components/schemas/metrics.MetricSample"
+          type: array
+      required:
+      - metric
+      - platform
+      - points
+      type: object
+    metrics.MetricSeriesRequest:
+      properties:
+        From:
+          format: date-time
+          type: string
+        Limit:
+          type: integer
+        Metric:
+          type: string
+        Platform:
+          type: string
+        To:
+          format: date-time
+          type: string
+      required:
+      - From
+      - Limit
+      - Metric
+      - Platform
+      - To
+      type: object
+    metrics.MetricSeriesResponse:
+      properties:
+        influencer_id:
+          type: string
+        series:
+          items:
+            $ref: "#/components/schemas/metrics.MetricSeries"
+          type: array
+      required:
+      - influencer_id
+      - series
+      type: object
+    metrics.MetricsStrip:
+      properties:
+        engagement_rate:
+          nullable: true
+          type: number
+        followers:
+          nullable: true
+          type: integer
+        posting_cadence_days:
+          nullable: true
+          type: number
+        reach_ratio:
+          nullable: true
+          type: number
+        save_rate:
+          nullable: true
+          type: number
+        share_rate:
+          nullable: true
+          type: number
+      type: object
+    metrics.PostResponse:
+      properties:
+        caption:
+          nullable: true
+          type: string
+        comment_count:
+          nullable: true
+          type: integer
+        engagement_rate:
+          nullable: true
+          type: number
+        id:
+          type: string
+        impression_count:
+          nullable: true
+          type: integer
+        is_sponsored:
+          nullable: true
+          type: boolean
+        like_count:
+          nullable: true
+          type: integer
+        media_type:
+          nullable: true
+          type: string
+        permalink:
+          nullable: true
+          type: string
+        platform:
+          type: string
+        platform_post_id:
+          type: string
+        posted_at:
+          format: date-time
+          nullable: true
+          type: string
+        reach_count:
+          nullable: true
+          type: integer
+        save_count:
+          nullable: true
+          type: integer
+        share_count:
+          nullable: true
+          type: integer
+        view_count:
+          nullable: true
+          type: integer
+      required:
+      - id
+      - platform
+      - platform_post_id
+      type: object
+    metrics.ProfileSummaryResponse:
+      properties:
+        audience:
+          $ref: "#/components/schemas/metrics.AudienceSnapshot"
+        influencer_id:
+          type: string
+        metrics_strip:
+          $ref: "#/components/schemas/metrics.MetricsStrip"
+        readiness:
+          $ref: "#/components/schemas/metrics.Readiness"
+      required:
+      - audience
+      - influencer_id
+      - metrics_strip
+      - readiness
+      type: object
+    metrics.Readiness:
+      properties:
+        fields:
+          items:
+            $ref: "#/components/schemas/metrics.ReadinessField"
+          type: array
+        fraction:
+          type: number
+      required:
+      - fields
+      - fraction
+      type: object
+    metrics.ReadinessField:
+      properties:
+        field:
+          type: string
+        present:
+          type: boolean
+      required:
+      - field
+      - present
+      type: object
+    mlops.CanaryItem:
+      properties:
+        active:
+          type: boolean
+        audit_job_id:
+          type: string
+        created_at:
+          format: date-time
+          type: string
+        expected_label:
+          nullable: true
+          type: boolean
+        expected_reach_max:
+          nullable: true
+          type: integer
+        expected_reach_min:
+          nullable: true
+          type: integer
+        features:
+          format: byte
+          type: string
+        id:
+          type: string
+        label:
+          type: string
+        model_name:
+          type: string
+        provenance_kind:
+          type: string
+      required:
+      - active
+      - audit_job_id
+      - created_at
+      - features
+      - id
+      - label
+      - model_name
+      - provenance_kind
+      type: object
+    mlops.CanaryListResponse:
+      properties:
+        canaries:
+          items:
+            $ref: "#/components/schemas/mlops.CanaryItem"
+          type: array
+        count:
+          type: integer
+      required:
+      - canaries
+      - count
+      type: object
+    mlops.CanaryQuery:
+      properties:
+        Active:
+          type: boolean
+        HasActive:
+          type: boolean
+        ModelName:
+          type: string
+      required:
+      - Active
+      - HasActive
+      - ModelName
+      type: object
+    mlops.CanaryResponse:
+      properties:
+        canary:
+          $ref: "#/components/schemas/mlops.CanaryItem"
+      required:
+      - canary
+      type: object
+    mlops.CreateCanaryRequest:
+      properties:
+        audit_job_id:
+          type: string
+        expected_label:
+          nullable: true
+          type: boolean
+        expected_reach_max:
+          nullable: true
+          type: integer
+        expected_reach_min:
+          nullable: true
+          type: integer
+        label:
+          type: string
+        model_name:
+          type: string
+        provenance_kind:
+          type: string
+      required:
+      - audit_job_id
+      - expected_label
+      - expected_reach_max
+      - expected_reach_min
+      - label
+      - model_name
+      - provenance_kind
+      type: object
+    mlops.FeatureRowExportResponse:
+      properties:
+        count:
+          type: integer
+        rows:
+          items:
+            $ref: "#/components/schemas/mlops.FeatureRowItem"
+          type: array
+      required:
+      - count
+      - rows
+      type: object
+    mlops.FeatureRowItem:
+      properties:
+        audit_job_id:
+          type: string
+        captured_at:
+          format: date-time
+          type: string
+        features:
+          format: byte
+          type: string
+        fraud_label:
+          nullable: true
+          type: boolean
+        fraud_label_evidence:
+          type: string
+        fraud_label_source:
+          type: string
+        influencer_id:
+          type: string
+        model_version_at_capture:
+          type: string
+        platform:
+          type: string
+        quality_ok:
+          type: boolean
+        quality_reasons:
+          items:
+            type: string
+          type: array
+        reach_is_organic:
+          nullable: true
+          type: boolean
+        reach_label:
+          nullable: true
+          type: integer
+        reach_label_source:
+          type: string
+        training_eligible:
+          type: boolean
+        verification_tier:
+          type: string
+      required:
+      - audit_job_id
+      - captured_at
+      - features
+      - fraud_label
+      - influencer_id
+      - model_version_at_capture
+      - platform
+      - quality_ok
+      - quality_reasons
+      - reach_is_organic
+      - reach_label
+      - training_eligible
+      - verification_tier
+      type: object
+    mlops.FeatureRowQuery:
+      properties:
+        Limit:
+          type: integer
+        Quality:
+          type: string
+        Since:
+          format: date-time
+          type: string
+      required:
+      - Limit
+      - Quality
+      - Since
+      type: object
+    mlops.FeatureSnapshotRef:
+      properties:
+        content_hash:
+          type: string
+        max_captured_at:
+          format: date-time
+          type: string
+        row_count:
+          type: integer
+      required:
+      - content_hash
+      - max_captured_at
+      - row_count
+      type: object
+    mlops.PredictionLogRequest:
+      properties:
+        audit_job_id:
+          type: string
+        challenger_score:
+          nullable: true
+          type: number
+        challenger_version:
+          nullable: true
+          type: string
+        champion_score:
+          type: number
+        champion_version:
+          type: string
+        features_hash:
+          type: string
+        model_name:
+          type: string
+        scored_at:
+          format: date-time
+          nullable: true
+          type: string
+      required:
+      - audit_job_id
+      - challenger_score
+      - challenger_version
+      - champion_score
+      - champion_version
+      - features_hash
+      - model_name
+      - scored_at
+      type: object
+    mlops.PredictionLogResponse:
+      properties:
+        accepted:
+          type: boolean
+      required:
+      - accepted
+      type: object
+    mlops.PromoteModelRequest:
+      properties:
+        model_name:
+          type: string
+        override_shadow:
+          type: boolean
+        reason:
+          type: string
+      required:
+      - model_name
+      - override_shadow
+      - reason
+      type: object
+    mlops.PromoteModelResponse:
+      properties:
+        champion_version:
+          type: string
+        manifest:
+          format: byte
+          type: string
+        model_name:
+          type: string
+        previous_champion_version:
+          type: string
+        promoted_at:
+          format: date-time
+          type: string
+        s3_key:
+          type: string
+      required:
+      - champion_version
+      - manifest
+      - model_name
+      - promoted_at
+      - s3_key
+      type: object
+    mlops.RegisterModelRequest:
+      properties:
+        data_floor_counts:
+          format: byte
+          type: string
+        feature_snapshot:
+          $ref: "#/components/schemas/mlops.FeatureSnapshotRef"
+        manifest:
+          format: byte
+          type: string
+        metrics:
+          format: byte
+          type: string
+        model_file_b64:
+          type: string
+        model_file_name:
+          type: string
+        model_name:
+          type: string
+        validation_report:
+          format: byte
+          type: string
+        version:
+          type: string
+      required:
+      - data_floor_counts
+      - feature_snapshot
+      - manifest
+      - metrics
+      - model_file_b64
+      - model_file_name
+      - model_name
+      - validation_report
+      - version
+      type: object
+    mlops.RegisterModelResponse:
+      properties:
+        created_at:
+          format: date-time
+          type: string
+        id:
+          type: string
+        model_name:
+          type: string
+        role:
+          type: string
+        s3_key:
+          type: string
+        version:
+          type: string
+      required:
+      - created_at
+      - id
+      - model_name
+      - role
+      - s3_key
+      - version
+      type: object
+    oauth.AuthSession:
+      properties:
+        access_token:
+          type: string
+        email:
+          type: string
+        expires_in:
+          type: integer
+        refresh_token:
+          type: string
+        token_type:
+          type: string
+        user_id:
+          format: uuid
+          type: string
+      required:
+      - access_token
+      - email
+      - expires_in
+      - refresh_token
+      - token_type
+      - user_id
+      type: object
+    oauth.AuthorizeResponse:
+      properties:
+        authorization_url:
+          type: string
+        state:
+          type: string
+      required:
+      - authorization_url
+      - state
+      type: object
+    oauth.ConnectionResponse:
+      properties:
+        connected_at:
+          format: date-time
+          type: string
+        expires_at:
+          format: date-time
+          nullable: true
+          type: string
+        platform:
+          type: string
+        provider:
+          type: string
+        provider_account_id:
+          type: string
+        scopes:
+          items:
+            type: string
+          type: array
+      required:
+      - connected_at
+      - platform
+      - provider
+      - provider_account_id
+      - scopes
+      type: object
+    oauth.DataDeletionResponse:
+      properties:
+        confirmation_code:
+          type: string
+        url:
+          type: string
+      required:
+      - confirmation_code
+      - url
+      type: object
+    oauth.SignedRequest:
+      properties:
+        signed_request:
+          type: string
+      required:
+      - signed_request
+      type: object
+    oauth.SignupStartRequest:
+      properties:
+        email:
+          type: string
+      required:
+      - email
+      type: object
+    report.CommentQualityBlock:
+      properties:
+        analyzed_count:
+          type: integer
+        available:
+          type: boolean
+        counts:
+          additionalProperties:
+            type: integer
+          type: object
+        low_quality_count:
+          type: integer
+        low_quality_ratio:
+          nullable: true
+          type: number
+        model_version:
+          type: string
+        sufficient_sample:
+          type: boolean
+      required:
+      - analyzed_count
+      - available
+      - low_quality_count
+      - sufficient_sample
+      type: object
+    report.FraudBlock:
+      properties:
+        available:
+          type: boolean
+        clique_count:
+          nullable: true
+          type: integer
+        clique_membership_fraction:
+          nullable: true
+          type: number
+        confidence:
+          type: number
+        coordination_analyzed:
+          type: boolean
+        model_version:
+          type: string
+        risk_score:
+          nullable: true
+          type: number
+      required:
+      - available
+      - confidence
+      - coordination_analyzed
+      - model_version
+      type: object
+    report.Narrative:
+      properties:
+        brand_fit:
+          type: string
+        growth_tips:
+          items:
+            type: string
+          type: array
+        summary:
+          type: string
+        weakness_fix_pairs:
+          items:
+            $ref: "#/components/schemas/report.WeaknessFix"
+          type: array
+      required:
+      - brand_fit
+      - growth_tips
+      - summary
+      - weakness_fix_pairs
+      type: object
+    report.PublicBadge:
+      properties:
+        authenticity:
+          nullable: true
+          type: number
+        benchmark_label:
+          type: string
+        generated_at:
+          type: string
+        handle:
+          type: string
+        niche:
+          type: string
+        overall:
+          type: number
+        pdf_url:
+          type: string
+        tier:
+          type: string
+        verification_tier:
+          type: string
+      required:
+      - overall
+      type: object
+    report.PublishResult:
+      properties:
+        badge_url:
+          type: string
+        expires_at:
+          type: string
+        pdf_url:
+          type: string
+        public_slug:
+          type: string
+      required:
+      - badge_url
+      - pdf_url
+      - public_slug
+      type: object
+    report.Report:
+      properties:
+        audit_id:
+          type: string
+        comment_quality:
+          $ref: "#/components/schemas/report.CommentQualityBlock"
+        finished_at:
+          type: string
+        fraud:
+          $ref: "#/components/schemas/report.FraudBlock"
+        influencer_id:
+          type: string
+        narrative:
+          $ref: "#/components/schemas/report.Narrative"
+        narrative_available:
+          type: boolean
+        platforms:
+          items:
+            type: string
+          type: array
+        score:
+          $ref: "#/components/schemas/report.ScoreBlock"
+        status:
+          type: string
+      required:
+      - audit_id
+      - comment_quality
+      - fraud
+      - influencer_id
+      - narrative
+      - narrative_available
+      - platforms
+      - score
+      - status
+      type: object
+    report.ScoreBlock:
+      properties:
+        authenticity:
+          nullable: true
+          type: number
+        available:
+          type: boolean
+        benchmark_label:
+          type: string
+        niche:
+          type: string
+        overall:
+          type: number
+        subscores:
+          items:
+            $ref: "#/components/schemas/report.Subscore"
+          type: array
+        tier:
+          type: string
+        verification_tier:
+          type: string
+      required:
+      - available
+      - overall
+      - subscores
+      type: object
+    report.ShareRequest:
+      properties:
+        purpose:
+          type: string
+        recipient:
+          type: string
+      required:
+      - purpose
+      - recipient
+      type: object
+    report.ShareResult:
+      properties:
+        expires_at:
+          type: string
+        grant_id:
+          type: string
+        purpose:
+          type: string
+        recipient:
+          type: string
+      required:
+      - expires_at
+      - grant_id
+      - purpose
+      - recipient
+      type: object
+    report.Subscore:
+      properties:
+        confidence:
+          type: number
+        name:
+          type: string
+        value:
+          type: number
+      required:
+      - confidence
+      - name
+      - value
+      type: object
+    report.WeaknessFix:
+      properties:
+        fix:
+          type: string
+        weakness:
+          type: string
+      required:
+      - fix
+      - weakness
+      type: object
+    scoring.FactorPresentation:
+      properties:
+        authenticity_note:
+          type: string
+        availability:
+          type: string
+        band:
+          type: string
+        improvement_line:
+          type: string
+        key:
+          type: string
+        label:
+          type: string
+      required:
+      - availability
+      - band
+      - key
+      - label
+      type: object
+    scoring.ScoreHistoryResponse:
+      properties:
+        influencer_id:
+          type: string
+        points:
+          items:
+            $ref: "#/components/schemas/scoring.ScorePoint"
+          type: array
+      required:
+      - influencer_id
+      - points
+      type: object
+    scoring.ScorePoint:
+      properties:
+        audit_job_id:
+          type: string
+        confidence:
+          type: number
+        created_at:
+          format: date-time
+          type: string
+        overall:
+          type: number
+      required:
+      - audit_job_id
+      - confidence
+      - created_at
+      - overall
+      type: object
+    scoring.ScoreResponse:
+      properties:
+        audit_job_id:
+          type: string
+        authenticity_signal:
+          $ref: "#/components/schemas/scoring.Subscore"
+        benchmark_label:
+          type: string
+        benchmark_version:
+          type: integer
+        confidence:
+          type: number
+        contributing_platforms:
+          items:
+            type: string
+          type: array
+        created_at:
+          format: date-time
+          type: string
+        engagement_rate_band:
+          type: string
+        factors:
+          items:
+            $ref: "#/components/schemas/scoring.FactorPresentation"
+          type: array
+        influencer_id:
+          type: string
+        niche:
+          type: string
+        overall:
+          type: number
+        subscores:
+          additionalProperties:
+            $ref: "#/components/schemas/scoring.Subscore"
+          type: object
+        tier:
+          type: string
+        verification_tier:
+          type: string
+        weights_version:
+          type: integer
+      required:
+      - audit_job_id
+      - benchmark_label
+      - benchmark_version
+      - confidence
+      - contributing_platforms
+      - created_at
+      - factors
+      - niche
+      - overall
+      - subscores
+      - tier
+      - verification_tier
+      - weights_version
+      type: object
+    scoring.Subscore:
+      properties:
+        basis:
+          type: string
+        support:
+          type: number
+        support_kind:
+          type: string
+        value:
+          type: number
+      required:
+      - support
+      - value
+      type: object
+    waitlist.CaptureRequest:
+      properties:
+        email:
+          type: string
+        influencer_id:
+          type: string
+        props:
+          format: byte
+          type: string
+        source:
+          type: string
+      required:
+      - email
+      - source
+      type: object
+    whitelabel.UpdateWhitelabelRequest:
+      properties:
+        brand_name:
+          type: string
+        custom_domain:
+          type: string
+        logo_url:
+          type: string
+        primary_color:
+          type: string
+      required:
+      - brand_name
+      - custom_domain
+      - logo_url
+      - primary_color
+      type: object
+    whitelabel.WhitelabelResponse:
+      properties:
+        brand_name:
+          type: string
+        custom_domain:
+          type: string
+        logo_url:
+          type: string
+        primary_color:
+          type: string
+        updated_at:
+          format: date-time
+          type: string
+      required:
+      - brand_name
+      - custom_domain
+      - logo_url
+      - primary_color
+      - updated_at
+      type: object
+info:
+  title: InfluAudit API
+  version: 0.1.0
+openapi: 3.0.3
+paths:
+  /admin/costs:
+    get:
+      operationId: CostDashboard
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.CostDashboardResponse"
+          description: OK
+  /admin/disputes:
+    get:
+      operationId: ListDisputeQueue
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/admin.DisputeResponse"
+                type: array
+          description: OK
+  /admin/disputes/{id}:
+    get:
+      operationId: ReviewDispute
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.DisputeReviewResponse"
+          description: OK
+  /admin/disputes/{id}/resolve:
+    post:
+      operationId: ResolveDispute
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/admin.ResolveDisputeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.DisputeResponse"
+          description: OK
+  /admin/disputes/{id}/reveal-score:
+    post:
+      operationId: RevealHeuristicScore
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.DisputeReviewResponse"
+          description: OK
+  /admin/mlops/canaries:
+    get:
+      operationId: ListCanaries
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.CanaryQuery"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.CanaryListResponse"
+          description: OK
+    post:
+      operationId: CreateCanary
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.CreateCanaryRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.CanaryResponse"
+          description: OK
+  /admin/mlops/feature-rows:
+    get:
+      operationId: ExportFeatureRows
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.FeatureRowQuery"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.FeatureRowExportResponse"
+          description: OK
+  /admin/mlops/models:
+    post:
+      operationId: RegisterModel
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.RegisterModelRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.RegisterModelResponse"
+          description: OK
+  /admin/mlops/models/{version}/promote:
+    post:
+      operationId: PromoteModel
+      parameters:
+      - in: path
+        name: version
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.PromoteModelRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.PromoteModelResponse"
+          description: OK
+  /admin/queues:
+    get:
+      operationId: QueueMonitor
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.QueueMonitorResponse"
+          description: OK
+  /admin/training/labels:
+    get:
+      operationId: ExportLabels
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.LabelExportResponse"
+          description: OK
+  /alerts:
+    get:
+      operationId: ListAlerts
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/alerts.AlertResponse"
+                type: array
+          description: OK
+    post:
+      operationId: CreateAlert
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/alerts.CreateAlertRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/alerts.AlertResponse"
+          description: OK
+  /alerts/{id}:
+    delete:
+      operationId: DeleteAlert
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+  /audits:
+    get:
+      operationId: ListAudits
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/audit.AuditResponse"
+                type: array
+          description: OK
+    post:
+      operationId: SubmitAudit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/audit.SubmitAuditRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/audit.AuditResponse"
+          description: OK
+  /audits/{id}:
+    get:
+      operationId: GetAudit
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/audit.AuditResponse"
+          description: OK
+  /audits/{id}/disputes:
+    post:
+      operationId: FileDispute
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/admin.FileDisputeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/admin.DisputeResponse"
+          description: OK
+  /audits/{id}/report:
+    get:
+      operationId: GetReport
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.Report"
+          description: OK
+  /audits/{id}/report.pdf:
+    get:
+      operationId: GetReportPDF
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                format: byte
+                type: string
+          description: OK
+  /audits/{id}/report/publish:
+    delete:
+      operationId: RevokeReport
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+    post:
+      operationId: PublishReport
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.PublishResult"
+          description: OK
+  /audits/{id}/report/share:
+    post:
+      operationId: ShareReport
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/report.ShareRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.ShareResult"
+          description: OK
+  /auth/login:
+    post:
+      operationId: Login
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth.LoginRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth.AuthResponse"
+          description: OK
+  /auth/logout:
+    post:
+      operationId: Logout
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth.LogoutRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /auth/me:
+    get:
+      operationId: Me
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth.UserResponse"
+          description: OK
+  /auth/refresh:
+    post:
+      operationId: Refresh
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth.RefreshRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth.AuthResponse"
+          description: OK
+  /auth/register:
+    post:
+      operationId: Register
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/auth.RegisterRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/auth.AuthResponse"
+          description: OK
+  /billing/plans:
+    get:
+      operationId: ListPlans
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/billing.PlanResponse"
+                type: array
+          description: OK
+  /billing/subscribe:
+    post:
+      operationId: Subscribe
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/billing.SubscribeRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/billing.SubscriptionResponse"
+          description: OK
+  /billing/subscription:
+    get:
+      operationId: GetSubscription
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/billing.SubscriptionResponse"
+          description: OK
+  /billing/webhook:
+    post:
+      operationId: Webhook
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/billing.WebhookRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /bulk-audits:
+    get:
+      operationId: ListBulkAudits
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/bulkaudit.BulkAuditResponse"
+                type: array
+          description: OK
+    post:
+      operationId: CreateBulkAudit
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/bulkaudit.CreateBulkAuditRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/bulkaudit.BulkAuditResponse"
+          description: OK
+  /bulk-audits/{id}:
+    get:
+      operationId: GetBulkAudit
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/bulkaudit.BulkAuditResponse"
+          description: OK
+  /campaigns:
+    get:
+      operationId: ListCampaigns
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/campaign.CampaignResponse"
+                type: array
+          description: OK
+    post:
+      operationId: CreateCampaign
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/campaign.CreateCampaignRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/campaign.CampaignResponse"
+          description: OK
+  /campaigns/{id}:
+    get:
+      operationId: GetCampaign
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/campaign.CampaignResponse"
+          description: OK
+  /events:
+    post:
+      operationId: Ingest
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/analytics.IngestRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /events/summary:
+    get:
+      operationId: Summary
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/analytics.SummaryResponse"
+          description: OK
+  /handle/{handle}:
+    get:
+      operationId: GetPublicBadgeByHandle
+      parameters:
+      - in: path
+        name: handle
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.PublicBadge"
+          description: OK
+  /imports/instagram:
+    post:
+      operationId: ImportInstagram
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/dataimport.ImportRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/dataimport.ImportResponse"
+          description: OK
+  /influencers:
+    get:
+      operationId: ListInfluencers
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/influencer.ListInfluencersRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.ListInfluencersResponse"
+          description: OK
+    post:
+      operationId: CreateInfluencer
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/influencer.CreateInfluencerRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.InfluencerResponse"
+          description: OK
+  /influencers/{id}:
+    get:
+      operationId: GetInfluencer
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.InfluencerResponse"
+          description: OK
+    patch:
+      operationId: UpdateInfluencer
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/influencer.UpdateInfluencerRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.InfluencerResponse"
+          description: OK
+  /influencers/{id}/handles:
+    post:
+      operationId: AddHandle
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/influencer.AddHandleRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/influencer.HandleResponse"
+          description: OK
+  /influencers/{id}/handles/{handleID}:
+    delete:
+      operationId: DeleteHandle
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      - in: path
+        name: handleID
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+  /influencers/{id}/metrics:
+    get:
+      operationId: GetInfluencerMetrics
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/metrics.MetricSeriesRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/metrics.MetricSeriesResponse"
+          description: OK
+  /influencers/{id}/posts:
+    get:
+      operationId: ListInfluencerPosts
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/metrics.ListPostsRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/metrics.PostResponse"
+                type: array
+          description: OK
+  /influencers/{id}/profile-summary:
+    get:
+      operationId: GetInfluencerProfileSummary
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/metrics.ProfileSummaryResponse"
+          description: OK
+  /influencers/{id}/score:
+    get:
+      operationId: GetLatestScore
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/scoring.ScoreResponse"
+          description: OK
+  /influencers/{id}/score/history:
+    get:
+      operationId: GetScoreHistory
+      parameters:
+      - in: path
+        name: id
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/scoring.ScoreHistoryResponse"
+          description: OK
+  /ml/predictions:
+    post:
+      operationId: IngestPrediction
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/mlops.PredictionLogRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/mlops.PredictionLogResponse"
+          description: OK
+  /oauth/connections:
+    get:
+      operationId: Connections
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                items:
+                  $ref: "#/components/schemas/oauth.ConnectionResponse"
+                type: array
+          description: OK
+  /oauth/meta/data-deletion:
+    post:
+      operationId: MetaDataDeletion
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/oauth.SignedRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.DataDeletionResponse"
+          description: OK
+  /oauth/meta/deauthorize:
+    post:
+      operationId: MetaDeauthorize
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/oauth.SignedRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /oauth/meta/signup/callback:
+    get:
+      operationId: CallbackSignup
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.AuthSession"
+          description: OK
+  /oauth/meta/signup/start:
+    post:
+      operationId: AuthorizeSignup
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/oauth.SignupStartRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.AuthorizeResponse"
+          description: OK
+  /oauth/{provider}:
+    delete:
+      operationId: Disconnect
+      parameters:
+      - in: path
+        name: provider
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          description: OK
+  /oauth/{provider}/authorize:
+    get:
+      operationId: Authorize
+      parameters:
+      - in: path
+        name: provider
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.AuthorizeResponse"
+          description: OK
+  /oauth/{provider}/callback:
+    get:
+      operationId: Callback
+      parameters:
+      - in: path
+        name: provider
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/oauth.ConnectionResponse"
+          description: OK
+  /reports/{slug}:
+    get:
+      operationId: GetPublicBadge
+      parameters:
+      - in: path
+        name: slug
+        required: true
+        schema:
+          type: string
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/report.PublicBadge"
+          description: OK
+  /waitlist:
+    post:
+      operationId: Capture
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/waitlist.CaptureRequest"
+        required: true
+      responses:
+        "200":
+          description: OK
+  /whitelabel:
+    get:
+      operationId: GetWhitelabel
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/whitelabel.WhitelabelResponse"
+          description: OK
+    put:
+      operationId: UpdateWhitelabel
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/whitelabel.UpdateWhitelabelRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/whitelabel.WhitelabelResponse"
+          description: OK
+servers:
+- url: /v1

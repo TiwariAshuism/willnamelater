@@ -1,0 +1,24 @@
+{
+  "name": "@influaudit/contracts",
+  "version": "0.1.0",
+  "private": true,
+  "description": "InfluAudit API contract: the OpenAPI spec and the TypeScript types generated from it.",
+  "type": "module",
+  "exports": {
+    ".": "./gen/ts/index.ts",
+    "./openapi": "./openapi/influaudit.yaml"
+  },
+  "files": [
+    "openapi",
+    "gen"
+  ],
+  "scripts": {
+    "generate": "openapi-typescript ./openapi/influaudit.yaml --output ./gen/ts/schema.d.ts",
+    "clean": "rimraf ./gen"
+  },
+  "devDependencies": {
+    "openapi-typescript": "^7.9.1",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.9.3"
+  }
+}

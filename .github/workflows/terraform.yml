@@ -1,0 +1,143 @@
+# Terraform CI.
+#
+# Two jobs, and the second one is the interesting one.
+#
+#   validate  — fmt + init + validate for every env stack, on every cloud. Note that
+#               prod-gcp AND prod-azure are both validated on every PR, even though
+#               only one is applied. A migration that is only discovered to be broken
+#               on migration day is not a migration plan.
+#
+#   contract  — asserts that variables.tf and outputs.tf are BYTE-IDENTICAL across
+#               modules/*/[gcp|azure|aws]. That identity is the entire portability
+#               guarantee: it is what lets an env stack move clouds by changing four
+#               `source =` lines. Without a mechanical check it rots the first time
+#               someone adds a variable that only one cloud understands, and nobody
+#               notices until the migration.
+
+name: terraform
+
+on:
+  push:
+    branches: [main]
+    paths: ["deploy/terraform/**", ".github/workflows/terraform.yml"]
+  pull_request:
+    paths: ["deploy/terraform/**", ".github/workflows/terraform.yml"]
+
+permissions:
+  contents: read
+
+jobs:
+  contract:
+    name: portability contract
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: variables.tf and outputs.tf must be identical across clouds
+        run: |
+          set -euo pipefail
+          failed=0
+
+          for module in network compute database cache; do
+            for file in variables.tf outputs.tf; do
+              hashes=$(sha256sum \
+                "deploy/terraform/modules/${module}/gcp/${file}" \
+                "deploy/terraform/modules/${module}/azure/${file}" \
+                "deploy/terraform/modules/${module}/aws/${file}" \
+                | awk '{print $1}' | sort -u | wc -l)
+
+              if [[ "${hashes}" -ne 1 ]]; then
+                echo "::error::${module}/*/${file} differs across clouds."
+                echo "  This is THE portability contract. An env stack must be able to"
+                echo "  change clouds by editing one 'source =' line; that only holds if"
+                echo "  every cloud's module takes the same inputs and emits the same"
+                echo "  outputs. Express the intent generically and let each cloud's"
+                echo "  main.tf translate it — see modules/database/variables.tf."
+                diff "deploy/terraform/modules/${module}/gcp/${file}" \
+                     "deploy/terraform/modules/${module}/azure/${file}" || true
+                failed=1
+              fi
+            done
+          done
+
+          [[ "${failed}" -eq 0 ]] && echo "Contract holds across gcp, azure, aws."
+          exit "${failed}"
+
+  validate:
+    name: validate ${{ matrix.env }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        # ALL THREE are validated on every change, though only one is ever applied.
+        # A migration target you have never planned is not a target, it is a hope —
+        # and the first time you plan prod-azure must not be the morning you need it.
+        env: [prod-gcp, prod-azure, prod-aws]
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.10.5
+
+      - name: fmt
+        run: terraform fmt -check -recursive deploy/terraform
+
+      # -backend=false: validation needs no state and no credentials, so every step
+      # below runs on a fork's PR with no secrets at all.
+      - name: init
+        working-directory: deploy/terraform/envs/${{ matrix.env }}
+        run: terraform init -backend=false
+
+      - name: validate
+        working-directory: deploy/terraform/envs/${{ matrix.env }}
+        run: terraform validate
+
+      # THE ONE THAT ACTUALLY EXECUTES THE MODULES.
+      #
+      # validate proves the HCL parses. tflint (below) proves the arguments exist. Neither
+      # RUNS anything, and neither would notice that a value legal on one cloud is not
+      # purchasable on another.
+      #
+      # That is not hypothetical: this test is how `storage_gb = 100` was caught. Perfectly
+      # legal on Cloud SQL and RDS; rejected outright by Azure Flexible Server, which sells
+      # only fixed storage tiers. It would have failed at apply, on migration day.
+      #
+      # mock_provider synthesises the computed attributes, so a real plan+apply runs against
+      # a fake cloud with no credentials.
+      - name: test (mocked plan + apply)
+        working-directory: deploy/terraform/envs/${{ matrix.env }}
+        run: terraform test
+
+  lint:
+    name: tflint + trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # tflint loads each provider's REAL schema, so it knows that
+      # google_compute_instance has no attribute called `machine_size` and that an
+      # argument was deprecated two majors ago. terraform validate does not.
+      #
+      # It is also what caught the Azure cache sitting on the public internet: it
+      # reported var.network_id as unused, and an unused variable in a portability
+      # contract usually means one cloud is quietly NOT doing what the other two do.
+      - uses: terraform-linters/setup-tflint@v4
+      - name: tflint
+        working-directory: deploy/terraform
+        run: |
+          tflint --init
+          tflint --recursive --config="$(pwd)/.tflint.hcl" --format compact
+
+      # Enforced, not advisory. Every accepted risk is written down in
+      # deploy/terraform/.trivyignore with a reason — because in a scanner's output an
+      # unexplained finding and an accepted risk look identical, and only one is fine.
+      - name: trivy
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          scan-type: config
+          scan-ref: deploy/terraform
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+          trivyignores: deploy/terraform/.trivyignore

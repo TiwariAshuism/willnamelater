@@ -1,0 +1,63 @@
+# Build context filter for the images built from the REPOSITORY ROOT: the Go
+# backend (which needs packages/config/connectors.yaml, outside its module) and
+# the Next.js web app (which needs the workspace lockfile and packages/contracts).
+# services/ml builds from its own directory and has its own .dockerignore.
+#
+# Without this file the root context ships node_modules, the git history, an
+# unrelated product, and — worst — the development JWT signing key. A build
+# context is not private: every file in it is uploaded to the daemon and any of
+# them can be COPYd into a layer by a later edit to a Dockerfile.
+#
+# This is a denylist rather than an allowlist on purpose. An allowlist that is
+# subtly wrong omits a source file and fails the build loudly, which is fine —
+# but one that is subtly right for today omits a file added tomorrow. The
+# categories below are stable; the source tree is not.
+
+# --- Secrets. These must never enter a build context, for any image. ---
+**/*.pem
+**/*.key
+**/.env
+**/.env.*
+deploy/dev-secrets/
+deploy/secrets/
+
+# --- Version control, CI, and agent tooling. ---
+.git/
+.gitignore
+.gitattributes
+.github/
+.claude/
+.cursor/
+
+# --- Dependencies. Restored inside the image from the lockfile. ---
+**/node_modules/
+**/.pnpm-store/
+
+# --- Build outputs. Rebuilt inside the image; a stale one can shadow the fresh
+#     build, which is how a fixed bug survives a deploy. ---
+**/.next/
+**/dist/
+**/build/
+**/out/
+**/*.egg-info/
+**/__pycache__/
+**/.venv/
+**/.pytest_cache/
+**/.ruff_cache/
+**/coverage/
+
+# --- Products and docs that no image needs. apps/pallet-ross is an unrelated
+#     product (already excluded from the pnpm workspace); apps/mobile is not
+#     built here; graphify-out is a generated knowledge graph. ---
+apps/pallet-ross/
+apps/mobile/
+graphify-out/
+product/
+**/*.md
+!packages/**/*.md
+
+# --- Local noise. ---
+**/*.log
+**/.DS_Store
+**/Thumbs.db
+docker-compose.override.yml

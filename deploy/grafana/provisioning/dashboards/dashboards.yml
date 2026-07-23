@@ -1,0 +1,24 @@
+# Dashboards as code.
+#
+# A dashboard that exists only in the grafana-data volume is a dashboard that does not
+# exist on the new VM. Provisioning them from git is what makes "restore the host and
+# carry on" true, and it is why on migration day the new Grafana comes up already
+# knowing what to show you — at the exact moment you most need to be looking at it.
+#
+# allowUiUpdates is false on purpose: a dashboard edited in the browser would be
+# silently reverted on the next deploy, which is the worst of both worlds. Edit the
+# JSON, commit it, deploy.
+
+apiVersion: 1
+
+providers:
+  - name: influaudit
+    orgId: 1
+    folder: InfluAudit
+    type: file
+    disableDeletion: false
+    allowUiUpdates: false
+    updateIntervalSeconds: 30
+    options:
+      path: /etc/grafana/provisioning/dashboards
+      foldersFromFilesStructure: false

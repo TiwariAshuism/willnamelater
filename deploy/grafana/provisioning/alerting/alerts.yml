@@ -1,0 +1,129 @@
+# Alerts as code.
+#
+# Four rules, and no more. An alert that fires when nothing is wrong trains people to
+# ignore alerts, and then the one that matters is ignored too. Each of these
+# corresponds to something that has actually taken a single-VM deployment down.
+#
+# Delivery goes through the SMTP relay the application already uses — the same four
+# environment variables, the same cloud-independent provider. Grafana does not need a
+# cloud identity to tell you the site is down, and it should not have one.
+
+apiVersion: 1
+
+groups:
+  - orgId: 1
+    name: influaudit
+    folder: InfluAudit
+    interval: 1m
+
+    rules:
+      # ---------------------------------------------------------------------
+      - uid: api-down
+        title: The API is not serving
+        condition: breach
+        # Five minutes, not one: a deploy restarts the API, and paging someone for
+        # their own deploy is how an alert channel dies.
+        for: 5m
+        annotations:
+          summary: "The API has been unreachable for 5 minutes."
+          description: "Check `make prod-logs`. If a deploy is in flight, deploy.sh should already have rolled it back — if it has not, roll back by hand: `make prod-rollback VERSION=<previous-sha>`."
+        labels:
+          severity: critical
+        data:
+          - refId: query
+            relativeTimeRange: { from: 300, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: up{job="influaudit"}
+              instant: true
+          - refId: breach
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: query
+              conditions:
+                - evaluator: { type: lt, params: [1] }
+
+      # ---------------------------------------------------------------------
+      - uid: error-rate
+        title: 5xx rate is elevated
+        condition: breach
+        for: 10m
+        annotations:
+          summary: "The API is returning 5xx at more than 0.1 req/s."
+          description: "Sustained server errors. Check the Errors panel and the Loki log panel on the Overview dashboard."
+        labels:
+          severity: warning
+        data:
+          - refId: query
+            relativeTimeRange: { from: 600, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(http_server_request_duration_count{http_status_code=~"5.."}[5m]))
+              instant: true
+          - refId: breach
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: query
+              conditions:
+                - evaluator: { type: gt, params: [0.1] }
+
+      # ---------------------------------------------------------------------
+      # THE ONE THAT ACTUALLY HAPPENS.
+      #
+      # Docker images and container logs fill the root disk, Postgres connections
+      # begin failing, and nothing in the application logs explains why. deploy.sh
+      # prunes images older than a week; this fires when that is not enough, and it
+      # fires at 10 GB rather than at 1 GB so there is still room to act.
+      - uid: disk-filling
+        title: The VM is running out of disk
+        condition: breach
+        for: 15m
+        annotations:
+          summary: "Less than 10 GB free on the root filesystem."
+          description: "Almost always Docker. On the VM: `docker system prune -af --volumes=false`. If it recurs, the image-retention window in deploy.sh is too long, or the Loki/Prometheus retention is too generous for this disk."
+        labels:
+          severity: warning
+        data:
+          - refId: query
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: min(node_filesystem_avail_bytes{mountpoint="/host",fstype!="tmpfs"})
+              instant: true
+          - refId: breach
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: query
+              conditions:
+                - evaluator: { type: lt, params: [10000000000] }
+
+      # ---------------------------------------------------------------------
+      # Silence is the failure mode here. If promtail dies, Loki keeps serving, every
+      # dashboard stays green, and the log panel is simply empty — which reads as
+      # "no errors" rather than as "no logs". This is the alert that distinguishes them.
+      - uid: logs-stopped
+        title: No logs are reaching Loki
+        condition: breach
+        for: 15m
+        annotations:
+          summary: "Loki has ingested nothing for 15 minutes."
+          description: "promtail is probably dead. The dashboards will look healthy and the log panel will look quiet — that is what this alert exists to contradict. Check `docker compose ps promtail`."
+        labels:
+          severity: warning
+        data:
+          - refId: query
+            relativeTimeRange: { from: 900, to: 0 }
+            datasourceUid: prometheus
+            model:
+              expr: sum(rate(loki_distributor_lines_received_total[10m]))
+              instant: true
+          - refId: breach
+            datasourceUid: __expr__
+            model:
+              type: threshold
+              expression: query
+              conditions:
+                - evaluator: { type: lt, params: [0.01] }
