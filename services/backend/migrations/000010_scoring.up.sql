@@ -67,15 +67,8 @@ CREATE TABLE score (
 
 CREATE INDEX score_influencer_id_idx ON score (influencer_id);
 
-CREATE TABLE fraud_result (
-    id                       uuid PRIMARY KEY DEFAULT gen_random_uuid(),
-    audit_job_id             uuid NOT NULL REFERENCES audit_job(id) ON DELETE CASCADE,
-    fake_follower_pct        double precision,
-    bot_comment_pct          double precision,
-    engagement_anomaly_score double precision,
-    verdict                  text CHECK (verdict IS NULL OR verdict IN ('clean', 'suspicious', 'fraudulent')),
-    signals                  jsonb,
-    model_version            text,
-    created_at               timestamptz NOT NULL DEFAULT now(),
-    UNIQUE (audit_job_id)
-);
+-- NOTE: fraud_result is owned and created by 000020_fraud_result. An earlier
+-- revision of this migration also declared a now-superseded fraud_result table;
+-- that stale block was removed so a fresh `migrate up` no longer collides with
+-- 000020's canonical definition. Existing databases are unaffected (golang-migrate
+-- never re-applies a migration that already ran). See 000020_fraud_result.up.sql.

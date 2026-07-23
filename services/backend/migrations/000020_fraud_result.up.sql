@@ -11,6 +11,8 @@
 -- example the ml service was unavailable), which is distinct from a job that
 -- never reached the fraud step and therefore has no row at all.
 
+-- Canonical fraud_result definition (a stale earlier copy was removed from
+-- 000010_scoring so a fresh `migrate up` applies cleanly).
 CREATE TABLE fraud_result (
     audit_job_id               uuid PRIMARY KEY REFERENCES audit_job(id) ON DELETE CASCADE,
     present                    boolean NOT NULL DEFAULT false,

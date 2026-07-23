@@ -1,0 +1,42 @@
+# Floci — AWS + Azure + GCP emulators, all local.
+#
+# Lets the per-cloud Terraform (deploy/terraform/envs/local-*) apply against
+# local endpoints instead of a real cloud account, so the whole multi-cloud
+# migration can be exercised offline. Endpoints:
+#   AWS   -> http://localhost:4566  (aws provider endpoints override)
+#   Azure -> http://localhost:4577  (azurerm provider)
+#   GCP   -> http://localhost:4588  (google provider)
+#
+# Dummy credentials only (access key "test"); floci needs no cloud account.
+name: floci
+
+services:
+  aws:
+    image: floci/floci:latest
+    ports:
+      - "4566:4566"
+    volumes:
+      # The AWS emulator drives real Docker for some services (Lambda etc.);
+      # harmless for the VPC/RDS/EC2/ElastiCache resources we provision.
+      - "//var/run/docker.sock:/var/run/docker.sock"
+    environment:
+      - DEBUG=0
+
+  azure:
+    image: floci/floci-az:latest
+    ports:
+      - "4577:4577"
+    volumes:
+      - "//var/run/docker.sock:/var/run/docker.sock"
+    environment:
+      # The azurerm provider mandates HTTPS for ARM metadata discovery, so the
+      # emulator must serve TLS. The self-signed CA is fetched from
+      # http://localhost:4577/_floci/tls-cert and handed to Terraform via
+      # ARM_CA_BUNDLE.
+      FLOCI_AZ_TLS_ENABLED: "true"
+      FLOCI_AZ_HOSTNAME: localhost
+
+  gcp:
+    image: floci/floci-gcp:latest
+    ports:
+      - "4588:4588"
